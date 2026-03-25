@@ -1,4 +1,5 @@
 #![no_std]
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, symbol_short, Env, Symbol};
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, symbol_short, Address, Env, Symbol,
 };
@@ -21,11 +22,9 @@ pub struct PriceData {
     /// The asset symbol (e.g., "XLM", "BTC")
     pub asset: Symbol,
     /// The price value (stored as scaled integer, e.g., 1000000 = 1.00 USD)
-    pub price: u64,
+    pub price: i128,
     /// Timestamp when the price was last updated
     pub timestamp: u64,
-    /// The source/authority that provided this price
-    pub source: Address,
 }
 
 /// Event emitted when a price is updated
@@ -56,8 +55,8 @@ impl PriceOracle {
     /// * `Ok(PriceData)` - The price data for the asset
     /// * `Err(Error::AssetNotFound)` - If the asset doesn't exist
     pub fn get_price(env: Env, asset: Symbol) -> Result<PriceData, Error> {
-        // Get the storage instance
-        let storage = env.storage().instance();
+        // Get the persistent storage instance
+        let storage = env.storage().persistent();
 
         // Try to retrieve the price data map
         let prices: soroban_sdk::Map<Symbol, PriceData> = storage
@@ -75,7 +74,7 @@ impl PriceOracle {
     pub fn get_price_safe(env: Env, asset: Symbol) -> Option<PriceData> {
         let prices: soroban_sdk::Map<Symbol, PriceData> = env
             .storage()
-            .instance()
+            .persistent()
             .get(&PRICE_DATA_KEY)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
         prices.get(asset)
@@ -85,7 +84,7 @@ impl PriceOracle {
     pub fn get_all_assets(env: Env) -> soroban_sdk::Vec<Symbol> {
         let prices: soroban_sdk::Map<Symbol, PriceData> = env
             .storage()
-            .instance()
+            .persistent()
             .get(&PRICE_DATA_KEY)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
         prices.keys()
@@ -96,15 +95,21 @@ impl PriceOracle {
     /// # Arguments
     /// * `env` - The contract environment
     /// * `asset` - The asset symbol
-    /// * `price_data` - The price data to store
-    pub fn set_price(env: Env, asset: Symbol, price_data: PriceData) {
-        // Get the storage instance
-        let storage = env.storage().instance();
+    /// * `val` - The price value to store
+    pub fn set_price(env: Env, asset: Symbol, val: i128) {
+        // Get the persistent storage instance
+        let storage = env.storage().persistent();
 
         // Get existing prices or create new map
         let mut prices: soroban_sdk::Map<Symbol, PriceData> = storage
             .get(&PRICE_DATA_KEY)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
+
+        let price_data = PriceData {
+            asset: asset.clone(),
+            price: val,
+            timestamp: env.ledger().timestamp(),
+        };
 
         // Set the price for the asset
         prices.set(asset, price_data);
