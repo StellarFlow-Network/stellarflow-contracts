@@ -15,7 +15,19 @@ pub enum DataKey {
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub fn _set_admin(env: &Env, admin: &Address) {
+    let previous_admin = if _has_admin(env) {
+        Some(_get_admin(env))
+    } else {
+        None
+    };
+
     env.storage().instance().set(&DataKey::Admin, admin);
+
+    crate::AdminChanged {
+        previous_admin,
+        new_admin: admin.clone(),
+    }
+    .publish(env);
 }
 
 pub fn _get_admin(env: &Env) -> Address {
@@ -254,5 +266,34 @@ mod auth_tests {
             assert!(_is_admin(&env, &admin));
             assert!(!_is_provider(&env, &admin));
         });
+    }
+
+    // ── AdminChanged event tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_set_admin_emits_event_on_first_set() {
+        let env = Env::default();
+        let contract_id = env.register(TestContract, ());
+        let admin = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            _set_admin(&env, &admin);
+        });
+
+        let events = env.events().all();
+        assert!(!events.is_empty());
+    }
+
+    #[test]
+    fn test_set_admin_emits_event_on_admin_change() {
+        let (env, contract_id, old_admin) = setup();
+        let new_admin = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            _set_admin(&env, &new_admin);
+        });
+
+        let events = env.events().all();
+        assert!(events.len() >= 2);
     }
 }

@@ -29,6 +29,14 @@ pub struct PriceUpdated {
     pub timestamp: u64,
 }
 
+/// Event emitted when the admin address is changed
+#[contractevent]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminChanged {
+    pub previous_admin: Option<Address>,
+    pub new_admin: Address,
+}
+
 #[contract]
 pub struct PriceOracle;
 
