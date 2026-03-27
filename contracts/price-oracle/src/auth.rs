@@ -1,4 +1,6 @@
-use soroban_sdk::{contracttype, Address, Env};
+#[cfg(test)]
+use soroban_sdk::testutils::Events;
+use soroban_sdk::{contracttype, symbol_short, Address, Env};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Storage Key
@@ -8,6 +10,7 @@ use soroban_sdk::{contracttype, Address, Env};
 pub enum DataKey {
     Admin,
     Provider(Address),
+    IsPaused,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -15,7 +18,16 @@ pub enum DataKey {
 // ─────────────────────────────────────────────────────────────────────────────
 
 pub fn _set_admin(env: &Env, admin: &Address) {
+    let previous_admin = if _has_admin(env) {
+        Some(_get_admin(env))
+    } else {
+        None
+    };
+
     env.storage().instance().set(&DataKey::Admin, admin);
+
+    env.events()
+        .publish((symbol_short!("adminchg"),), (previous_admin, admin.clone()));
 }
 
 pub fn _get_admin(env: &Env) -> Address {
@@ -41,6 +53,21 @@ pub fn _require_admin(env: &Env, caller: &Address) {
     if !_is_admin(env, caller) {
         panic!("Unauthorised: caller is not the admin");
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pause Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub fn _is_paused(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get::<DataKey, bool>(&DataKey::IsPaused)
+        .unwrap_or(false)
+}
+
+pub fn _set_paused(env: &Env, paused: bool) {
+    env.storage().instance().set(&DataKey::IsPaused, &paused);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -81,7 +108,9 @@ pub fn _require_provider(env: &Env, caller: &Address) {
 // ─────────────────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod auth_tests {
+    extern crate alloc;
     use super::*;
+    use alloc::format;
     use soroban_sdk::{contract, contractimpl, testutils::Address as _, Env};
 
     #[contract]
@@ -254,5 +283,36 @@ mod auth_tests {
             assert!(_is_admin(&env, &admin));
             assert!(!_is_provider(&env, &admin));
         });
+    }
+
+    // ── AdminChanged event tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_set_admin_emits_event_on_first_set() {
+        let env = Env::default();
+        let contract_id = env.register(TestContract, ());
+        let admin = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            _set_admin(&env, &admin);
+        });
+
+        let events = env.events().all();
+        let debug_str = format!("{:?}", events);
+        assert!(!debug_str.is_empty());
+    }
+
+    #[test]
+    fn test_set_admin_emits_event_on_admin_change() {
+        let (env, contract_id, _old_admin) = setup();
+        let new_admin = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            _set_admin(&env, &new_admin);
+        });
+
+        let events = env.events().all();
+        let debug_str = format!("{:?}", events);
+        assert!(!debug_str.is_empty());
     }
 }

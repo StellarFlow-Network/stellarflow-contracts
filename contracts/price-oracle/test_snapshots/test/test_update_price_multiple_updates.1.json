@@ -20,10 +20,19 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 },
                 {
-                  "symbol": "XLM"
+                  "symbol": "NGN"
                 },
                 {
                   "i128": "1000000"
+                },
+                {
+                  "u32": 6
+                },
+                {
+                  "u32": 100
+                },
+                {
+                  "u64": "3600"
                 }
               ]
             }
@@ -45,10 +54,19 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 },
                 {
-                  "symbol": "XLM"
+                  "symbol": "NGN"
                 },
                 {
                   "i128": "1200000"
+                },
+                {
+                  "u32": 6
+                },
+                {
+                  "u32": 100
+                },
+                {
+                  "u64": "3600"
                 }
               ]
             }
@@ -77,23 +95,35 @@
               "ext": "v0",
               "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
               "key": {
-                "symbol": "PRICES"
+                "vec": [
+                  {
+                    "symbol": "PriceData"
+                  }
+                ]
               },
               "durability": "persistent",
               "val": {
                 "map": [
                   {
                     "key": {
-                      "symbol": "XLM"
+                      "symbol": "NGN"
                     },
                     "val": {
                       "map": [
                         {
                           "key": {
-                            "symbol": "asset"
+                            "symbol": "confidence_score"
                           },
                           "val": {
-                            "symbol": "XLM"
+                            "u32": 100
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "decimals"
+                          },
+                          "val": {
+                            "u32": 6
                           }
                         },
                         {
@@ -106,10 +136,26 @@
                         },
                         {
                           "key": {
+                            "symbol": "provider"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                          }
+                        },
+                        {
+                          "key": {
                             "symbol": "timestamp"
                           },
                           "val": {
                             "u64": "0"
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "ttl"
+                          },
+                          "val": {
+                            "u64": "3600"
                           }
                         }
                       ]
