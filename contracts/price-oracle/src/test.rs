@@ -206,7 +206,7 @@ fn test_update_price_provider_can_store_new_price() {
 
     env.ledger().set_timestamp(1_700_000_500);
     env.ledger().set_sequence_number(2);
-    client.update_price(&provider, &asset, &1_500_000_i128, &6u32);
+    client.update_price(&provider, &asset, &1_500_000_i128, &6u32, &100u32);
 
     let stored = client.get_price(&asset);
     assert_eq!(stored.price, 1_500_000_i128);
@@ -231,8 +231,8 @@ fn test_update_price_multiple_updates() {
         crate::auth::_add_provider(&env, &provider);
     });
 
-    client.update_price(&provider, &asset, &1_000_000_i128, &6u32);
-    client.update_price(&provider, &asset, &1_200_000_i128, &6u32);
+    client.update_price(&provider, &asset, &1_000_000_i128, &6u32, &100u32);
+    client.update_price(&provider, &asset, &1_200_000_i128, &6u32, &100u32);
 
     let stored = client.get_price(&asset);
     assert_eq!(stored.price, 1_200_000_i128);
@@ -258,6 +258,7 @@ fn test_update_price_unauthorized_rejection() {
         &symbol_short!("NGN"),
         &50_000_000_000_i128,
         &8u32,
+        &100u32,
     );
     assert!(result.is_err());
 }
@@ -280,7 +281,7 @@ fn test_update_price_rejects_unapproved_symbol() {
     let asset = symbol_short!("ETH");
     let price: i128 = 1_000_000;
 
-    match client.try_update_price(&provider, &asset, &price, &6u32) {
+    match client.try_update_price(&provider, &asset, &price, &6u32, &100u32) {
         Err(Ok(e)) => assert_eq!(e, Error::InvalidAssetSymbol),
         other => panic!("expected InvalidAssetSymbol, got {:?}", other),
     }

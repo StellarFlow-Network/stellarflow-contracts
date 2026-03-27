@@ -44,6 +44,14 @@
                       "map": [
                         {
                           "key": {
+                            "symbol": "confidence_score"
+                          },
+                          "val": {
+                            "u32": 100
+                          }
+                        },
+                        {
+                          "key": {
                             "symbol": "decimals"
                           },
                           "val": {

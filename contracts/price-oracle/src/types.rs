@@ -20,4 +20,6 @@ pub struct PriceData {
     pub provider: Address,
     /// Number of decimals for the price value.
     pub decimals: u32,
+    /// Confidence score (0-100, higher is more confident)
+    pub confidence_score: u32,
 }

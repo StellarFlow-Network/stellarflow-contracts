@@ -84,6 +84,7 @@ impl PriceOracle {
             .set(&DataKey::BaseCurrencyPairs, &base_currency_pairs);
     }
     /// Get the price data for a specific asset.
+    /// Get the price data for a specific asset. Returns error if price is stale.
     pub fn get_price(env: Env, asset: Symbol) -> Result<PriceData, Error> {
         let storage = env.storage().persistent();
         let prices: soroban_sdk::Map<Symbol, PriceData> = storage
@@ -91,7 +92,15 @@ impl PriceOracle {
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
 
         match prices.get(asset) {
-            Some(price_data) => Ok(price_data),
+            Some(price_data) => {
+                // Staleness check: 1 hour (3600 seconds)
+                let now = env.ledger().timestamp();
+                let max_age = 3600u64;
+                if now > price_data.timestamp && now - price_data.timestamp > max_age {
+                    return Err(Error::AssetNotFound); // Could define a new error for StalePrice
+                }
+                Ok(price_data)
+            }
             None => Err(Error::AssetNotFound),
         }
     }
@@ -131,11 +140,13 @@ impl PriceOracle {
             .get(&DataKey::PriceData)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
 
+        // For demo/testing, set confidence_score to 100. In production, this should be provided as an argument.
         let price_data = PriceData {
             price: val,
             timestamp: env.ledger().timestamp(),
             provider: env.current_contract_address(),
             decimals,
+            confidence_score: 100,
         };
 
         prices.set(asset, price_data);
@@ -161,6 +172,7 @@ impl PriceOracle {
         asset: Symbol,
         price: i128,
         decimals: u32,
+        confidence_score: u32,
     ) -> Result<(), Error> {
         source.require_auth();
 
@@ -192,6 +204,7 @@ impl PriceOracle {
             timestamp,
             provider: source.clone(),
             decimals,
+            confidence_score,
         };
 
         prices.set(asset.clone(), price_data);

@@ -27,6 +27,9 @@
                 },
                 {
                   "u32": 6
+                },
+                {
+                  "u32": 100
                 }
               ]
             }
@@ -70,6 +73,14 @@
                     },
                     "val": {
                       "map": [
+                        {
+                          "key": {
+                            "symbol": "confidence_score"
+                          },
+                          "val": {
+                            "u32": 100
+                          }
+                        },
                         {
                           "key": {
                             "symbol": "decimals"
