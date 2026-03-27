@@ -283,6 +283,7 @@ fn test_update_price_emits_event() {
     let admin = Address::generate(&env);
     let provider = Address::generate(&env);
     let asset = symbol_short!("NGN");
+    let old_price: i128 = 1_250_000;
     let price: i128 = 1_500_000;
 
     env.as_contract(&contract_id, || {
@@ -290,6 +291,7 @@ fn test_update_price_emits_event() {
         crate::auth::_add_provider(&env, &provider);
     });
 
+    client.set_price(&asset, &old_price);
     env.ledger().set_timestamp(1_700_000_000);
     client.update_price(&provider, &asset, &price);
 

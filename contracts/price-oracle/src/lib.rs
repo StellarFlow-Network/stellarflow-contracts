@@ -20,13 +20,13 @@ pub enum Error {
 }
 
 /// Event emitted when a price is updated
-#[contractevent]
+#[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PriceUpdated {
-    pub source: Address,
     pub asset: Symbol,
-    pub price: i128,
-    pub timestamp: u64,
+    pub new_price: i128,
+    pub old_price: i128,
+    pub provider_address: Address,
 }
 
 /// Event emitted when the admin address is changed
@@ -170,6 +170,11 @@ impl PriceOracle {
         let mut prices: soroban_sdk::Map<Symbol, PriceData> = storage
             .get(&DataKey::PriceData)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
+
+        let old_price = prices
+            .get(asset.clone())
+            .map(|existing_price| existing_price.price)
+            .unwrap_or(0);
 
         let timestamp = env.ledger().timestamp();
         let price_data = PriceData {
