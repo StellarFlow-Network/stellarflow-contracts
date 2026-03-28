@@ -555,3 +555,29 @@ fn test_dummy_consumer_multiple_price_fetches() {
     assert_eq!(ngn_price_2, 1_200_000_i128);
     assert_eq!(kes_price_2, 450_000_i128);
 }
+
+// ============================================================================
+// Health Check Tests - Ping Function
+// ============================================================================
+
+#[test]
+fn test_ping_returns_pong() {
+    let env = Env::default();
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let response = client.ping();
+    assert_eq!(response, symbol_short!("PONG"));
+}
+
+#[test]
+fn test_ping_no_state_access() {
+    // Verify ping works without any initialization or state setup
+    let env = Env::default();
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    // Should succeed immediately without any setup
+    let response = client.ping();
+    assert_eq!(response, symbol_short!("PONG"));
+}

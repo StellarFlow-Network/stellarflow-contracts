@@ -38,6 +38,12 @@ pub trait StellarFlowTrait {
     ///
     /// Returns the address of the contract administrator.
     fn get_admin(env: Env) -> Address;
+
+    /// A low-gas health check to verify the contract is responding.
+    ///
+    /// Returns a simple "PONG" symbol with minimal gas consumption.
+    /// Useful for monitoring and liveness checks without state access.
+    fn ping(env: Env) -> Symbol;
 }
 
 /// Error types for the price oracle contract
@@ -146,6 +152,14 @@ impl PriceOracle {
     /// Return the current admin address.
     pub fn get_admin(env: Env) -> Address {
         crate::auth::_get_admin(&env)
+    }
+
+    /// A low-gas health check to verify the contract is responding.
+    ///
+    /// Returns a simple "PONG" symbol with minimal gas consumption.
+    /// Useful for monitoring and liveness checks without state access.
+    pub fn ping(_env: Env) -> Symbol {
+        soroban_sdk::symbol_short!("PONG")
     }
 
     /// Get the price data for a specific asset.
