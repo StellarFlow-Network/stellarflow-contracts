@@ -63,8 +63,6 @@ pub enum Error {
     NotAuthorized = 5,
     /// Contract or admin has already been initialized.
     AlreadyInitialized = 6,
-    /// Price change exceeds the allowed delta limit in a single update.
-    DeltaLimitExceeded = 7,
 }
 
 #[contract]
@@ -339,14 +337,10 @@ impl PriceOracle {
             .get(&DataKey::PriceData)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
 
-        const MAX_DELTA_BPS: i128 = 5_000;
-        if let Some(existing) = prices.get(asset.clone()) {
-            if let Some(diff_bps) = calculate_percentage_difference_bps(existing.price, price) {
-                if diff_bps > MAX_DELTA_BPS {
-                    return Err(Error::DeltaLimitExceeded);
-                }
-            }
-        }
+        let _old_price = prices
+            .get(asset.clone())
+            .map(|existing_price| existing_price.price)
+            .unwrap_or(0);
 
         let timestamp = env.ledger().timestamp();
         let price_data = PriceData {
