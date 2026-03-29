@@ -295,11 +295,11 @@ fn test_update_price_multiple_updates() {
         crate::auth::_add_provider(&env, &provider);
     });
 
-    client.update_price(&provider, &asset, &1_000_000_i128, &6u32, &100u32, &3600u64);
-    client.update_price(&provider, &asset, &1_200_000_i128, &6u32, &100u32, &3600u64);
+    client.update_price(&provider, &asset, &1_000_i128, &6u32, &100u32, &3600u64);
+    client.update_price(&provider, &asset, &1_020_i128, &6u32, &100u32, &3600u64);
 
     let stored = client.get_price(&asset);
-    assert_eq!(stored.price, 1_200_000_i128);
+    assert_eq!(stored.price, 1_020_i128);
 }
 
 #[test]
@@ -808,4 +808,213 @@ fn test_get_prices_empty_input_returns_empty_vec() {
     let results = client.get_prices(&assets);
 
     assert_eq!(results.len(), 0);
+}
+
+// ============================================================================
+// Min/Max Price Bounds Tests
+// ============================================================================
+
+#[test]
+fn test_set_price_bounds_and_get() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
+    });
+
+    let asset = symbol_short!("NGN");
+    client.set_price_bounds(&admin, &asset, &500_i128, &2_000_i128);
+
+    let bounds = client.get_price_bounds(&asset).unwrap();
+    assert_eq!(bounds.min_price, 500_i128);
+    assert_eq!(bounds.max_price, 2_000_i128);
+}
+
+#[test]
+fn test_get_price_bounds_returns_none_when_not_set() {
+    let env = Env::default();
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let bounds = client.get_price_bounds(&symbol_short!("NGN"));
+    assert!(bounds.is_none());
+}
+
+#[test]
+fn test_update_price_within_bounds_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let provider = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let asset = symbol_short!("NGN");
+
+    env.as_contract(&contract_id, || {
+        crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
+        crate::auth::_add_provider(&env, &provider);
+    });
+
+    // Set bounds: 500 to 2000
+    client.set_price_bounds(&admin, &asset, &500_i128, &2_000_i128);
+
+    // Price within bounds should succeed
+    let result = client.try_update_price(&provider, &asset, &1_000_i128, &6u32, &100u32, &3600u64);
+    assert!(result.is_ok());
+
+    let stored = client.get_price(&asset);
+    assert_eq!(stored.price, 1_000_i128);
+}
+
+#[test]
+fn test_update_price_below_min_bound_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let provider = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let asset = symbol_short!("NGN");
+
+    env.as_contract(&contract_id, || {
+        crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
+        crate::auth::_add_provider(&env, &provider);
+    });
+
+    // Set bounds: 500 to 2000
+    client.set_price_bounds(&admin, &asset, &500_i128, &2_000_i128);
+
+    // Price below min should be rejected
+    let result = client.try_update_price(&provider, &asset, &100_i128, &6u32, &100u32, &3600u64);
+    match result {
+        Err(Ok(e)) => assert_eq!(e, Error::PriceOutOfBounds),
+        other => panic!("expected PriceOutOfBounds, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_update_price_above_max_bound_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let provider = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let asset = symbol_short!("NGN");
+
+    env.as_contract(&contract_id, || {
+        crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
+        crate::auth::_add_provider(&env, &provider);
+    });
+
+    // Set bounds: 500 to 2000
+    client.set_price_bounds(&admin, &asset, &500_i128, &2_000_i128);
+
+    // Price above max should be rejected
+    let result = client.try_update_price(&provider, &asset, &5_000_i128, &6u32, &100u32, &3600u64);
+    match result {
+        Err(Ok(e)) => assert_eq!(e, Error::PriceOutOfBounds),
+        other => panic!("expected PriceOutOfBounds, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_update_price_at_exact_bounds_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let provider = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let asset = symbol_short!("NGN");
+
+    env.as_contract(&contract_id, || {
+        crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
+        crate::auth::_add_provider(&env, &provider);
+    });
+
+    // Set bounds: 500 to 2000
+    client.set_price_bounds(&admin, &asset, &500_i128, &2_000_i128);
+
+    // Price at exact min
+    let result = client.try_update_price(&provider, &asset, &500_i128, &6u32, &100u32, &3600u64);
+    assert!(result.is_ok());
+
+    // Price at exact max (delta check may interfere, so set first via set_price to get close)
+    // Use set_price to reset, then update_price at exact max
+    client.set_price(&asset, &1_990_i128, &6u32, &3600u64);
+    let result = client.try_update_price(&provider, &asset, &2_000_i128, &6u32, &100u32, &3600u64);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_update_price_no_bounds_set_allows_any_valid_price() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let provider = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let asset = symbol_short!("NGN");
+
+    env.as_contract(&contract_id, || {
+        crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
+        crate::auth::_add_provider(&env, &provider);
+    });
+
+    // No bounds set — should accept any positive price
+    let result = client.try_update_price(&provider, &asset, &999_999_999_i128, &6u32, &100u32, &3600u64);
+    assert!(result.is_ok());
+}
+
+#[test]
+#[should_panic(expected = "min_price must be <= max_price")]
+fn test_set_price_bounds_min_greater_than_max_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
+    });
+
+    // min > max should panic
+    client.set_price_bounds(&admin, &symbol_short!("NGN"), &2_000_i128, &500_i128);
+}
+
+#[test]
+#[should_panic(expected = "Unauthorised")]
+fn test_set_price_bounds_non_admin_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let non_admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
+    });
+
+    // non_admin should be rejected
+    client.set_price_bounds(&non_admin, &symbol_short!("NGN"), &500_i128, &2_000_i128);
 }

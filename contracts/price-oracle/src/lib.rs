@@ -2,7 +2,7 @@
 
 use soroban_sdk::{contract, contractclient, contracterror, contractimpl, panic_with_error, Address, Env, Symbol};
 
-use crate::types::{DataKey, PriceData};
+use crate::types::{DataKey, PriceBounds, PriceData};
 
 /// A clean, gas-optimized interface for other Soroban contracts to fetch prices from StellarFlow.
 ///
@@ -65,6 +65,8 @@ pub enum Error {
     AlreadyInitialized = 6,
     /// Price change exceeds the allowed delta limit in a single update.
     PriceDeltaExceeded = 7,
+    /// Price is outside the configured min/max bounds for the asset.
+    PriceOutOfBounds = 8,
 }
 
 #[contract]
@@ -374,6 +376,16 @@ impl PriceOracle {
             }
         }
 
+        // Min/max bounds check: reject prices outside configured bounds.
+        let bounds_map: soroban_sdk::Map<Symbol, PriceBounds> = storage
+            .get(&DataKey::PriceBoundsData)
+            .unwrap_or_else(|| soroban_sdk::Map::new(&env));
+        if let Some(bounds) = bounds_map.get(asset.clone()) {
+            if price < bounds.min_price || price > bounds.max_price {
+                return Err(Error::PriceOutOfBounds);
+            }
+        }
+
         let timestamp = env.ledger().timestamp();
         let price_data = PriceData {
             price,
@@ -393,6 +405,54 @@ impl PriceOracle {
         });
 
         Ok(())
+    }
+
+    /// Set the min/max price bounds for an asset.
+    ///
+    /// Only the admin can call this. Any subsequent `update_price` call for the
+    /// asset will be rejected if the price falls outside `[min_price, max_price]`.
+    ///
+    /// # Arguments
+    /// * `admin`     - The current admin address (must sign)
+    /// * `asset`     - The asset symbol to configure bounds for
+    /// * `min_price` - The minimum acceptable price (inclusive)
+    /// * `max_price` - The maximum acceptable price (inclusive)
+    pub fn set_price_bounds(
+        env: Env,
+        admin: Address,
+        asset: Symbol,
+        min_price: i128,
+        max_price: i128,
+    ) {
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        assert!(min_price > 0 && max_price > 0, "bounds must be positive");
+        assert!(min_price <= max_price, "min_price must be <= max_price");
+
+        let storage = env.storage().persistent();
+        let mut bounds_map: soroban_sdk::Map<Symbol, PriceBounds> = storage
+            .get(&DataKey::PriceBoundsData)
+            .unwrap_or_else(|| soroban_sdk::Map::new(&env));
+
+        bounds_map.set(
+            asset,
+            PriceBounds {
+                min_price,
+                max_price,
+            },
+        );
+        storage.set(&DataKey::PriceBoundsData, &bounds_map);
+    }
+
+    /// Get the current min/max price bounds for an asset, if configured.
+    pub fn get_price_bounds(env: Env, asset: Symbol) -> Option<PriceBounds> {
+        let bounds_map: soroban_sdk::Map<Symbol, PriceBounds> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PriceBoundsData)
+            .unwrap_or_else(|| soroban_sdk::Map::new(&env));
+        bounds_map.get(asset)
     }
 }
 
