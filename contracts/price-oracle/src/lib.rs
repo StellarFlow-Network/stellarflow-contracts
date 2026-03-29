@@ -99,6 +99,25 @@ pub fn calculate_percentage_difference_bps(old_price: i128, new_price: i128) -> 
     calculate_percentage_change_bps(old_price, new_price).map(i128::abs)
 }
 
+/// Returns the absolute difference between two price values.
+///
+/// Useful for circuit-breaker logic where the raw magnitude of the price move
+/// must be compared against a hard threshold. The result is always non-negative.
+///
+/// Returns `None` only when the subtraction would overflow (practically impossible
+/// for realistic price values).
+///
+/// # Examples
+/// ```text
+/// calculate_price_volatility(1_000_000, 1_200_000) => Some(200_000)
+/// calculate_price_volatility(1_200_000, 1_000_000) => Some(200_000)
+/// ```
+pub fn calculate_price_volatility(old_price: i128, new_price: i128) -> Option<i128> {
+    new_price
+        .checked_sub(old_price)
+        .map(|delta| delta.abs())
+}
+
 fn is_valid(price: i128) -> bool {
     price > 0
 }
@@ -368,9 +387,10 @@ impl PriceOracle {
         // Delta limit circuit breaker: reject if price moves more than 50 in one update.
         // Skip on first write (old_price == 0).
         if old_price != 0 {
-            let delta = (price - old_price).unsigned_abs();
-            if delta > 50 {
-                return Err(Error::PriceDeltaExceeded);
+            if let Some(delta) = calculate_price_volatility(old_price, price) {
+                if delta > 50 {
+                    return Err(Error::PriceDeltaExceeded);
+                }
             }
         }
 
