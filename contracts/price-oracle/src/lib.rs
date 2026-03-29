@@ -6,6 +6,8 @@ use soroban_sdk::{
 
 use crate::types::{DataKey, PriceBounds, PriceData};
 
+const ADMIN_TIMELOCK: u64 = 86_400;
+
 /// A clean, gas-optimized interface for other Soroban contracts to fetch prices from StellarFlow.
 ///
 /// The generated client from this trait is the intended cross-contract entrypoint for downstream
@@ -54,6 +56,12 @@ pub trait StellarFlowTrait {
     ///
     /// Returns the address of the contract administrator.
     fn get_admin(env: Env) -> Address;
+
+    /// Start an admin transfer by setting a pending admin and timestamp.
+    fn transfer_admin(env: Env, current_admin: Address, new_admin: Address);
+
+    /// Finalize an admin transfer after the timelock has passed.
+    fn accept_admin(env: Env, new_admin: Address);
 }
 
 /// Error types for the price oracle contract
@@ -144,7 +152,6 @@ impl PriceOracle {
     /// Initialize the contract with admin and base currency pairs.
     /// Can only be called once.
     pub fn initialize(env: Env, admin: Address, base_currency_pairs: soroban_sdk::Vec<Symbol>) {
-        // Prevent double initialization
         if env.storage().instance().has(&DataKey::Admin) {
             panic_with_error!(&env, Error::AlreadyInitialized);
         }
@@ -180,8 +187,56 @@ impl PriceOracle {
             .expect("No admin set")
     }
 
+    /// Starts an admin transfer by storing the pending admin and timestamp.
+    pub fn transfer_admin(env: Env, current_admin: Address, new_admin: Address) {
+        current_admin.require_auth();
+        crate::auth::_require_authorized(&env, &current_admin);
+
+        let now = env.ledger().timestamp();
+
+        env.storage().instance().set(&DataKey::PendingAdmin, &new_admin);
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingAdminTimestamp, &now);
+    }
+
+    /// Finalizes the admin transfer after the timelock expires.
+    pub fn accept_admin(env: Env, new_admin: Address) {
+        new_admin.require_auth();
+
+        let pending: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdmin)
+            .expect("No pending admin");
+
+        if pending != new_admin {
+            panic!("Not pending admin");
+        }
+
+        let timestamp: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdminTimestamp)
+            .expect("No pending admin timestamp");
+
+        let now = env.ledger().timestamp();
+
+        if now < timestamp.saturating_add(ADMIN_TIMELOCK) {
+            panic!("Timelock not expired");
+        }
+
+        let admins = soroban_sdk::vec![&env, new_admin.clone()];
+        crate::auth::_set_admin(&env, &admins);
+
+        env.storage().instance().remove(&DataKey::PendingAdmin);
+        env.storage()
+            .instance()
+            .remove(&DataKey::PendingAdminTimestamp);
+    }
+
     /// Get the price data for a specific asset.
-    /// Get the price data for a specific asset. Returns error if price is stale.
+    /// Returns error if price is stale.
     pub fn get_price(env: Env, asset: Symbol) -> Result<PriceData, Error> {
         let storage = env.storage().persistent();
         let prices: soroban_sdk::Map<Symbol, PriceData> = storage
@@ -305,13 +360,6 @@ impl PriceOracle {
     ///
     /// Replaces the on-chain WASM bytecode with the provided hash while preserving
     /// all contract storage. Strictly restricted to the admin.
-    ///
-    /// # Arguments
-    /// * `admin`    - The current admin address (must sign the transaction)
-    /// * `new_wasm_hash` - The hash of the new WASM blob already uploaded to the ledger
-    ///
-    /// # Panics
-    /// If `admin` is not the current contract admin.
     pub fn upgrade(env: Env, admin: Address, new_wasm_hash: soroban_sdk::BytesN<32>) {
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
@@ -321,7 +369,7 @@ impl PriceOracle {
     /// Remove an asset from the oracle, deleting its price entry.
     ///
     /// Only the admin can call this. Returns `Error::AssetNotFound` if the asset
-    /// is not currently tracked. Frees ledger space for decommissioned pairs.
+    /// is not currently tracked.
     pub fn remove_asset(env: Env, admin: Address, asset: Symbol) -> Result<(), Error> {
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
@@ -342,21 +390,6 @@ impl PriceOracle {
     }
 
     /// Update the price for a specific asset (authorized backend relayer function)
-    ///
-    /// # Arguments
-    /// * `env` - The contract environment
-    /// * `source` - The address of the authorized backend relayer
-    /// * `asset` - The asset symbol to update
-    /// * `price` - The new price (as i128)
-    /// * `decimals` - Number of decimals for the price
-    /// * `confidence_score` - Confidence score for this price update
-    /// * `ttl` - Time-to-live in seconds for this price (per-asset expiration)
-    ///
-    /// # Errors
-    /// * `Error::InvalidAssetSymbol` - If `asset` is not NGN, KES, or GHS
-    ///
-    /// # Panics
-    /// If `source` is not a whitelisted provider or if the contract is paused.
     pub fn update_price(
         env: Env,
         source: Address,
@@ -431,15 +464,6 @@ impl PriceOracle {
     }
 
     /// Set the min/max price bounds for an asset.
-    ///
-    /// Only the admin can call this. Any subsequent `update_price` call for the
-    /// asset will be rejected if the price falls outside `[min_price, max_price]`.
-    ///
-    /// # Arguments
-    /// * `admin`     - The current admin address (must sign)
-    /// * `asset`     - The asset symbol to configure bounds for
-    /// * `min_price` - The minimum acceptable price (inclusive)
-    /// * `max_price` - The maximum acceptable price (inclusive)
     pub fn set_price_bounds(
         env: Env,
         admin: Address,
