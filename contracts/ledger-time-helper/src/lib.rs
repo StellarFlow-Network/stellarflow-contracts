@@ -10,15 +10,4 @@ pub fn current_ledger_timestamp(env: &Env) -> u64 {
     env.ledger().timestamp()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::current_ledger_timestamp;
-    use soroban_sdk::{testutils::Ledger, Env};
-
-    #[test]
-    fn returns_mock_ledger_timestamp() {
-        let env = Env::default();
-        env.ledger().set_timestamp(1_700_000_123);
-        assert_eq!(current_ledger_timestamp(&env), 1_700_000_123);
-    }
-}
+mod test;
