@@ -248,6 +248,27 @@ impl PriceOracle {
         prices.keys()
     }
 
+    /// Store a human-readable description for an asset (e.g. "Nigerian Naira").
+    ///
+    /// Only the admin can call this.
+    pub fn set_asset_description(env: Env, admin: Address, asset: Symbol, description: soroban_sdk::String) {
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+        env.storage()
+            .persistent()
+            .set(&DataKey::AssetDescription(asset), &description);
+    }
+
+    /// Get the human-readable description for an asset.
+    ///
+    /// Returns `Error::AssetNotFound` if no description has been set.
+    pub fn get_asset_description(env: Env, asset: Symbol) -> Result<soroban_sdk::String, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::AssetDescription(asset))
+            .ok_or(Error::AssetNotFound)
+    }
+
     /// Set the price data for a specific asset.
     ///
     /// # Arguments

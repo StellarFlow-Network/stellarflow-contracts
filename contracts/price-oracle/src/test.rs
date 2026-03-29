@@ -809,3 +809,85 @@ fn test_get_prices_empty_input_returns_empty_vec() {
 
     assert_eq!(results.len(), 0);
 }
+
+// ============================================================================
+// Asset Description Tests
+// ============================================================================
+
+#[test]
+fn test_set_and_get_asset_description() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
+    });
+
+    let asset = symbol_short!("NGN");
+    let description = soroban_sdk::String::from_str(&env, "Nigerian Naira");
+
+    client.set_asset_description(&admin, &asset, &description);
+
+    let result = client.get_asset_description(&asset);
+    assert_eq!(result, description);
+}
+
+#[test]
+fn test_get_asset_description_not_found_returns_error() {
+    let env = Env::default();
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let result = client.try_get_asset_description(&symbol_short!("KES"));
+    match result {
+        Err(Ok(e)) => assert_eq!(e, Error::AssetNotFound),
+        other => panic!("expected AssetNotFound, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_set_asset_description_non_admin_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let non_admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
+    });
+
+    let result = client.try_set_asset_description(
+        &non_admin,
+        &symbol_short!("NGN"),
+        &soroban_sdk::String::from_str(&env, "Nigerian Naira"),
+    );
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_set_asset_description_can_be_updated() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
+    });
+
+    let asset = symbol_short!("GHS");
+    client.set_asset_description(&admin, &asset, &soroban_sdk::String::from_str(&env, "Ghanaian Cedi"));
+    client.set_asset_description(&admin, &asset, &soroban_sdk::String::from_str(&env, "Ghana Cedi"));
+
+    let result = client.get_asset_description(&asset);
+    assert_eq!(result, soroban_sdk::String::from_str(&env, "Ghana Cedi"));
+}

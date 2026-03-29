@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address};
+use soroban_sdk::{contracttype, Address, Symbol};
 
 /// Storage keys for contract data
 #[contracttype]
@@ -6,6 +6,7 @@ pub enum DataKey {
     Admin,
     BaseCurrencyPairs,
     PriceData,
+    AssetDescription(Symbol),
 }
 
 /// Canonical storage format for a price entry.
