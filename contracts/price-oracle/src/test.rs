@@ -1235,3 +1235,38 @@ fn test_asset_added_event_contains_correct_symbol() {
     assert!(debug_str.contains("asset_added_event"), "Should emit AssetAdded event");
     assert!(debug_str.contains("NGN"), "Event should contain the correct asset symbol");
 }
+
+#[test]
+fn test_get_last_n_events_sliding_window() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let ngn = symbol_short!("NGN");
+    let kes = symbol_short!("KES");
+    let ghs = symbol_short!("GHS");
+
+    // Push 6 events - oldest should be dropped
+    client.set_price(&ngn, &100_i128, &2u32, &3600u64); // 1 (dropped)
+    client.set_price(&kes, &200_i128, &2u32, &3600u64); // 2
+    client.set_price(&ghs, &300_i128, &2u32, &3600u64); // 3
+    client.set_price(&ngn, &110_i128, &2u32, &3600u64); // 4
+    client.set_price(&kes, &210_i128, &2u32, &3600u64); // 5 
+    client.set_price(&ghs, &310_i128, &2u32, &3600u64); // 6 (newest)
+
+    let events = client.get_last_n_events(&5);
+    assert_eq!(events.len(), 5);
+
+    // Newest first (index 0) is an update because ghs was already added
+    assert_eq!(events.get(0).unwrap().asset, ghs);
+    assert_eq!(events.get(0).unwrap().price, 310_i128);
+    assert_eq!(events.get(0).unwrap().event_type, Symbol::new(&env, "price_updated"));
+
+    assert_eq!(events.get(1).unwrap().asset, kes);
+    assert_eq!(events.get(1).unwrap().price, 210_i128);
+
+    // Oldest in the log (index 4) should be the 2nd event pushed
+    assert_eq!(events.get(4).unwrap().asset, kes);
+    assert_eq!(events.get(4).unwrap().price, 200_i128);
+}

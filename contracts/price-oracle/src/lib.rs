@@ -1,10 +1,10 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractclient, contracterror, contractimpl, panic_with_error, Address, Env, Symbol,
+    contract, contractclient, contracterror, contractimpl, panic_with_error, Address, Env, Symbol, String,
 };
 
-use crate::types::{DataKey, PriceBounds, PriceData};
+use crate::types::{DataKey, PriceBounds, PriceData, RecentEvent};
 
 const ADMIN_TIMELOCK: u64 = 86_400;
 
@@ -62,6 +62,11 @@ pub trait StellarFlowTrait {
 
     /// Finalize an admin transfer after the timelock has passed.
     fn accept_admin(env: Env, new_admin: Address);
+
+    /// Get the last N activity events from the on-chain log.
+    ///
+    /// Returns a vector of the most recent events (max 5).
+    fn get_last_n_events(env: Env, n: u32) -> soroban_sdk::Vec<RecentEvent>;
 }
 
 /// Error types for the price oracle contract
@@ -108,6 +113,11 @@ pub struct PriceAnomalyEvent {
 pub struct ContractInitialized {
     pub admin: Address,
     pub version: String,
+}
+
+#[soroban_sdk::contractevent]
+pub struct AssetAddedEvent {
+    pub symbol: Symbol,
 }
 
 /// Returns the signed percentage change in basis points.
@@ -178,6 +188,29 @@ pub fn is_stale(current_time: u64, stored_timestamp: u64, ttl: u64) -> bool {
 
 /// Contract version - must match Cargo.toml version
 const VERSION: &str = "0.0.0";
+
+fn log_event(env: &Env, event_type: Symbol, asset: Symbol, price: i128) {
+    let mut events: soroban_sdk::Vec<RecentEvent> = env
+        .storage()
+        .instance()
+        .get(&DataKey::RecentEvents)
+        .unwrap_or_else(|| soroban_sdk::Vec::new(env));
+
+    let new_event = RecentEvent {
+        event_type,
+        asset,
+        price,
+        timestamp: env.ledger().timestamp(),
+    };
+
+    events.push_front(new_event);
+
+    if events.len() > 5 {
+        events.pop_back();
+    }
+
+    env.storage().instance().set(&DataKey::RecentEvents, &events);
+}
 
 #[contractimpl]
 impl PriceOracle {
@@ -401,14 +434,18 @@ impl PriceOracle {
             ttl,
         };
 
+        let is_new_asset = !prices.contains_key(asset.clone());
+
         prices.set(asset.clone(), price_data);
         storage.set(&DataKey::PriceData, &prices);
 
-        // Emit AssetAdded event only when a new asset is added (not on updates)
         if is_new_asset {
             env.events().publish_event(&AssetAddedEvent {
-                symbol: asset,
+                symbol: asset.clone(),
             });
+            log_event(&env, Symbol::new(&env, "asset_added"), asset, val);
+        } else {
+            log_event(&env, Symbol::new(&env, "price_updated"), asset, val);
         }
     }
 
@@ -514,7 +551,9 @@ impl PriceOracle {
         prices.set(asset.clone(), price_data);
         storage.set(&DataKey::PriceData, &prices);
 
-        env.events().publish_event(&PriceUpdatedEvent { asset, price });
+        env.events().publish_event(&PriceUpdatedEvent { asset: asset.clone(), price });
+
+        log_event(&env, Symbol::new(&env, "price_updated"), asset, price);
 
         Ok(())
     }
@@ -556,6 +595,26 @@ impl PriceOracle {
             .get(&DataKey::PriceBoundsData)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
         bounds_map.get(asset)
+    }
+
+    /// Get the last N activity events from the on-chain log.
+    pub fn get_last_n_events(env: Env, n: u32) -> soroban_sdk::Vec<RecentEvent> {
+        let events: soroban_sdk::Vec<RecentEvent> = env
+            .storage()
+            .instance()
+            .get(&DataKey::RecentEvents)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+
+        let mut result = soroban_sdk::Vec::new(&env);
+        let limit = n.min(events.len());
+
+        for i in 0..limit {
+            if let Some(event) = events.get(i) {
+                result.push_back(event);
+            }
+        }
+
+        result
     }
 }
 

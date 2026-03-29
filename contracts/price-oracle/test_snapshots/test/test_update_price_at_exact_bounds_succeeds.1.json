@@ -292,6 +292,127 @@
                       "val": {
                         "bool": true
                       }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "RecentEvents"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "vec": [
+                          {
+                            "map": [
+                              {
+                                "key": {
+                                  "symbol": "asset"
+                                },
+                                "val": {
+                                  "symbol": "NGN"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "event_type"
+                                },
+                                "val": {
+                                  "symbol": "price_updated"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "price"
+                                },
+                                "val": {
+                                  "i128": "2000"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "timestamp"
+                                },
+                                "val": {
+                                  "u64": "0"
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "map": [
+                              {
+                                "key": {
+                                  "symbol": "asset"
+                                },
+                                "val": {
+                                  "symbol": "NGN"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "event_type"
+                                },
+                                "val": {
+                                  "symbol": "price_updated"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "price"
+                                },
+                                "val": {
+                                  "i128": "1990"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "timestamp"
+                                },
+                                "val": {
+                                  "u64": "0"
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "map": [
+                              {
+                                "key": {
+                                  "symbol": "asset"
+                                },
+                                "val": {
+                                  "symbol": "NGN"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "event_type"
+                                },
+                                "val": {
+                                  "symbol": "price_updated"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "price"
+                                },
+                                "val": {
+                                  "i128": "500"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "timestamp"
+                                },
+                                "val": {
+                                  "u64": "0"
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
                     }
                   ]
                 }

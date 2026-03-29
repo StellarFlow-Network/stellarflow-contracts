@@ -9,12 +9,15 @@
     [],
     [],
     [],
+    [],
+    [],
+    [],
     []
   ],
   "ledger": {
     "protocol_version": 25,
-    "sequence_number": 1,
-    "timestamp": 1000000,
+    "sequence_number": 0,
+    "timestamp": 0,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
     "base_reserve": 0,
     "min_persistent_entry_ttl": 4096,
@@ -57,7 +60,7 @@
                             "symbol": "decimals"
                           },
                           "val": {
-                            "u32": 6
+                            "u32": 2
                           }
                         },
                         {
@@ -65,7 +68,7 @@
                             "symbol": "price"
                           },
                           "val": {
-                            "i128": "5000"
+                            "i128": "310"
                           }
                         },
                         {
@@ -81,7 +84,7 @@
                             "symbol": "timestamp"
                           },
                           "val": {
-                            "u64": "1000000"
+                            "u64": "0"
                           }
                         },
                         {
@@ -114,7 +117,7 @@
                             "symbol": "decimals"
                           },
                           "val": {
-                            "u32": 4
+                            "u32": 2
                           }
                         },
                         {
@@ -122,7 +125,7 @@
                             "symbol": "price"
                           },
                           "val": {
-                            "i128": "800"
+                            "i128": "210"
                           }
                         },
                         {
@@ -138,7 +141,7 @@
                             "symbol": "timestamp"
                           },
                           "val": {
-                            "u64": "1000000"
+                            "u64": "0"
                           }
                         },
                         {
@@ -179,7 +182,7 @@
                             "symbol": "price"
                           },
                           "val": {
-                            "i128": "1500"
+                            "i128": "110"
                           }
                         },
                         {
@@ -195,7 +198,7 @@
                             "symbol": "timestamp"
                           },
                           "val": {
-                            "u64": "1000000"
+                            "u64": "0"
                           }
                         },
                         {
@@ -215,7 +218,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 4096
+        "live_until": 4095
       },
       {
         "entry": {
@@ -257,6 +260,114 @@
                                   "symbol": "event_type"
                                 },
                                 "val": {
+                                  "symbol": "price_updated"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "price"
+                                },
+                                "val": {
+                                  "i128": "310"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "timestamp"
+                                },
+                                "val": {
+                                  "u64": "0"
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "map": [
+                              {
+                                "key": {
+                                  "symbol": "asset"
+                                },
+                                "val": {
+                                  "symbol": "KES"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "event_type"
+                                },
+                                "val": {
+                                  "symbol": "price_updated"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "price"
+                                },
+                                "val": {
+                                  "i128": "210"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "timestamp"
+                                },
+                                "val": {
+                                  "u64": "0"
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "map": [
+                              {
+                                "key": {
+                                  "symbol": "asset"
+                                },
+                                "val": {
+                                  "symbol": "NGN"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "event_type"
+                                },
+                                "val": {
+                                  "symbol": "price_updated"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "price"
+                                },
+                                "val": {
+                                  "i128": "110"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "timestamp"
+                                },
+                                "val": {
+                                  "u64": "0"
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "map": [
+                              {
+                                "key": {
+                                  "symbol": "asset"
+                                },
+                                "val": {
+                                  "symbol": "GHS"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "event_type"
+                                },
+                                "val": {
                                   "symbol": "asset_added"
                                 }
                               },
@@ -265,7 +376,7 @@
                                   "symbol": "price"
                                 },
                                 "val": {
-                                  "i128": "5000"
+                                  "i128": "300"
                                 }
                               },
                               {
@@ -273,7 +384,7 @@
                                   "symbol": "timestamp"
                                 },
                                 "val": {
-                                  "u64": "1000000"
+                                  "u64": "0"
                                 }
                               }
                             ]
@@ -301,7 +412,7 @@
                                   "symbol": "price"
                                 },
                                 "val": {
-                                  "i128": "800"
+                                  "i128": "200"
                                 }
                               },
                               {
@@ -309,43 +420,7 @@
                                   "symbol": "timestamp"
                                 },
                                 "val": {
-                                  "u64": "1000000"
-                                }
-                              }
-                            ]
-                          },
-                          {
-                            "map": [
-                              {
-                                "key": {
-                                  "symbol": "asset"
-                                },
-                                "val": {
-                                  "symbol": "NGN"
-                                }
-                              },
-                              {
-                                "key": {
-                                  "symbol": "event_type"
-                                },
-                                "val": {
-                                  "symbol": "asset_added"
-                                }
-                              },
-                              {
-                                "key": {
-                                  "symbol": "price"
-                                },
-                                "val": {
-                                  "i128": "1500"
-                                }
-                              },
-                              {
-                                "key": {
-                                  "symbol": "timestamp"
-                                },
-                                "val": {
-                                  "u64": "1000000"
+                                  "u64": "0"
                                 }
                               }
                             ]

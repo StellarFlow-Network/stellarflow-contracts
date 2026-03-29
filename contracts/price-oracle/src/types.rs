@@ -9,6 +9,8 @@ pub enum DataKey {
     PriceBoundsData,
     PendingAdmin,
     PendingAdminTimestamp,
+    RecentEvents,
+    Initialized,
 }
 
 /// Canonical storage format for a price entry.
@@ -44,4 +46,14 @@ pub struct PriceEntry {
 pub struct PriceBounds {
     pub min_price: i128,
     pub max_price: i128,
+}
+
+/// A recent activity event for the dashboard feed.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecentEvent {
+    pub event_type: soroban_sdk::Symbol,
+    pub asset: soroban_sdk::Symbol,
+    pub price: i128,
+    pub timestamp: u64,
 }
