@@ -1,6 +1,8 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractclient, contracterror, contractimpl, panic_with_error, Address, Env, Symbol};
+use soroban_sdk::{
+    contract, contractclient, contracterror, contractimpl, panic_with_error, Address, Env, Symbol,
+};
 
 use crate::types::{DataKey, PriceBounds, PriceData};
 
@@ -33,12 +35,20 @@ pub trait StellarFlowTrait {
     ///
     /// Returns a `Vec<PriceEntry>` in the same order as the input symbols.
     /// Assets that are missing or stale are represented as `None` entries.
-    fn get_prices(env: Env, assets: soroban_sdk::Vec<Symbol>) -> soroban_sdk::Vec<Option<crate::types::PriceEntry>>;
+    fn get_prices(
+        env: Env,
+        assets: soroban_sdk::Vec<Symbol>,
+    ) -> soroban_sdk::Vec<Option<crate::types::PriceEntry>>;
 
     /// Get all currently tracked asset symbols.
     ///
     /// Returns a vector of all assets that have prices stored in the contract.
     fn get_all_assets(env: Env) -> soroban_sdk::Vec<Symbol>;
+
+    /// Get the total number of currently tracked asset symbols.
+    ///
+    /// Returns the number of unique assets that have prices stored in the contract.
+    fn get_asset_count(env: Env) -> u32;
 
     /// Get the current admin address.
     ///
@@ -140,10 +150,8 @@ impl PriceOracle {
         }
 
         #[allow(deprecated)]
-        env.events().publish(
-            (Symbol::new(&env, "AdminChanged"),),
-            admin.clone(),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "AdminChanged"),), admin.clone());
 
         let admins = soroban_sdk::vec![&env, admin];
         crate::auth::_set_admin(&env, &admins);
@@ -158,10 +166,8 @@ impl PriceOracle {
         }
 
         #[allow(deprecated)]
-        env.events().publish(
-            (Symbol::new(&env, "AdminChanged"),),
-            admin.clone(),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "AdminChanged"),), admin.clone());
 
         let admins = soroban_sdk::vec![&env, admin];
         crate::auth::_set_admin(&env, &admins);
@@ -184,10 +190,9 @@ impl PriceOracle {
 
         match prices.get(asset) {
             Some(price_data) => {
-                // Check if price is stale using per-asset TTL
                 let now = env.ledger().timestamp();
                 if is_stale(now, price_data.timestamp, price_data.ttl) {
-                    return Err(Error::AssetNotFound); // Could define a new error for StalePrice
+                    return Err(Error::AssetNotFound);
                 }
                 Ok(price_data)
             }
@@ -259,6 +264,16 @@ impl PriceOracle {
         prices.keys()
     }
 
+    /// Returns the total number of currently tracked asset symbols.
+    pub fn get_asset_count(env: Env) -> u32 {
+        let prices: soroban_sdk::Map<Symbol, PriceData> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PriceData)
+            .unwrap_or_else(|| soroban_sdk::Map::new(&env));
+        prices.len()
+    }
+
     /// Set the price data for a specific asset.
     ///
     /// # Arguments
@@ -273,7 +288,6 @@ impl PriceOracle {
             .get(&DataKey::PriceData)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
 
-        // For demo/testing, set confidence_score to 100. In production, this should be provided as an argument.
         let price_data = PriceData {
             price: val,
             timestamp: env.ledger().timestamp(),
@@ -376,8 +390,6 @@ impl PriceOracle {
             .map(|existing_price| existing_price.price)
             .unwrap_or(0);
 
-        // Delta limit circuit breaker: reject if price moves more than 50 in one update.
-        // Skip on first write (old_price == 0).
         if old_price != 0 {
             let delta = (price - old_price).unsigned_abs();
             if delta > 50 {
@@ -391,7 +403,6 @@ impl PriceOracle {
             }
         }
 
-        // Min/max bounds check: reject prices outside configured bounds.
         let bounds_map: soroban_sdk::Map<Symbol, PriceBounds> = storage
             .get(&DataKey::PriceBoundsData)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
@@ -414,10 +425,7 @@ impl PriceOracle {
         prices.set(asset.clone(), price_data);
         storage.set(&DataKey::PriceData, &prices);
 
-        env.events().publish_event(&PriceUpdatedEvent {
-            asset,
-            price,
-        });
+        env.events().publish_event(&PriceUpdatedEvent { asset, price });
 
         Ok(())
     }
