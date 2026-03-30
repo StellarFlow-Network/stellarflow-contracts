@@ -44,13 +44,18 @@ pub trait StellarFlowTrait {
 
     /// Get all currently tracked asset symbols.
     ///
-    /// Returns a vector of all assets that have prices stored in the contract.
+    /// Returns a vector of all assets that are currently being tracked by the oracle.
     fn get_all_assets(env: Env) -> soroban_sdk::Vec<Symbol>;
 
     /// Get the total number of currently tracked asset symbols.
     ///
-    /// Returns the number of unique assets that have prices stored in the contract.
+    /// Returns the number of unique assets that are currently being tracked by the oracle.
     fn get_asset_count(env: Env) -> u32;
+
+    /// Add a new asset to the tracked asset list.
+    ///
+    /// The new asset is added to the internal asset list and initialized with a zero-price placeholder.
+    fn add_asset(env: Env, admin: Address, asset: Symbol) -> Result<(), Error>;
 
     /// Get the current admin address.
     ///
@@ -191,6 +196,25 @@ pub fn is_stale(current_time: u64, stored_timestamp: u64, ttl: u64) -> bool {
 /// Contract version - must match Cargo.toml version
 const VERSION: &str = "0.0.0";
 
+fn get_tracked_assets(env: &Env) -> soroban_sdk::Vec<Symbol> {
+    env.storage()
+        .instance()
+        .get(&DataKey::BaseCurrencyPairs)
+        .unwrap_or_else(|| soroban_sdk::Vec::new(&env))
+}
+
+fn set_tracked_assets(env: &Env, assets: &soroban_sdk::Vec<Symbol>) {
+    env.storage().instance().set(&DataKey::BaseCurrencyPairs, assets);
+}
+
+fn track_asset(env: &Env, asset: Symbol) {
+    let mut assets = get_tracked_assets(env);
+    if !assets.contains(&asset) {
+        assets.push_back(asset);
+        set_tracked_assets(env, &assets);
+    }
+}
+
 fn log_event(env: &Env, event_type: Symbol, asset: Symbol, price: i128) {
     let mut events: soroban_sdk::Vec<RecentEvent> = env
         .storage()
@@ -262,6 +286,41 @@ impl PriceOracle {
         crate::auth::_set_admin(&env, &admins);
 
         env.storage().instance().set(&DataKey::Initialized, &true);
+    }
+
+    /// Add a new asset to the tracked asset list.
+    ///
+    /// The new asset is added to the internal asset list and initialized with a zero-price placeholder.
+    pub fn add_asset(env: Env, admin: Address, asset: Symbol) -> Result<(), Error> {
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        track_asset(&env, asset.clone());
+
+        let storage = env.storage().persistent();
+        let mut prices: soroban_sdk::Map<Symbol, PriceData> = storage
+            .get(&DataKey::PriceData)
+            .unwrap_or_else(|| soroban_sdk::Map::new(&env));
+
+        if !prices.contains_key(asset.clone()) {
+            prices.set(
+                asset.clone(),
+                PriceData {
+                    price: 0,
+                    timestamp: env.ledger().timestamp(),
+                    provider: env.current_contract_address(),
+                    decimals: 0,
+                    confidence_score: 0,
+                    ttl: 0,
+                },
+            );
+            storage.set(&DataKey::PriceData, &prices);
+        }
+
+        env.events().publish_event(&AssetAddedEvent { symbol: asset.clone() });
+        log_event(&env, Symbol::new(&env, "asset_added"), asset, 0);
+
+        Ok(())
     }
 
     /// Return the current admin addresses.
@@ -395,22 +454,12 @@ impl PriceOracle {
 
     /// Returns a vector of all currently tracked asset symbols.
     pub fn get_all_assets(env: Env) -> soroban_sdk::Vec<Symbol> {
-        let prices: soroban_sdk::Map<Symbol, PriceData> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::PriceData)
-            .unwrap_or_else(|| soroban_sdk::Map::new(&env));
-        prices.keys()
+        get_tracked_assets(&env)
     }
 
     /// Returns the total number of currently tracked asset symbols.
     pub fn get_asset_count(env: Env) -> u32 {
-        let prices: soroban_sdk::Map<Symbol, PriceData> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::PriceData)
-            .unwrap_or_else(|| soroban_sdk::Map::new(&env));
-        prices.len()
+        get_tracked_assets(&env).len()
     }
 
     /// Set the price data for a specific asset.
@@ -427,6 +476,10 @@ impl PriceOracle {
             .get(&DataKey::PriceData)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
 
+        let is_new_asset = !prices.contains_key(asset.clone());
+
+        track_asset(&env, asset.clone());
+
         let price_data = PriceData {
             price: val,
             timestamp: env.ledger().timestamp(),
@@ -435,8 +488,6 @@ impl PriceOracle {
             confidence_score: 100,
             ttl,
         };
-
-        let is_new_asset = !prices.contains_key(asset.clone());
 
         prices.set(asset.clone(), price_data);
         storage.set(&DataKey::PriceData, &prices);
@@ -478,8 +529,17 @@ impl PriceOracle {
             return Err(Error::AssetNotFound);
         }
 
-        prices.remove(asset);
+        prices.remove(asset.clone());
         storage.set(&DataKey::PriceData, &prices);
+
+        let mut tracked = get_tracked_assets(&env);
+        let mut updated_assets = soroban_sdk::Vec::new(&env);
+        for tracked_asset in tracked.iter() {
+            if tracked_asset != asset {
+                updated_assets.push_back(tracked_asset.clone());
+            }
+        }
+        set_tracked_assets(&env, &updated_assets);
 
         Ok(())
     }
@@ -496,7 +556,7 @@ impl PriceOracle {
     ) -> Result<(), Error> {
         source.require_auth();
 
-        if !asset_symbol::is_approved_asset_symbol(asset.clone()) {
+        if !get_tracked_assets(&env).contains(&asset) {
             return Err(Error::InvalidAssetSymbol);
         }
 
