@@ -237,6 +237,49 @@ fn test_get_all_assets_returns_tracked_symbols() {
 }
 
 #[test]
+fn test_add_asset_initializes_zero_price_and_tracks_symbol() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
+    });
+
+    let asset = symbol_short!("ZAR");
+    client.add_asset(&admin, &asset).unwrap();
+
+    let assets = client.get_all_assets();
+    assert!(assets.contains(&asset));
+
+    let stored = client.get_price_safe(&asset).unwrap();
+    assert_eq!(stored.price, 0);
+    assert_eq!(stored.decimals, 0);
+    assert_eq!(stored.confidence_score, 0);
+    assert_eq!(stored.ttl, 0);
+}
+
+#[test]
+#[should_panic]
+fn test_add_asset_non_admin_is_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let non_admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
+    });
+
+    let asset = symbol_short!("ZAR");
+    client.add_asset(&non_admin, &asset).unwrap();
+}
+
+#[test]
 fn test_set_price_uses_current_ledger_timestamp() {
     let env = Env::default();
     let contract_id = env.register(PriceOracle, ());
