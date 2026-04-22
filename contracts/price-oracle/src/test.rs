@@ -1329,3 +1329,78 @@ fn test_get_last_n_events_sliding_window() {
     assert_eq!(events.get(4).unwrap().asset, kes);
     assert_eq!(events.get(4).unwrap().price, 200_i128);
 }
+
+// ============================================================================
+// Zero-Write Optimisation Tests (#132)
+// ============================================================================
+
+#[test]
+fn test_set_price_identical_value_only_updates_timestamp() {
+    let env = Env::default();
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+    let asset = symbol_short!("NGN");
+
+    // Initial write
+    env.ledger().set_timestamp(1_000_000);
+    env.ledger().set_sequence_number(1);
+    client.set_price(&asset, &1_500_i128, &2u32, &3600u64);
+
+    let first = client.get_price(&asset);
+    assert_eq!(first.price, 1_500_i128);
+    assert_eq!(first.timestamp, 1_000_000);
+
+    // Second call with the same price — only timestamp should advance
+    env.ledger().set_timestamp(1_001_000);
+    env.ledger().set_sequence_number(2);
+    client.set_price(&asset, &1_500_i128, &2u32, &3600u64);
+
+    let second = client.get_price(&asset);
+    assert_eq!(second.price, 1_500_i128, "price must remain unchanged");
+    assert_eq!(second.timestamp, 1_001_000, "timestamp must be refreshed");
+}
+
+#[test]
+fn test_set_price_different_value_writes_new_price() {
+    let env = Env::default();
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+    let asset = symbol_short!("KES");
+
+    env.ledger().set_timestamp(2_000_000);
+    env.ledger().set_sequence_number(1);
+    client.set_price(&asset, &800_i128, &2u32, &3600u64);
+
+    env.ledger().set_timestamp(2_001_000);
+    env.ledger().set_sequence_number(2);
+    client.set_price(&asset, &850_i128, &2u32, &3600u64);
+
+    let stored = client.get_price(&asset);
+    assert_eq!(stored.price, 850_i128, "new price must be stored");
+    assert_eq!(stored.timestamp, 2_001_000);
+}
+
+#[test]
+fn test_set_price_identical_value_still_emits_price_updated_event() {
+    let env = Env::default();
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+    let asset = symbol_short!("GHS");
+
+    env.ledger().set_timestamp(3_000_000);
+    env.ledger().set_sequence_number(1);
+    client.set_price(&asset, &5_000_i128, &2u32, &3600u64);
+
+    // Clear events by reading them, then do the identical-price call
+    env.ledger().set_timestamp(3_001_000);
+    env.ledger().set_sequence_number(2);
+    client.set_price(&asset, &5_000_i128, &2u32, &3600u64);
+
+    // price_updated event must still be logged so dashboards stay current
+    let events = env.events().all();
+    let debug_str = alloc::format!("{:?}", events);
+    assert!(
+        debug_str.contains("price_updated"),
+        "price_updated event must be emitted even when price is unchanged"
+    );
+}

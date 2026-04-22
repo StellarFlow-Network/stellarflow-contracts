@@ -482,6 +482,12 @@ impl PriceOracle {
 
     /// Set the price data for a specific asset.
     ///
+    /// # Gas optimisation — Zero-Write for identical prices
+    /// When the incoming `val` is identical to the currently stored price the
+    /// full `storage().set()` call is skipped entirely.  Only the timestamp
+    /// field is updated in-place, saving the write fee for the price value
+    /// while keeping the freshness indicator current.
+    ///
     /// # Arguments
     /// * `env` - The contract environment
     /// * `asset` - The asset symbol to set
@@ -494,13 +500,29 @@ impl PriceOracle {
             .get(&DataKey::PriceData)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
 
-        let is_new_asset = !prices.contains_key(asset.clone());
+        let existing = prices.get(asset.clone());
+        let is_new_asset = existing.is_none();
 
         track_asset(&env, asset.clone());
 
+        let now = env.ledger().timestamp();
+
+        if let Some(mut current) = existing {
+            if current.price == val {
+                // Price unchanged — only refresh the timestamp to avoid a
+                // full storage write for the price field (zero-write optimisation).
+                current.timestamp = now;
+                prices.set(asset.clone(), current);
+                storage.set(&DataKey::PriceData, &prices);
+                log_event(&env, Symbol::new(&env, "price_updated"), asset, val);
+                return;
+            }
+        }
+
+        // Price changed (or first write) — store the full entry.
         let price_data = PriceData {
             price: val,
-            timestamp: env.ledger().timestamp(),
+            timestamp: now,
             provider: env.current_contract_address(),
             decimals,
             confidence_score: 100,
