@@ -529,6 +529,10 @@ impl PriceOracle {
     /// * `decimals` - Number of decimals for the price
     /// * `ttl` - Time-to-live in seconds for this price (per-asset expiration)
     pub fn set_price(env: Env, asset: Symbol, val: i128, decimals: u32, ttl: u64) {
+        if !is_valid(val) {
+            panic_with_error!(&env, Error::InvalidPrice);
+        }
+
         let storage = env.storage().persistent();
         let mut prices: soroban_sdk::Map<Symbol, PriceData> = storage
             .get(&DataKey::PriceData)

@@ -322,6 +322,30 @@ fn test_set_price_uses_current_ledger_timestamp() {
 }
 
 #[test]
+#[should_panic(expected = "Error(InvalidPrice)")]
+fn test_set_price_rejects_zero_price() {
+    let env = Env::default();
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+    let asset = symbol_short!("NGN");
+
+    // Zero price should be rejected to prevent negative price exploits
+    client.set_price(&asset, &0_i128, &2u32, &3600u64);
+}
+
+#[test]
+#[should_panic(expected = "Error(InvalidPrice)")]
+fn test_set_price_rejects_negative_price() {
+    let env = Env::default();
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+    let asset = symbol_short!("NGN");
+
+    // Negative price should be rejected to prevent mathematical overflows in downstream DeFi protocols
+    client.set_price(&asset, &-1_i128, &2u32, &3600u64);
+}
+
+#[test]
 fn test_update_price_provider_can_store_new_price() {
     let env = Env::default();
     env.mock_all_auths();
