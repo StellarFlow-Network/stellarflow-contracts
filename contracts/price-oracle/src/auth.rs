@@ -75,6 +75,15 @@ pub fn _remove_authorized(env: &Env, admin_to_remove: &Address) {
     }
 }
 
+/// Permanently renounce ownership by deleting all admin keys from storage.
+///
+/// After this call, no address will be authorized as admin and all admin-only
+/// functions will be permanently inaccessible. This makes the contract
+/// immutable and controlled only by code logic.
+pub fn _renounce_ownership(env: &Env) {
+    env.storage().instance().remove(&DataKey::Admin);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Pause Helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -421,6 +430,35 @@ mod auth_tests {
         let random = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
         env.as_contract(&contract_id, || {
             assert_eq!(_get_provider_weight(&env, &random), 0);
+        });
+    }
+
+    // ── Renounce ownership tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_renounce_ownership_removes_all_admins() {
+        let (env, contract_id, admin1) = setup();
+        let admin2 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+        env.as_contract(&contract_id, || {
+            _add_authorized(&env, &admin2);
+            assert_eq!(_get_admin(&env).len(), 2);
+            assert!(_has_admin(&env));
+
+            _renounce_ownership(&env);
+
+            assert!(!_has_admin(&env));
+        });
+    }
+
+    #[test]
+    fn test_renounce_ownership_makes_is_authorized_false() {
+        let (env, contract_id, admin) = setup();
+        env.as_contract(&contract_id, || {
+            assert!(_is_authorized(&env, &admin));
+
+            _renounce_ownership(&env);
+
+            assert!(!_is_authorized(&env, &admin));
         });
     }
 }

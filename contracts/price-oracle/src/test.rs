@@ -1414,3 +1414,77 @@ fn test_set_price_identical_value_still_emits_price_updated_event() {
         "price_updated event must be emitted even when price is unchanged"
     );
 }
+
+// ============================================================================
+// Renounce Ownership Tests
+// ============================================================================
+
+#[test]
+fn test_renounce_ownership_removes_admin_permanently() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+    client.init_admin(&admin);
+    assert!(client.is_admin(&admin));
+
+    client.renounce_ownership(&admin);
+
+    assert!(!client.is_admin(&admin));
+    env.as_contract(&contract_id, || {
+        assert!(!crate::auth::_has_admin(&env));
+    });
+}
+
+#[test]
+fn test_renounce_ownership_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+    client.init_admin(&admin);
+    client.renounce_ownership(&admin);
+
+    let events = env.events().all();
+    let debug_str = alloc::format!("{:?}", events);
+    assert!(debug_str.contains("ownership_renounced_event"));
+}
+
+#[test]
+#[should_panic(expected = "Unauthorised: caller is not in the authorized admin list")]
+fn test_renounce_ownership_rejects_non_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let non_admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+    client.init_admin(&admin);
+    client.renounce_ownership(&non_admin);
+}
+
+#[test]
+#[should_panic(expected = "Unauthorised: caller is not in the authorized admin list")]
+fn test_renounce_ownership_blocks_admin_functions_after_renouncement() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+    client.init_admin(&admin);
+    client.renounce_ownership(&admin);
+
+    // Any admin-only function should now fail — upgrade is a convenient test target
+    let dummy_hash = soroban_sdk::BytesN::from_array(&env, &[0u8; 32]);
+    client.upgrade(&admin, &dummy_hash);
+}
