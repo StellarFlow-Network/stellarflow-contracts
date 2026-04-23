@@ -308,7 +308,7 @@ impl PriceOracle {
 
         track_asset(&env, asset.clone());
 
-        let storage = env.storage().persistent();
+        let storage = env.storage().temporary();
         let mut prices: soroban_sdk::Map<Symbol, PriceData> = storage
             .get(&DataKey::PriceData)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
@@ -405,7 +405,7 @@ impl PriceOracle {
     /// Get the price data for a specific asset.
     /// Returns error if price is stale.
     pub fn get_price(env: Env, asset: Symbol) -> Result<PriceData, Error> {
-        let storage = env.storage().persistent();
+        let storage = env.storage().temporary();
         let prices: soroban_sdk::Map<Symbol, PriceData> = storage
             .get(&DataKey::PriceData)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
@@ -426,7 +426,7 @@ impl PriceOracle {
     pub fn get_price_safe(env: Env, asset: Symbol) -> Option<PriceData> {
         let prices: soroban_sdk::Map<Symbol, PriceData> = env
             .storage()
-            .persistent()
+            .temporary()
             .get(&DataKey::PriceData)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
         prices.get(asset)
@@ -451,7 +451,7 @@ impl PriceOracle {
     ) -> soroban_sdk::Vec<Option<crate::types::PriceEntry>> {
         let prices: soroban_sdk::Map<Symbol, PriceData> = env
             .storage()
-            .persistent()
+            .temporary()
             .get(&DataKey::PriceData)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
 
@@ -501,7 +501,7 @@ impl PriceOracle {
     /// * `decimals` - Number of decimals for the price
     /// * `ttl` - Time-to-live in seconds for this price (per-asset expiration)
     pub fn set_price(env: Env, asset: Symbol, val: i128, decimals: u32, ttl: u64) {
-        let storage = env.storage().persistent();
+        let storage = env.storage().temporary();
         let mut prices: soroban_sdk::Map<Symbol, PriceData> = storage
             .get(&DataKey::PriceData)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
@@ -520,6 +520,7 @@ impl PriceOracle {
                 current.timestamp = now;
                 prices.set(asset.clone(), current);
                 storage.set(&DataKey::PriceData, &prices);
+                env.events().publish_event(&PriceUpdatedEvent { asset: asset.clone(), price: val });
                 log_event(&env, Symbol::new(&env, "price_updated"), asset, val);
                 return;
             }
@@ -566,7 +567,7 @@ impl PriceOracle {
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
 
-        let storage = env.storage().persistent();
+        let storage = env.storage().temporary();
         let mut prices: soroban_sdk::Map<Symbol, PriceData> = storage
             .get(&DataKey::PriceData)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
@@ -614,7 +615,7 @@ impl PriceOracle {
             return Err(Error::NotAuthorized);
         }
 
-        let storage = env.storage().persistent();
+        let storage = env.storage().temporary();
         let mut prices: soroban_sdk::Map<Symbol, PriceData> = storage
             .get(&DataKey::PriceData)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
@@ -680,7 +681,7 @@ impl PriceOracle {
         assert!(min_price > 0 && max_price > 0, "bounds must be positive");
         assert!(min_price <= max_price, "min_price must be <= max_price");
 
-        let storage = env.storage().persistent();
+        let storage = env.storage().temporary();
         let mut bounds_map: soroban_sdk::Map<Symbol, PriceBounds> = storage
             .get(&DataKey::PriceBoundsData)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
@@ -699,7 +700,7 @@ impl PriceOracle {
     pub fn get_price_bounds(env: Env, asset: Symbol) -> Option<PriceBounds> {
         let bounds_map: soroban_sdk::Map<Symbol, PriceBounds> = env
             .storage()
-            .persistent()
+            .temporary()
             .get(&DataKey::PriceBoundsData)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
         bounds_map.get(asset)
