@@ -20,7 +20,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "symbol": "NGN"
+                  "symbol": "ZAR"
                 }
               ]
             }
@@ -56,12 +56,12 @@
                   }
                 ]
               },
-              "durability": "temporary",
+              "durability": "persistent",
               "val": {
                 "map": [
                   {
                     "key": {
-                      "symbol": "NGN"
+                      "symbol": "ZAR"
                     },
                     "val": {
                       "map": [
@@ -122,7 +122,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 15
+        "live_until": 4095
       },
       {
         "entry": {
@@ -166,7 +166,7 @@
                       "val": {
                         "vec": [
                           {
-                            "symbol": "NGN"
+                            "symbol": "ZAR"
                           }
                         ]
                       }
@@ -188,7 +188,7 @@
                                   "symbol": "asset"
                                 },
                                 "val": {
-                                  "symbol": "NGN"
+                                  "symbol": "ZAR"
                                 }
                               },
                               {

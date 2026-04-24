@@ -93,7 +93,11 @@ pub fn format_price(env: &Env, price: i128, decimals: u32) -> String {
     }
 
     // --- 3. Wrap in a Soroban String ------------------------------------------
+<<<<<<< Aggregator
+    // `from_bytes` expects a byte slice, so we pass the slice directly.
+=======
     // `from_bytes` expects a byte slice, not a soroban_sdk::Bytes.
+>>>>>>> main
     String::from_bytes(env, &out[..pos])
 }
 
@@ -115,6 +119,10 @@ pub fn normalize_to_seven(value: i128, input_decimals: u32) -> i128 {
 mod tests {
     use super::*;
     use soroban_sdk::Env;
+<<<<<<< Aggregator
+    extern crate alloc;
+=======
+>>>>>>> main
     use alloc::string::ToString;
 
     // --- format_price tests ---------------------------------------------------
