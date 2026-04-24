@@ -80,24 +80,14 @@
           "v0": {
             "topics": [
               {
-                "symbol": "admin_changed"
+                "symbol": "AdminChanged"
               }
             ],
             "data": {
-              "map": [
+              "vec": [
+                "void",
                 {
-                  "key": {
-                    "symbol": "new_admin"
-                  },
-                  "val": {
-                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "previous_admin"
-                  },
-                  "val": "void"
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 }
               ]
             }

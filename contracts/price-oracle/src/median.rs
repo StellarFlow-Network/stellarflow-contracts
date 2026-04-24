@@ -8,8 +8,7 @@ pub enum MedianError {
 }
 
 /// Sort a Vec<i128> using insertion sort (no_std compatible).
-
-#[warn(dead_code)]
+#[allow(dead_code)]
 fn sort_prices(prices: &mut Vec<i128>) {
     let len = prices.len();
     for i in 1..len {
@@ -33,8 +32,7 @@ fn sort_prices(prices: &mut Vec<i128>) {
 /// - 1 input   → returns that value
 /// - odd count → returns the middle value
 /// - even count → returns the average of the two middle values
-
-#[warn(dead_code)]
+#[allow(dead_code)]
 pub fn calculate_median(mut prices: Vec<i128>) -> Result<i128, MedianError> {
     let len = prices.len();
     if len == 0 {
