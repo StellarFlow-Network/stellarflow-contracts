@@ -585,6 +585,27 @@ impl PriceOracle {
         }
     }
 
+    /// Rescue tokens accidentally sent to this contract.
+    ///
+    /// Admin-only function to move trapped XLM or other assets out of the contract.
+    pub fn rescue_tokens(env: Env, admin: Address, token: Address, to: Address, amount: i128) {
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        if amount <= 0 {
+            panic_with_error!(&env, Error::InvalidPrice);
+        }
+
+        let token_client = TokenContractClient::new(&env, &token);
+        token_client.transfer(&env.current_contract_address(), &to, &amount);
+
+        env.events().publish_event(&RescueTokensEvent {
+            token,
+            recipient: to,
+            amount,
+        });
+    }
+
     /// Upgrade the contract WASM code.
     ///
     /// Replaces the on-chain WASM bytecode with the provided hash while preserving

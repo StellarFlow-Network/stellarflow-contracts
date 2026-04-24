@@ -55,6 +55,24 @@ impl DummyConsumer {
     }
 }
 
+#[soroban_sdk::contractevent]
+pub struct TokenTransferEvent {
+    pub from: Address,
+    pub to: Address,
+    pub amount: i128,
+}
+
+#[contract]
+pub struct DummyToken;
+
+#[contractimpl]
+impl DummyToken {
+    pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+        from.require_auth();
+        env.events().publish_event(&TokenTransferEvent { from, to, amount });
+    }
+}
+
 #[test]
 fn test_initialize_success() {
     let env = Env::default();
@@ -423,6 +441,52 @@ fn test_update_price_admin_authority() {
         Err(Ok(e)) => assert_eq!(e, Error::NotAuthorized),
         other => panic!("expected NotAuthorized, got {:?}", other),
     }
+}
+
+#[test]
+fn test_rescue_tokens_admin_can_recover_assets() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+    let token_id = env.register(DummyToken, ());
+
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let recipient = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
+    });
+
+    client.rescue_tokens(&admin, &token_id, &recipient, &1_000_i128);
+
+    let events = env.events().all();
+    let debug_str = alloc::format!("{:?}", events);
+    assert!(debug_str.contains("TokenTransferEvent"));
+    assert!(debug_str.contains(&format!("{:?}", recipient)));
+    assert!(debug_str.contains(&format!("{:?}", 1_000_i128)));
+}
+
+#[test]
+#[should_panic(expected = "Unauthorised: caller is not in the authorized admin list")]
+fn test_rescue_tokens_rejects_non_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+    let token_id = env.register(DummyToken, ());
+
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let non_admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let recipient = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
+    });
+
+    client.rescue_tokens(&non_admin, &token_id, &recipient, &1_000_i128);
 }
 
 #[test]

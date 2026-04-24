@@ -59,6 +59,8 @@ soroban contract build
 
 > add_provider(provider: Address): Whitelists a backend relayer to push data.
 
+> rescue_tokens(token: Address, to: Address, amount: i128): Admin-only function to recover trapped assets from the contract.
+
 **Data Submission (Authorized)**
 update_price(source: Address, asset: Symbol, price: i128): Updates the price for a specific asset. Requires source authorization.
 
