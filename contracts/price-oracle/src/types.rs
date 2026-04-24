@@ -5,8 +5,11 @@ use soroban_sdk::{contracttype, Address, Symbol};
 pub enum DataKey {
     Admin,
     BaseCurrencyPairs,
+    Price(Symbol),
     PriceData,
+    PriceBuffer,
     PriceBoundsData,
+    AssetDescription(Symbol),
     PendingAdmin,
     PendingAdminTimestamp,
     AdminUpdateTimestamp,
@@ -76,4 +79,30 @@ pub struct RecentEvent {
     pub asset: soroban_sdk::Symbol,
     pub price: i128,
     pub timestamp: u64,
+}
+
+/// A single relayer price submission within the current ledger buffer.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PriceBufferEntry {
+    /// The price value submitted by this relayer.
+    pub price: i128,
+    /// Address of the relayer who submitted this price.
+    pub provider: Address,
+    /// Timestamp when this price was submitted.
+    pub timestamp: u64,
+}
+
+/// Buffer containing multiple relayer submissions for median calculation.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PriceBuffer {
+    /// List of price entries from different relayers for the current ledger.
+    pub entries: soroban_sdk::Vec<PriceBufferEntry>,
+    /// The ledger sequence number this buffer belongs to.
+    pub ledger_sequence: u32,
+    /// Number of decimals for the price values.
+    pub decimals: u32,
+    /// Time-to-live in seconds for this buffer.
+    pub ttl: u64,
 }

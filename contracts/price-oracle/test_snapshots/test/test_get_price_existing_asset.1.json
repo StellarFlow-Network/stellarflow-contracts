@@ -120,6 +120,22 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "BaseCurrencyPairs"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "vec": [
+                          {
+                            "symbol": "XLM"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "RecentEvents"
                           }
                         ]

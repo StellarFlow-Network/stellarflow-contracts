@@ -121,6 +121,22 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "BaseCurrencyPairs"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "vec": [
+                          {
+                            "symbol": "NGN"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "RecentEvents"
                           }
                         ]
