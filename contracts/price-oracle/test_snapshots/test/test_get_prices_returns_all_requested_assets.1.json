@@ -31,182 +31,62 @@
               "key": {
                 "vec": [
                   {
-                    "symbol": "PriceData"
+                    "symbol": "VerifiedPrice"
+                  },
+                  {
+                    "symbol": "GHS"
                   }
                 ]
               },
-              "durability": "persistent",
+              "durability": "temporary",
               "val": {
                 "map": [
                   {
                     "key": {
-                      "symbol": "GHS"
+                      "symbol": "confidence_score"
                     },
                     "val": {
-                      "map": [
-                        {
-                          "key": {
-                            "symbol": "confidence_score"
-                          },
-                          "val": {
-                            "u32": 100
-                          }
-                        },
-                        {
-                          "key": {
-                            "symbol": "decimals"
-                          },
-                          "val": {
-                            "u32": 6
-                          }
-                        },
-                        {
-                          "key": {
-                            "symbol": "price"
-                          },
-                          "val": {
-                            "i128": "5000"
-                          }
-                        },
-                        {
-                          "key": {
-                            "symbol": "provider"
-                          },
-                          "val": {
-                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
-                          }
-                        },
-                        {
-                          "key": {
-                            "symbol": "timestamp"
-                          },
-                          "val": {
-                            "u64": "1000000"
-                          }
-                        },
-                        {
-                          "key": {
-                            "symbol": "ttl"
-                          },
-                          "val": {
-                            "u64": "3600"
-                          }
-                        }
-                      ]
+                      "u32": 100
                     }
                   },
                   {
                     "key": {
-                      "symbol": "KES"
+                      "symbol": "decimals"
                     },
                     "val": {
-                      "map": [
-                        {
-                          "key": {
-                            "symbol": "confidence_score"
-                          },
-                          "val": {
-                            "u32": 100
-                          }
-                        },
-                        {
-                          "key": {
-                            "symbol": "decimals"
-                          },
-                          "val": {
-                            "u32": 4
-                          }
-                        },
-                        {
-                          "key": {
-                            "symbol": "price"
-                          },
-                          "val": {
-                            "i128": "800"
-                          }
-                        },
-                        {
-                          "key": {
-                            "symbol": "provider"
-                          },
-                          "val": {
-                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
-                          }
-                        },
-                        {
-                          "key": {
-                            "symbol": "timestamp"
-                          },
-                          "val": {
-                            "u64": "1000000"
-                          }
-                        },
-                        {
-                          "key": {
-                            "symbol": "ttl"
-                          },
-                          "val": {
-                            "u64": "3600"
-                          }
-                        }
-                      ]
+                      "u32": 6
                     }
                   },
                   {
                     "key": {
-                      "symbol": "NGN"
+                      "symbol": "price"
                     },
                     "val": {
-                      "map": [
-                        {
-                          "key": {
-                            "symbol": "confidence_score"
-                          },
-                          "val": {
-                            "u32": 100
-                          }
-                        },
-                        {
-                          "key": {
-                            "symbol": "decimals"
-                          },
-                          "val": {
-                            "u32": 2
-                          }
-                        },
-                        {
-                          "key": {
-                            "symbol": "price"
-                          },
-                          "val": {
-                            "i128": "1500"
-                          }
-                        },
-                        {
-                          "key": {
-                            "symbol": "provider"
-                          },
-                          "val": {
-                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
-                          }
-                        },
-                        {
-                          "key": {
-                            "symbol": "timestamp"
-                          },
-                          "val": {
-                            "u64": "1000000"
-                          }
-                        },
-                        {
-                          "key": {
-                            "symbol": "ttl"
-                          },
-                          "val": {
-                            "u64": "3600"
-                          }
-                        }
-                      ]
+                      "i128": "5000"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "provider"
+                    },
+                    "val": {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "timestamp"
+                    },
+                    "val": {
+                      "u64": "1000000"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "ttl"
+                    },
+                    "val": {
+                      "u64": "3600"
                     }
                   }
                 ]
@@ -215,7 +95,159 @@
           },
           "ext": "v0"
         },
-        "live_until": 4096
+        "live_until": 16
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "VerifiedPrice"
+                  },
+                  {
+                    "symbol": "KES"
+                  }
+                ]
+              },
+              "durability": "temporary",
+              "val": {
+                "map": [
+                  {
+                    "key": {
+                      "symbol": "confidence_score"
+                    },
+                    "val": {
+                      "u32": 100
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "decimals"
+                    },
+                    "val": {
+                      "u32": 4
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "price"
+                    },
+                    "val": {
+                      "i128": "800"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "provider"
+                    },
+                    "val": {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "timestamp"
+                    },
+                    "val": {
+                      "u64": "1000000"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "ttl"
+                    },
+                    "val": {
+                      "u64": "3600"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 16
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "VerifiedPrice"
+                  },
+                  {
+                    "symbol": "NGN"
+                  }
+                ]
+              },
+              "durability": "temporary",
+              "val": {
+                "map": [
+                  {
+                    "key": {
+                      "symbol": "confidence_score"
+                    },
+                    "val": {
+                      "u32": 100
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "decimals"
+                    },
+                    "val": {
+                      "u32": 2
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "price"
+                    },
+                    "val": {
+                      "i128": "1500"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "provider"
+                    },
+                    "val": {
+                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "timestamp"
+                    },
+                    "val": {
+                      "u64": "1000000"
+                    }
+                  },
+                  {
+                    "key": {
+                      "symbol": "ttl"
+                    },
+                    "val": {
+                      "u64": "3600"
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 16
       },
       {
         "entry": {
@@ -232,6 +264,28 @@
                     "wasm": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
                   },
                   "storage": [
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "BaseCurrencyPairs"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "vec": [
+                          {
+                            "symbol": "NGN"
+                          },
+                          {
+                            "symbol": "KES"
+                          },
+                          {
+                            "symbol": "GHS"
+                          }
+                        ]
+                      }
+                    },
                     {
                       "key": {
                         "vec": [

@@ -5,6 +5,7 @@ use soroban_sdk::{contracttype, Address, Symbol};
 pub enum DataKey {
     Admin,
     BaseCurrencyPairs,
+    /// Legacy flat price map — kept for migration compatibility only.
     PriceData,
     PriceBoundsData,
     PendingAdmin,
@@ -12,6 +13,12 @@ pub enum DataKey {
     AdminUpdateTimestamp,
     RecentEvents,
     Initialized,
+    AssetDescription(Symbol),
+    /// Verified price bucket: written only by whitelisted providers / admins.
+    /// Internal math and `get_price` default to this bucket.
+    VerifiedPrice(Symbol),
+    /// Community price bucket: written by any caller; never used in internal math.
+    CommunityPrice(Symbol),
 }
 
 /// Canonical storage format for a price entry.
