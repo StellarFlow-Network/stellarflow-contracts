@@ -43,12 +43,6 @@
                 },
                 {
                   "symbol": "NGN"
-                },
-                {
-                  "i128": "500"
-                },
-                {
-                  "i128": "2000"
                 }
               ]
             }
@@ -73,7 +67,7 @@
                   "symbol": "NGN"
                 },
                 {
-                  "i128": "500"
+                  "i128": "1500000"
                 },
                 {
                   "u32": 6
@@ -91,41 +85,7 @@
         }
       ]
     ],
-    [],
-    [
-      [
-        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
-        {
-          "function": {
-            "contract_fn": {
-              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "function_name": "update_price",
-              "args": [
-                {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
-                },
-                {
-                  "symbol": "NGN"
-                },
-                {
-                  "i128": "2000"
-                },
-                {
-                  "u32": 6
-                },
-                {
-                  "u32": 100
-                },
-                {
-                  "u64": "3600"
-                }
-              ]
-            }
-          },
-          "sub_invocations": []
-        }
-      ]
-    ]
+    []
   ],
   "ledger": {
     "protocol_version": 25,
@@ -296,7 +256,7 @@
                   }
                 ]
               },
-              "durability": "persistent",
+              "durability": "temporary",
               "val": {
                 "map": [
                   {
@@ -326,7 +286,7 @@
                             "symbol": "price"
                           },
                           "val": {
-                            "i128": "2000"
+                            "i128": "1500000"
                           }
                         },
                         {
@@ -362,7 +322,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 4095
+        "live_until": 215
       },
       {
         "entry": {
@@ -423,7 +383,16 @@
                         ]
                       },
                       "val": {
-                        "bool": true
+                        "map": [
+                          {
+                            "key": {
+                              "symbol": "joined_ledger"
+                            },
+                            "val": {
+                              "u32": 0
+                            }
+                          }
+                        ]
                       }
                     },
                     {
@@ -459,7 +428,7 @@
                                   "symbol": "price"
                                 },
                                 "val": {
-                                  "i128": "2000"
+                                  "i128": "1500000"
                                 }
                               },
                               {
@@ -487,7 +456,7 @@
                                   "symbol": "event_type"
                                 },
                                 "val": {
-                                  "symbol": "price_updated"
+                                  "symbol": "asset_added"
                                 }
                               },
                               {
@@ -495,43 +464,7 @@
                                   "symbol": "price"
                                 },
                                 "val": {
-                                  "i128": "1990"
-                                }
-                              },
-                              {
-                                "key": {
-                                  "symbol": "timestamp"
-                                },
-                                "val": {
-                                  "u64": "0"
-                                }
-                              }
-                            ]
-                          },
-                          {
-                            "map": [
-                              {
-                                "key": {
-                                  "symbol": "asset"
-                                },
-                                "val": {
-                                  "symbol": "NGN"
-                                }
-                              },
-                              {
-                                "key": {
-                                  "symbol": "event_type"
-                                },
-                                "val": {
-                                  "symbol": "price_updated"
-                                }
-                              },
-                              {
-                                "key": {
-                                  "symbol": "price"
-                                },
-                                "val": {
-                                  "i128": "500"
+                                  "i128": "0"
                                 }
                               },
                               {
@@ -688,43 +621,5 @@
       }
     ]
   },
-  "events": [
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-        "type_": "contract",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "price_updated_event"
-              }
-            ],
-            "data": {
-              "map": [
-                {
-                  "key": {
-                    "symbol": "asset"
-                  },
-                  "val": {
-                    "symbol": "NGN"
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "price"
-                  },
-                  "val": {
-                    "i128": "2000"
-                  }
-                }
-              ]
-            }
-          }
-        }
-      },
-      "failed_call": false
-    }
-  ]
+  "events": []
 }

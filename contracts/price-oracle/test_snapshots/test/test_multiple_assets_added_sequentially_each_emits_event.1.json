@@ -34,7 +34,7 @@
                   }
                 ]
               },
-              "durability": "persistent",
+              "durability": "temporary",
               "val": {
                 "map": [
                   {
@@ -214,7 +214,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 4095
+        "live_until": 15
       },
       {
         "entry": {

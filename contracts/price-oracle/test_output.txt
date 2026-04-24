@@ -1,0 +1,287 @@
+   Compiling price-oracle v0.0.0 (/home/abujulaybeeb/Documents/Drips 13/stellarflow-contracts/contracts/price-oracle)
+error[E0423]: expected value, found macro `env`
+   --> contracts/price-oracle/src/test.rs:899:86
+    |
+899 |     let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    |                                                                                      ^^^ not a value
+
+error[E0423]: expected value, found macro `env`
+   --> contracts/price-oracle/src/test.rs:900:90
+    |
+900 |     let non_admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    |                                                                                          ^^^ not a value
+
+error[E0423]: expected value, found macro `env`
+   --> contracts/price-oracle/src/test.rs:902:5
+    |
+902 |     env.as_contract(&contract_id, || {
+    |     ^^^ not a value
+
+error[E0425]: cannot find value `contract_id` in this scope
+   --> contracts/price-oracle/src/test.rs:902:22
+    |
+902 |     env.as_contract(&contract_id, || {
+    |                      ^^^^^^^^^^^ not found in this scope
+
+error[E0423]: expected value, found macro `env`
+   --> contracts/price-oracle/src/test.rs:903:34
+    |
+903 |         crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
+    |                                  ^^^ not a value
+
+error[E0423]: expected value, found macro `env`
+   --> contracts/price-oracle/src/test.rs:903:59
+    |
+903 |         crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
+    |                                                           ^^^ not a value
+
+error[E0425]: cannot find value `client` in this scope
+   --> contracts/price-oracle/src/test.rs:907:5
+    |
+907 |     client.set_price(&asset, &1_000_i128, &2u32, &3600u64);
+    |     ^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `client` in this scope
+   --> contracts/price-oracle/src/test.rs:909:18
+    |
+909 |     let result = client.try_remove_asset(&non_admin, &asset);
+    |                  ^^^^^^ not found in this scope
+
+error[E0423]: expected value, found macro `env`
+    --> contracts/price-oracle/src/test.rs:1302:86
+     |
+1302 |     let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+     |                                                                                      ^^^ not a value
+
+error[E0423]: expected value, found macro `env`
+    --> contracts/price-oracle/src/test.rs:1303:89
+     |
+1303 |     let provider = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+     |                                                                                         ^^^ not a value
+
+error[E0423]: expected value, found macro `env`
+    --> contracts/price-oracle/src/test.rs:1306:5
+     |
+1306 |     env.as_contract(&contract_id, || {
+     |     ^^^ not a value
+
+error[E0425]: cannot find value `contract_id` in this scope
+    --> contracts/price-oracle/src/test.rs:1306:22
+     |
+1306 |     env.as_contract(&contract_id, || {
+     |                      ^^^^^^^^^^^ not found in this scope
+
+error[E0423]: expected value, found macro `env`
+    --> contracts/price-oracle/src/test.rs:1307:34
+     |
+1307 |         crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
+     |                                  ^^^ not a value
+
+error[E0423]: expected value, found macro `env`
+    --> contracts/price-oracle/src/test.rs:1307:59
+     |
+1307 |         crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
+     |                                                           ^^^ not a value
+
+error[E0423]: expected value, found macro `env`
+    --> contracts/price-oracle/src/test.rs:1308:37
+     |
+1308 |         crate::auth::_add_provider(&env, &provider);
+     |                                     ^^^ not a value
+
+error[E0425]: cannot find value `client` in this scope
+    --> contracts/price-oracle/src/test.rs:1311:5
+     |
+1311 |     client.add_asset(&admin, &asset);
+     |     ^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `client` in this scope
+    --> contracts/price-oracle/src/test.rs:1314:5
+     |
+1314 |     client.set_price_bounds(&admin, &asset, &500_i128, &2_000_i128);
+     |     ^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `client` in this scope
+    --> contracts/price-oracle/src/test.rs:1317:18
+     |
+1317 |     let result = client.try_update_price(&provider, &asset, &1_000_i128, &6u32, &100u32, &3600u64);
+     |                  ^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `client` in this scope
+    --> contracts/price-oracle/src/test.rs:1320:18
+     |
+1320 |     let stored = client.get_price(&asset);
+     |                  ^^^^^^ not found in this scope
+
+error[E0423]: expected value, found macro `env`
+    --> contracts/price-oracle/src/test.rs:1354:86
+     |
+1354 |     let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+     |                                                                                      ^^^ not a value
+
+error[E0423]: expected value, found macro `env`
+    --> contracts/price-oracle/src/test.rs:1355:89
+     |
+1355 |     let provider = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+     |                                                                                         ^^^ not a value
+
+error[E0423]: expected value, found macro `env`
+    --> contracts/price-oracle/src/test.rs:1358:5
+     |
+1358 |     env.as_contract(&contract_id, || {
+     |     ^^^ not a value
+
+error[E0425]: cannot find value `contract_id` in this scope
+    --> contracts/price-oracle/src/test.rs:1358:22
+     |
+1358 |     env.as_contract(&contract_id, || {
+     |                      ^^^^^^^^^^^ not found in this scope
+
+error[E0423]: expected value, found macro `env`
+    --> contracts/price-oracle/src/test.rs:1359:34
+     |
+1359 |         crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
+     |                                  ^^^ not a value
+
+error[E0423]: expected value, found macro `env`
+    --> contracts/price-oracle/src/test.rs:1359:59
+     |
+1359 |         crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
+     |                                                           ^^^ not a value
+
+error[E0423]: expected value, found macro `env`
+    --> contracts/price-oracle/src/test.rs:1360:37
+     |
+1360 |         crate::auth::_add_provider(&env, &provider);
+     |                                     ^^^ not a value
+
+error[E0425]: cannot find value `client` in this scope
+    --> contracts/price-oracle/src/test.rs:1363:5
+     |
+1363 |     client.add_asset(&admin, &asset);
+     |     ^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `client` in this scope
+    --> contracts/price-oracle/src/test.rs:1366:5
+     |
+1366 |     client.set_price_bounds(&admin, &asset, &500_i128, &2_000_i128);
+     |     ^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `client` in this scope
+    --> contracts/price-oracle/src/test.rs:1369:18
+     |
+1369 |     let result = client.try_update_price(&provider, &asset, &100_i128, &6u32, &100u32, &3600u64);
+     |                  ^^^^^^ not found in this scope
+
+error[E0423]: expected value, found macro `env`
+    --> contracts/price-oracle/src/test.rs:1492:86
+     |
+1492 |     let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+     |                                                                                      ^^^ not a value
+
+error[E0423]: expected value, found macro `env`
+    --> contracts/price-oracle/src/test.rs:1493:89
+     |
+1493 |     let provider = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+     |                                                                                         ^^^ not a value
+
+error[E0423]: expected value, found macro `env`
+    --> contracts/price-oracle/src/test.rs:1496:5
+     |
+1496 |     env.as_contract(&contract_id, || {
+     |     ^^^ not a value
+
+error[E0425]: cannot find value `contract_id` in this scope
+    --> contracts/price-oracle/src/test.rs:1496:22
+     |
+1496 |     env.as_contract(&contract_id, || {
+     |                      ^^^^^^^^^^^ not found in this scope
+
+error[E0423]: expected value, found macro `env`
+    --> contracts/price-oracle/src/test.rs:1497:34
+     |
+1497 |         crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
+     |                                  ^^^ not a value
+
+error[E0423]: expected value, found macro `env`
+    --> contracts/price-oracle/src/test.rs:1497:59
+     |
+1497 |         crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
+     |                                                           ^^^ not a value
+
+error[E0423]: expected value, found macro `env`
+    --> contracts/price-oracle/src/test.rs:1498:37
+     |
+1498 |         crate::auth::_add_provider(&env, &provider);
+     |                                     ^^^ not a value
+
+error[E0425]: cannot find value `client` in this scope
+    --> contracts/price-oracle/src/test.rs:1501:5
+     |
+1501 |     client.add_asset(&admin, &asset);
+     |     ^^^^^^ not found in this scope
+
+error[E0425]: cannot find value `client` in this scope
+    --> contracts/price-oracle/src/test.rs:1504:18
+     |
+1504 |     let result = client.try_update_price(&provider, &asset, &999_999_999_i128, &6u32, &100u32, &3600u64);
+     |                  ^^^^^^ not found in this scope
+
+warning: unused import: `alloc::string::ToString`
+ --> contracts/price-oracle/src/math.rs:3:5
+  |
+3 | use alloc::string::ToString;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `Symbol`
+ --> contracts/price-oracle/src/types.rs:1:42
+  |
+1 | use soroban_sdk::{contracttype, Address, Symbol};
+  |                                          ^^^^^^
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/price-oracle/src/lib.rs:334:22
+    |
+334 |         env.events().publish(
+    |                      ^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/price-oracle/src/lib.rs:359:22
+    |
+359 |         env.events().publish(
+    |                      ^^^^^^^
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/price-oracle/src/lib.rs:997:22
+    |
+997 |         env.events().publish(
+    |                      ^^^^^^^
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+    --> contracts/price-oracle/src/lib.rs:1041:22
+     |
+1041 |         env.events().publish(
+     |                      ^^^^^^^
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+    --> contracts/price-oracle/src/lib.rs:1090:22
+     |
+1090 |         env.events().publish(
+     |                      ^^^^^^^
+
+warning: unused variable: `admin1`
+   --> contracts/price-oracle/src/auth.rs:463:32
+    |
+463 |         let (env, contract_id, admin1) = setup();
+    |                                ^^^^^^ help: if this is intentional, prefix it with an underscore: `_admin1`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+Some errors have detailed explanations: E0423, E0425.
+For more information about an error, try `rustc --explain E0423`.
+warning: `price-oracle` (lib test) generated 8 warnings
+error: could not compile `price-oracle` (lib test) due to 38 previous errors; 8 warnings emitted

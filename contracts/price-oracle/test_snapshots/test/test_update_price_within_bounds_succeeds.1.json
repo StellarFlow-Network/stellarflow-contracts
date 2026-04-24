@@ -73,7 +73,7 @@
                   "symbol": "NGN"
                 },
                 {
-                  "i128": "1000"
+                  "i128": "1050000"
                 },
                 {
                   "u32": 6
@@ -95,7 +95,7 @@
   ],
   "ledger": {
     "protocol_version": 25,
-    "sequence_number": 0,
+    "sequence_number": 200,
     "timestamp": 0,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
     "base_reserve": 0,
@@ -262,7 +262,7 @@
                   }
                 ]
               },
-              "durability": "persistent",
+              "durability": "temporary",
               "val": {
                 "map": [
                   {
@@ -292,7 +292,7 @@
                             "symbol": "price"
                           },
                           "val": {
-                            "i128": "1000"
+                            "i128": "1050000"
                           }
                         },
                         {
@@ -328,7 +328,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 4095
+        "live_until": 215
       },
       {
         "entry": {
@@ -389,7 +389,16 @@
                         ]
                       },
                       "val": {
-                        "bool": true
+                        "map": [
+                          {
+                            "key": {
+                              "symbol": "joined_ledger"
+                            },
+                            "val": {
+                              "u32": 0
+                            }
+                          }
+                        ]
                       }
                     },
                     {
@@ -425,7 +434,43 @@
                                   "symbol": "price"
                                 },
                                 "val": {
-                                  "i128": "1000"
+                                  "i128": "1050000"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "timestamp"
+                                },
+                                "val": {
+                                  "u64": "0"
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "map": [
+                              {
+                                "key": {
+                                  "symbol": "asset"
+                                },
+                                "val": {
+                                  "symbol": "NGN"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "event_type"
+                                },
+                                "val": {
+                                  "symbol": "asset_added"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "price"
+                                },
+                                "val": {
+                                  "i128": "1000000"
                                 }
                               },
                               {
@@ -515,7 +560,7 @@
               "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
               "key": {
                 "ledger_key_nonce": {
-                  "nonce": "5541220902715666415"
+                  "nonce": "801925984706572462"
                 }
               },
               "durability": "temporary",
@@ -524,7 +569,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 6311999
+        "live_until": 6312199
       },
       {
         "entry": {

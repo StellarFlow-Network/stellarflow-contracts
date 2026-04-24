@@ -67,7 +67,7 @@
   ],
   "ledger": {
     "protocol_version": 25,
-    "sequence_number": 2,
+    "sequence_number": 200,
     "timestamp": 1700000500,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
     "base_reserve": 0,
@@ -184,7 +184,7 @@
                   }
                 ]
               },
-              "durability": "persistent",
+              "durability": "temporary",
               "val": {
                 "map": [
                   {
@@ -311,7 +311,16 @@
                         ]
                       },
                       "val": {
-                        "bool": true
+                        "map": [
+                          {
+                            "key": {
+                              "symbol": "joined_ledger"
+                            },
+                            "val": {
+                              "u32": 0
+                            }
+                          }
+                        ]
                       }
                     },
                     {

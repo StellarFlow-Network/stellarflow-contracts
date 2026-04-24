@@ -18,7 +18,7 @@
   ],
   "ledger": {
     "protocol_version": 25,
-    "sequence_number": 2,
+    "sequence_number": 200,
     "timestamp": 2000000,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
     "base_reserve": 0,
@@ -40,7 +40,7 @@
                   }
                 ]
               },
-              "durability": "persistent",
+              "durability": "temporary",
               "val": {
                 "map": [
                   {
@@ -163,7 +163,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 4096
+        "live_until": 215
       },
       {
         "entry": {

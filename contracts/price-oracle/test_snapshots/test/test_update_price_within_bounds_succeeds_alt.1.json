@@ -1,12 +1,10 @@
 {
   "generators": {
-    "address": 2,
+    "address": 3,
     "nonce": 0,
     "mux_id": 0
   },
   "auth": [
-    [],
-    [],
     [],
     [],
     [
@@ -16,7 +14,7 @@
           "function": {
             "contract_fn": {
               "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "function_name": "remove_asset",
+              "function_name": "add_asset",
               "args": [
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
@@ -31,11 +29,73 @@
         }
       ]
     ],
+    [
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "function_name": "set_price_bounds",
+              "args": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "symbol": "NGN"
+                },
+                {
+                  "i128": "500"
+                },
+                {
+                  "i128": "2000"
+                }
+              ]
+            }
+          },
+          "sub_invocations": []
+        }
+      ]
+    ],
+    [
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "function_name": "update_price",
+              "args": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                },
+                {
+                  "symbol": "NGN"
+                },
+                {
+                  "i128": "1000"
+                },
+                {
+                  "u32": 6
+                },
+                {
+                  "u32": 100
+                },
+                {
+                  "u64": "3600"
+                }
+              ]
+            }
+          },
+          "sub_invocations": []
+        }
+      ]
+    ],
     []
   ],
   "ledger": {
     "protocol_version": 25,
-    "sequence_number": 0,
+    "sequence_number": 200,
     "timestamp": 0,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
     "base_reserve": 0,
@@ -62,7 +122,7 @@
                 "map": [
                   {
                     "key": {
-                      "symbol": "KES"
+                      "symbol": "NGN"
                     },
                     "val": {
                       "map": [
@@ -79,7 +139,7 @@
                             "symbol": "decimals"
                           },
                           "val": {
-                            "u32": 2
+                            "u32": 6
                           }
                         },
                         {
@@ -87,7 +147,7 @@
                             "symbol": "price"
                           },
                           "val": {
-                            "i128": "500"
+                            "i128": "1000"
                           }
                         },
                         {
@@ -95,7 +155,7 @@
                             "symbol": "provider"
                           },
                           "val": {
-                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                           }
                         },
                         {
@@ -123,7 +183,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 15
+        "live_until": 215
       },
       {
         "entry": {
@@ -167,7 +227,69 @@
                       "val": {
                         "vec": [
                           {
-                            "symbol": "KES"
+                            "symbol": "NGN"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "PriceBoundsData"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "map": [
+                          {
+                            "key": {
+                              "symbol": "NGN"
+                            },
+                            "val": {
+                              "map": [
+                                {
+                                  "key": {
+                                    "symbol": "max_price"
+                                  },
+                                  "val": {
+                                    "i128": "2000"
+                                  }
+                                },
+                                {
+                                  "key": {
+                                    "symbol": "min_price"
+                                  },
+                                  "val": {
+                                    "i128": "500"
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "Provider"
+                          },
+                          {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "map": [
+                          {
+                            "key": {
+                              "symbol": "joined_ledger"
+                            },
+                            "val": {
+                              "u32": 0
+                            }
                           }
                         ]
                       }
@@ -189,7 +311,7 @@
                                   "symbol": "asset"
                                 },
                                 "val": {
-                                  "symbol": "KES"
+                                  "symbol": "NGN"
                                 }
                               },
                               {
@@ -197,7 +319,7 @@
                                   "symbol": "event_type"
                                 },
                                 "val": {
-                                  "symbol": "asset_added"
+                                  "symbol": "price_updated"
                                 }
                               },
                               {
@@ -205,7 +327,7 @@
                                   "symbol": "price"
                                 },
                                 "val": {
-                                  "i128": "500"
+                                  "i128": "1000"
                                 }
                               },
                               {
@@ -241,7 +363,7 @@
                                   "symbol": "price"
                                 },
                                 "val": {
-                                  "i128": "1000"
+                                  "i128": "0"
                                 }
                               },
                               {
@@ -285,6 +407,46 @@
           "ext": "v0"
         },
         "live_until": 6311999
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+              "key": {
+                "ledger_key_nonce": {
+                  "nonce": "5541220902715666415"
+                }
+              },
+              "durability": "temporary",
+              "val": "void"
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 6311999
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M",
+              "key": {
+                "ledger_key_nonce": {
+                  "nonce": "1033654523790656264"
+                }
+              },
+              "durability": "temporary",
+              "val": "void"
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 6312199
       },
       {
         "entry": {

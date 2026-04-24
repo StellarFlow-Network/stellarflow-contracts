@@ -218,7 +218,7 @@
                   }
                 ]
               },
-              "durability": "persistent",
+              "durability": "temporary",
               "val": {
                 "map": [
                   {
@@ -284,7 +284,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 4095
+        "live_until": 215
       },
       {
         "entry": {
@@ -345,7 +345,16 @@
                         ]
                       },
                       "val": {
-                        "bool": true
+                        "map": [
+                          {
+                            "key": {
+                              "symbol": "joined_ledger"
+                            },
+                            "val": {
+                              "u32": 0
+                            }
+                          }
+                        ]
                       }
                     },
                     {
