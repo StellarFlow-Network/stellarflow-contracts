@@ -62,6 +62,13 @@ pub trait StellarFlowTrait {
     /// The new asset is added to the internal asset list and initialized with a zero-price placeholder.
     fn add_asset(env: Env, admin: Address, asset: Symbol) -> Result<(), Error>;
 
+    /// Whitelist a provider address.
+    fn add_provider(env: Env, admin: Address, provider: Address);
+
+    /// Remove a provider from the whitelist.
+    fn remove_provider(env: Env, admin: Address, provider: Address);
+
+
     /// Get the current admin address.
     ///
     /// Returns the address of the contract administrator.
@@ -141,7 +148,7 @@ pub enum Error {
     /// Price change exceeds maximum allowed threshold (flash crash protection).
     FlashCrashDetected = 5,
     /// Caller is not authorized to perform this action.
-    NotAuthorized = 5,
+    NotAuthorized = 15,
     /// Contract or admin has already been initialized.
     AlreadyInitialized = 6,
     /// Price change exceeds the allowed delta limit in a single update.
@@ -386,6 +393,23 @@ impl PriceOracle {
 
         Ok(())
     }
+
+    /// Whitelist a provider address.
+    pub fn add_provider(env: Env, admin: Address, provider: Address) {
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        crate::auth::_add_provider(&env, &provider);
+    }
+
+    /// Remove a provider from the whitelist.
+    pub fn remove_provider(env: Env, admin: Address, provider: Address) {
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        crate::auth::_remove_provider(&env, &provider);
+    }
+
 
     /// Return the current admin addresses.
     pub fn get_admin(env: Env) -> Address {
@@ -780,6 +804,14 @@ impl PriceOracle {
             return Err(Error::NotAuthorized);
         }
 
+        let provider = crate::auth::_get_provider(&env, &source).unwrap();
+        if env.ledger().sequence() < provider.joined_ledger + 100 {
+            // Warming up: save to history but don't update Active Price
+            log_event(&env, Symbol::new(&env, "price_warmup"), asset, price);
+            return Ok(());
+        }
+
+
         let storage = env.storage().temporary();
         let mut prices: soroban_sdk::Map<Symbol, PriceData> = storage
             .get(&DataKey::PriceData)
@@ -796,6 +828,8 @@ impl PriceOracle {
                 if pct_change_bps > MAX_PERCENT_CHANGE_BPS {
                     return Err(Error::FlashCrashDetected);
                 }
+            }
+        }
         if old_price != 0 {
             let delta = (price - old_price).unsigned_abs();
             if delta > 50 {

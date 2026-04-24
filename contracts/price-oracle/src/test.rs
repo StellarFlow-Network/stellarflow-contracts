@@ -1,5 +1,6 @@
 #![cfg(test)]
 extern crate alloc;
+use alloc::format;
 
 use super::*;
 use soroban_sdk::{
@@ -49,6 +50,7 @@ impl DummyConsumer {
     }
 
     /// Example function showing how to fetch all available assets from the oracle.
+
     pub fn get_all_available_assets(env: Env, oracle_address: Address) -> soroban_sdk::Vec<Symbol> {
         let oracle_client = StellarFlowClient::new(&env, &oracle_address);
         oracle_client.get_all_assets()
@@ -431,9 +433,47 @@ fn test_update_price_provider_can_store_new_price() {
 }
 
 #[test]
+fn test_provider_warmup_guard() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let provider = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let asset = symbol_short!("NGN");
+
+    client.init_admin(&admin);
+    client.add_asset(&admin, &asset);
+
+    // Add provider at ledger 10
+    env.ledger().set_sequence_number(10);
+    client.add_provider(&admin, &provider);
+
+    // Try to update at ledger 50 (within 100 ledger warm-up: 10 + 100 = 110)
+    env.ledger().set_sequence_number(50);
+    client.update_price(&provider, &asset, &1_500_i128, &2u32, &100u32, &3600u64);
+
+    // Active price should still be 0
+    let stored = client.get_price(&asset);
+    assert_eq!(stored.price, 0);
+
+    // Try to update at ledger 110 (warm-up finished)
+    env.ledger().set_sequence_number(110);
+    client.update_price(&provider, &asset, &1_500_i128, &2u32, &100u32, &3600u64);
+
+    // Active price should now be 1500
+    let stored = client.get_price(&asset);
+    assert_eq!(stored.price, 1_500_i128);
+}
+
+
+#[test]
 fn test_update_price_multiple_updates() {
     let env = Env::default();
     env.mock_all_auths();
+
 
     let contract_id = env.register(PriceOracle, ());
     let client = PriceOracleClient::new(&env, &contract_id);
@@ -656,8 +696,6 @@ fn test_calculate_percentage_change_returns_none_for_zero_baseline() {
     assert_eq!(calculate_percentage_difference_bps(0, 1_000_000), None);
 }
 
-#[test]
-fn test_flash_crash_protection_rejects_large_increase() {
 // ============================================================================
 // calculate_price_volatility tests (Circuit Breaker helper)
 // ============================================================================
@@ -729,7 +767,7 @@ fn test_is_stale_with_mocked_ledger_time() {
 // ============================================================================
 
 #[test]
-fn test_remove_asset_deletes_price_entry() {
+fn test_flash_crash_protection_rejects_large_increase() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -743,16 +781,25 @@ fn test_remove_asset_deletes_price_entry() {
     let new_price: i128 = 1_200_000; // 20% increase > 10% threshold
 
     env.as_contract(&contract_id, || {
-        crate::auth::_set_admin(&env, &admin);
+        crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
         crate::auth::_add_provider(&env, &provider);
     });
 
-    client.set_price(&asset, &old_price);
+    client.set_price(&asset, &old_price, &6u32, &3600u64);
 
     // Should reject 20% increase (exceeds 10% MAX_PERCENT_CHANGE)
-    match client.try_update_price(&provider, &asset, &new_price, &6u32, &100u32) {
+    match client.try_update_price(&provider, &asset, &new_price, &6u32, &100u32, &3600u64) {
         Err(Ok(e)) => assert_eq!(e, Error::FlashCrashDetected),
         other => panic!("expected FlashCrashDetected, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_remove_asset_deletes_price_entry() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
     let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
 
     env.as_contract(&contract_id, || {
@@ -820,7 +867,6 @@ fn test_remove_asset_nonexistent_returns_error() {
 
 #[test]
 fn test_flash_crash_protection_rejects_large_drop() {
-fn test_remove_asset_non_admin_is_rejected() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -834,18 +880,19 @@ fn test_remove_asset_non_admin_is_rejected() {
     let new_price: i128 = 800_000; // 20% drop > 10% threshold
 
     env.as_contract(&contract_id, || {
-        crate::auth::_set_admin(&env, &admin);
+        crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
         crate::auth::_add_provider(&env, &provider);
     });
 
-    client.set_price(&asset, &old_price);
+    client.set_price(&asset, &old_price, &6u32, &3600u64);
 
     // Should reject 20% drop (exceeds 10% MAX_PERCENT_CHANGE)
-    match client.try_update_price(&provider, &asset, &new_price, &6u32, &100u32) {
+    match client.try_update_price(&provider, &asset, &new_price, &6u32, &100u32, &3600u64) {
         Err(Ok(e)) => assert_eq!(e, Error::FlashCrashDetected),
         other => panic!("expected FlashCrashDetected, got {:?}", other),
     }
 }
+
 
 #[test]
 fn test_flash_crash_protection_allows_within_threshold() {
@@ -1237,14 +1284,14 @@ fn test_update_price_within_bounds_succeeds() {
     let new_price: i128 = 1_050_000; // 5% increase < 10% threshold
 
     env.as_contract(&contract_id, || {
-        crate::auth::_set_admin(&env, &admin);
+        crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
         crate::auth::_add_provider(&env, &provider);
     });
 
-    client.set_price(&asset, &old_price);
+    client.set_price(&asset, &old_price, &6u32, &3600u64);
 
     // Should allow 5% increase (within 10% MAX_PERCENT_CHANGE)
-    client.update_price(&provider, &asset, &new_price, &6u32, &100u32);
+    client.update_price(&provider, &asset, &new_price, &6u32, &100u32, &3600u64);
 
     let price_data = client.get_price(&asset);
     assert_eq!(price_data.price, new_price);
@@ -1289,14 +1336,14 @@ fn test_update_price_below_min_bound_rejected() {
     let new_price: i128 = 1_100_000; // Exactly 10% increase = threshold
 
     env.as_contract(&contract_id, || {
-        crate::auth::_set_admin(&env, &admin);
+        crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
         crate::auth::_add_provider(&env, &provider);
     });
 
-    client.set_price(&asset, &old_price);
+    client.set_price(&asset, &old_price, &6u32, &3600u64);
 
     // Should allow exactly 10% increase (at threshold, not exceeding)
-    client.update_price(&provider, &asset, &new_price, &6u32, &100u32);
+    client.update_price(&provider, &asset, &new_price, &6u32, &100u32, &3600u64);
 
     let price_data = client.get_price(&asset);
     assert_eq!(price_data.price, new_price);
@@ -1370,12 +1417,12 @@ fn test_update_price_at_exact_bounds_succeeds() {
     let price: i128 = 1_500_000;
 
     env.as_contract(&contract_id, || {
-        crate::auth::_set_admin(&env, &admin);
+        crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
         crate::auth::_add_provider(&env, &provider);
     });
 
     // First price update (no previous price) should always be allowed
-    client.update_price(&provider, &asset, &price, &6u32, &100u32);
+    client.update_price(&provider, &asset, &price, &6u32, &100u32, &3600u64);
 
     let price_data = client.get_price(&asset);
     assert_eq!(price_data.price, price);
@@ -1409,31 +1456,27 @@ fn test_flash_crash_protection_rejects_just_over_threshold() {
 }
 
 #[test]
-fn test_update_price_no_bounds_set_allows_any_valid_price() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(PriceOracle, ());
-    let client = PriceOracleClient::new(&env, &contract_id);
-
-    let admin = Address::generate(&env);
     let provider = Address::generate(&env);
     let asset = symbol_short!("NGN");
     let old_price: i128 = 1_000_000;
     let new_price: i128 = 1_100_001; // Just over 10% (> 1000 bps)
 
     env.as_contract(&contract_id, || {
-        crate::auth::_set_admin(&env, &admin);
+        crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
         crate::auth::_add_provider(&env, &provider);
     });
 
-    client.set_price(&asset, &old_price);
+    client.set_price(&asset, &old_price, &6u32, &3600u64);
 
     // Should reject price change just over 10% threshold
-    match client.try_update_price(&provider, &asset, &new_price, &6u32, &100u32) {
+    match client.try_update_price(&provider, &asset, &new_price, &6u32, &100u32, &3600u64) {
         Err(Ok(e)) => assert_eq!(e, Error::FlashCrashDetected),
         other => panic!("expected FlashCrashDetected, got {:?}", other),
     }
+}
+
+#[test]
+fn test_update_price_no_bounds_set_allows_any_valid_price() {
     let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
     let provider = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
     let asset = symbol_short!("NGN");
@@ -1834,8 +1877,8 @@ fn test_toggle_pause_requires_two_admins() {
     });
 
     // Toggle pause with two admins
-    let result = client.toggle_pause(&admin1, &admin2);
-    assert_eq!(result, Ok(true));
+    let result = client.try_toggle_pause(&admin1, &admin2);
+    assert_eq!(result, Ok(Ok(true)));
 
     // Verify paused state
     env.as_contract(&contract_id, || {
@@ -1843,8 +1886,8 @@ fn test_toggle_pause_requires_two_admins() {
     });
 
     // Toggle again to unpause
-    let result = client.toggle_pause(&admin1, &admin2);
-    assert_eq!(result, Ok(false));
+    let result = client.try_toggle_pause(&admin1, &admin2);
+    assert_eq!(result, Ok(Ok(false)));
 
     // Verify unpaused state
     env.as_contract(&contract_id, || {
@@ -2040,7 +2083,7 @@ fn test_multi_sig_pause_emits_event() {
         crate::auth::_add_authorized(&env, &admin2);
     });
 
-    client.toggle_pause(&admin1, &admin2);
+    client.try_toggle_pause(&admin1, &admin2);
 
     let events = env.events().all();
     let debug_str = alloc::format!("{:?}", events);
@@ -2138,8 +2181,8 @@ fn test_full_multi_sig_workflow() {
     assert_eq!(client.get_admin_count(), 3);
 
     // Step 2: Toggle pause with admin1 and admin3
-    let paused = client.toggle_pause(&admin1, &admin3);
-    assert_eq!(paused, Ok(true));
+    let paused = client.try_toggle_pause(&admin1, &admin3);
+    assert_eq!(paused, Ok(Ok(true)));
 
     // Step 3: Remove admin2 with admin1 and admin3
     client.remove_admin(&admin1, &admin3, &admin2);
@@ -2147,6 +2190,7 @@ fn test_full_multi_sig_workflow() {
     assert!(!client.is_admin(&admin2));
 
     // Step 4: Toggle unpause with remaining admins
-    let paused = client.toggle_pause(&admin1, &admin3);
-    assert_eq!(paused, Ok(false));
+    let paused = client.try_toggle_pause(&admin1, &admin3);
+    assert_eq!(paused, Ok(Ok(false)));
 }
+

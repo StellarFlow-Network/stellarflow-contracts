@@ -7,7 +7,28 @@
   "auth": [
     [],
     [],
-    [],
+    [
+      [
+        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+        {
+          "function": {
+            "contract_fn": {
+              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "function_name": "add_asset",
+              "args": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "symbol": "NGN"
+                }
+              ]
+            }
+          },
+          "sub_invocations": []
+        }
+      ]
+    ],
     []
   ],
   "ledger": {
@@ -34,7 +55,7 @@
                   }
                 ]
               },
-              "durability": "persistent",
+              "durability": "temporary",
               "val": {
                 "map": [
                   {
@@ -48,7 +69,7 @@
                             "symbol": "confidence_score"
                           },
                           "val": {
-                            "u32": 100
+                            "u32": 0
                           }
                         },
                         {
@@ -56,7 +77,7 @@
                             "symbol": "decimals"
                           },
                           "val": {
-                            "u32": 2
+                            "u32": 0
                           }
                         },
                         {
@@ -64,7 +85,7 @@
                             "symbol": "price"
                           },
                           "val": {
-                            "i128": "1000"
+                            "i128": "0"
                           }
                         },
                         {
@@ -88,7 +109,7 @@
                             "symbol": "ttl"
                           },
                           "val": {
-                            "u64": "3600"
+                            "u64": "0"
                           }
                         }
                       ]
@@ -100,7 +121,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 4095
+        "live_until": 15
       },
       {
         "entry": {
@@ -137,6 +158,34 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "BaseCurrencyPairs"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "vec": [
+                          {
+                            "symbol": "NGN"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "Initialized"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "bool": true
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "RecentEvents"
                           }
                         ]
@@ -166,7 +215,7 @@
                                   "symbol": "price"
                                 },
                                 "val": {
-                                  "i128": "1000"
+                                  "i128": "0"
                                 }
                               },
                               {
@@ -190,6 +239,26 @@
           "ext": "v0"
         },
         "live_until": 4095
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
+              "key": {
+                "ledger_key_nonce": {
+                  "nonce": "801925984706572462"
+                }
+              },
+              "durability": "temporary",
+              "val": "void"
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 6311999
       },
       {
         "entry": {

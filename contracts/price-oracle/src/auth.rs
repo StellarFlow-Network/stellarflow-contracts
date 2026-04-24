@@ -10,7 +10,15 @@ pub enum DataKey {
     Provider(Address),
     ProviderWeight(Address),
     IsPaused,
+    AssetDescription(soroban_sdk::Symbol),
 }
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Provider {
+    pub joined_ledger: u32,
+}
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Storage Helpers
@@ -105,10 +113,14 @@ pub fn _set_paused(env: &Env, paused: bool) {
 
 /// Whitelist a provider address.
 pub fn _add_provider(env: &Env, provider: &Address) {
+    let p = Provider {
+        joined_ledger: env.ledger().sequence(),
+    };
     env.storage()
         .instance()
-        .set(&DataKey::Provider(provider.clone()), &true);
+        .set(&DataKey::Provider(provider.clone()), &p);
 }
+
 
 /// Remove a provider from the whitelist.
 pub fn _remove_provider(env: &Env, provider: &Address) {
@@ -121,9 +133,16 @@ pub fn _remove_provider(env: &Env, provider: &Address) {
 pub fn _is_provider(env: &Env, addr: &Address) -> bool {
     env.storage()
         .instance()
-        .get::<DataKey, bool>(&DataKey::Provider(addr.clone()))
-        .unwrap_or(false)
+        .has(&DataKey::Provider(addr.clone()))
 }
+
+/// Returns the provider info if whitelisted.
+pub fn _get_provider(env: &Env, addr: &Address) -> Option<Provider> {
+    env.storage()
+        .instance()
+        .get::<DataKey, Provider>(&DataKey::Provider(addr.clone()))
+}
+
 
 /// Panics if the caller is not a whitelisted provider.
 pub fn _require_provider(env: &Env, caller: &Address) {
@@ -148,8 +167,12 @@ pub fn _get_provider_weight(env: &Env, provider: &Address) -> u32 {
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod auth_tests {
+ 
+
+
     extern crate alloc;
     use super::*;
     use soroban_sdk::{contract, contractimpl};

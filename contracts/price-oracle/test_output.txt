@@ -1,0 +1,619 @@
+   Compiling price-oracle v0.0.0 (/home/abujulaybeeb/Documents/Drips 13/stellarflow-contracts/contracts/price-oracle)
+warning: unused import: `alloc::string::ToString`
+ --> contracts/price-oracle/src/math.rs:3:5
+  |
+3 | use alloc::string::ToString;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/price-oracle/src/lib.rs:333:22
+    |
+333 |         env.events().publish(
+    |                      ^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/price-oracle/src/lib.rs:358:22
+    |
+358 |         env.events().publish(
+    |                      ^^^^^^^
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/price-oracle/src/lib.rs:996:22
+    |
+996 |         env.events().publish(
+    |                      ^^^^^^^
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+    --> contracts/price-oracle/src/lib.rs:1040:22
+     |
+1040 |         env.events().publish(
+     |                      ^^^^^^^
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+    --> contracts/price-oracle/src/lib.rs:1089:22
+     |
+1089 |         env.events().publish(
+     |                      ^^^^^^^
+
+warning: variable does not need to be mutable
+   --> contracts/price-oracle/src/lib.rs:778:13
+    |
+778 |         let mut tracked = get_tracked_assets(&env);
+    |             ----^^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `admin1`
+   --> contracts/price-oracle/src/auth.rs:458:32
+    |
+458 |         let (env, contract_id, admin1) = setup();
+    |                                ^^^^^^ help: if this is intentional, prefix it with an underscore: `_admin1`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `price-oracle` (lib test) generated 8 warnings (run `cargo fix --lib -p price-oracle --tests` to apply 3 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 42.17s
+     Running unittests src/lib.rs (/home/abujulaybeeb/Documents/Drips 13/stellarflow-contracts/target/debug/deps/price_oracle-0e1640f0ae588d60)
+
+running 137 tests
+test asset_symbol::tests::all_three_constants_are_approved ... ok
+test asset_symbol::tests::common_crypto_symbols_are_not_approved ... ok
+test auth::auth_tests::test_add_authorized_prevents_duplicates ... ok
+test auth::auth_tests::test_add_authorized_adds_new_admin ... ok
+test auth::auth_tests::test_add_provider_marks_as_whitelisted ... ok
+test auth::auth_tests::test_admin_is_not_auto_whitelisted_as_provider ... ok
+test auth::auth_tests::test_get_admin_returns_correct_addresses ... ok
+test auth::auth_tests::test_has_admin_false_before_set ... ok
+test auth::auth_tests::test_is_authorized_false_when_no_admin_set ... ok
+test auth::auth_tests::test_is_authorized_false_for_non_admin ... ok
+test auth::auth_tests::test_has_admin_true_after_set ... ok
+test auth::auth_tests::test_remove_authorized_is_safe_for_nonexistent ... ok
+test auth::auth_tests::test_is_authorized_true_for_admin ... ok
+test auth::auth_tests::test_multiple_admins_are_independent ... ok
+test auth::auth_tests::test_multiple_providers_are_independent ... ok
+test auth::auth_tests::test_remove_authorized_removes_admin ... ok
+test auth::auth_tests::test_remove_nonexistent_provider_is_safe ... ok
+test auth::auth_tests::test_renounce_ownership_makes_is_authorized_false ... ok
+test auth::auth_tests::test_renounce_ownership_removes_all_admins ... ok
+test auth::auth_tests::test_remove_provider_clears_whitelist ... ok
+test auth::auth_tests::test_require_authorized_passes_for_admin ... ok
+test auth::auth_tests::test_require_authorized_panics_for_non_admin - should panic ... ok
+test auth::auth_tests::test_require_provider_panics_for_non_provider - should panic ... ok
+test math::tests::test_format_price_exact_decimal_boundary ... ok
+test math::tests::test_format_price_negative ... ok
+test math::tests::test_format_price_no_decimals ... ok
+test math::tests::test_format_price_normal ... ok
+test math::tests::test_format_price_small_value ... ok
+test math::tests::test_format_price_zero ... ok
+test math::tests::test_normalize_to_seven_no_scale ... ok
+test math::tests::test_normalize_to_seven_scale_down ... ok
+test math::tests::test_normalize_to_seven_scale_up ... ok
+test median::median_tests::test_empty_input_returns_error ... ok
+test median::median_tests::test_even_number_median ... ok
+test median::median_tests::test_odd_number_median ... ok
+test median::median_tests::test_single_input_returns_itself ... ok
+test auth::auth_tests::test_require_provider_passes_for_whitelisted ... ok
+test auth::auth_tests::test_weight_for_nonexistent_provider_is_zero ... ok
+test auth::auth_tests::test_set_and_get_provider_weight ... ok
+test test::test_calculate_percentage_change_bps_for_drop ... ok
+test test::test_calculate_percentage_change_bps_for_increase ... ok
+test test::test_calculate_percentage_change_returns_none_for_zero_baseline ... ok
+test test::test_calculate_percentage_difference_bps_is_absolute ... ok
+test test::test_asset_added_event_contains_correct_symbol ... ok
+test test::test_add_asset_initializes_zero_price_and_tracks_symbol ... ok
+test test::test_add_asset_non_admin_is_rejected - should panic ... ok
+test test::test_dummy_consumer_calls_oracle_successfully ... FAILED
+test test::test_dummy_consumer_multiple_price_fetches ... FAILED
+test test::test_dummy_consumer_safe_price_fetch ... FAILED
+test test::test_flash_crash_protection_allows_exact_threshold ... FAILED
+test test::test_flash_crash_protection_allows_within_threshold ... FAILED
+test test::test_flash_crash_protection_allows_first_price_update ... FAILED
+test test::test_flash_crash_protection_rejects_just_over_threshold ... ok
+test test::test_full_multi_sig_workflow ... ok
+test test::test_get_admin_count_returns_correct_value ... ok
+test test::test_flash_crash_protection_rejects_large_increase ... FAILED
+test test::test_flash_crash_protection_rejects_large_drop ... FAILED
+test test::test_dummy_consumer_gets_all_assets ... ok
+test test::test_get_ledger_version_returns_sequence ... ok
+test test::test_get_admin_reader_returns_current_admin ... ok
+test test::test_get_last_n_events_sliding_window ... ok
+test test::test_get_all_assets_returns_tracked_symbols ... ok
+test test::test_get_price_bounds_returns_none_when_not_set ... ok
+test test::test_get_price_after_update ... FAILED
+test test::test_get_price_with_status_marks_fresh_entry ... ok
+test test::test_get_price_with_status_marks_stale_entry ... ok
+test test::test_get_price_nonexistent_asset ... ok
+test test::test_get_price_safe_nonexistent_returns_none ... ok
+test test::test_get_prices_empty_input_returns_empty_vec ... ok
+test test::test_get_price_existing_asset ... FAILED
+test test::test_get_prices_returns_none_for_stale_asset ... ok
+test test::test_get_prices_returns_none_for_missing_asset ... FAILED
+test test::test_get_prices_with_status_returns_none_for_missing_asset ... ok
+test test::test_get_prices_with_status_marks_stale_entry ... ok
+test test::test_get_prices_preserves_order ... FAILED
+test test::test_get_prices_returns_all_requested_assets ... FAILED
+test test::test_init_admin_panics_when_called_twice - should panic ... ok
+test test::test_is_admin_returns_true_for_current_admin ... ok
+test test::test_is_stale_with_mocked_ledger_time ... ok
+test test::test_init_admin_sets_admin_once ... ok
+test test::test_multi_sig_pause_emits_event ... ok
+test test::test_initialize_success ... ok
+test test::test_initialize_double_panics - should panic ... ok
+test test::test_price_volatility_decrease ... ok
+test test::test_price_volatility_from_zero ... ok
+test test::test_price_volatility_increase ... ok
+test test::test_price_volatility_no_change ... ok
+test test::test_price_volatility_to_zero ... ok
+test test::test_register_admin_emits_event ... ok
+test test::test_register_admin_fails_at_max_capacity ... ok
+test test::test_provider_warmup_guard ... FAILED
+test test::test_register_admin_with_two_signatures ... ok
+test test::test_multiple_assets_added_sequentially_each_emits_event ... ok
+test test::test_remove_admin_emits_event ... ok
+test test::test_mixed_add_and_update_emits_correct_events ... ok
+test test::test_remove_admin_fails_if_last_admin ... FAILED
+test test::test_remove_asset_deletes_price_entry_new ... FAILED
+test test::test_remove_admin_with_two_signatures ... ok
+test test::test_remove_asset_nonexistent_returns_error ... ok
+test test::test_renounce_ownership_blocks_admin_functions_after_renouncement - should panic ... ok
+test test::test_renounce_ownership_emits_event ... ok
+test test::test_renounce_ownership_rejects_non_admin - should panic ... ok
+test test::test_renounce_ownership_removes_admin_permanently ... ok
+test test::test_rescue_tokens_admin_can_recover_assets ... FAILED
+test test::test_rescue_tokens_rejects_non_admin - should panic ... ok
+test test::test_remove_asset_deletes_price_entry ... FAILED
+test test::test_remove_asset_non_admin_is_rejected ... FAILED
+test test::test_set_price_bounds_and_get ... ok
+test test::test_remove_asset_not_in_get_all_assets ... FAILED
+test test::test_set_price_bounds_non_admin_rejected - should panic ... ok
+test test::test_set_price_bounds_min_greater_than_max_panics - should panic ... ok
+test test::test_set_price_different_value_writes_new_price ... FAILED
+test test::test_set_price_identical_value_only_updates_timestamp ... FAILED
+test test::test_set_price_rejects_negative_price - should panic ... FAILED
+test test::test_set_price_identical_value_still_emits_price_updated_event ... ok
+test test::test_set_price_rejects_zero_price - should panic ... FAILED
+test test::test_toggle_pause_fails_with_non_admin ... FAILED
+test test::test_toggle_pause_fails_with_only_one_admin ... FAILED
+test test::test_toggle_pause_fails_with_same_admin_twice ... FAILED
+test test::test_toggle_pause_requires_two_admins ... ok
+test test::test_set_price_uses_current_ledger_timestamp ... FAILED
+test test::test_set_price_does_not_emit_asset_added_event_on_update ... ok
+test test::test_set_price_emits_asset_added_event_on_first_add ... ok
+test test::test_update_price_above_max_bound_rejected ... FAILED
+test test::test_update_price_admin_authority ... ok
+test test::test_update_price_at_exact_bounds_succeeds ... FAILED
+test test::test_update_price_delta_limit_rejection_emits_anomaly_event ... FAILED
+test test::test_update_price_below_min_bound_rejected ... FAILED
+test test::test_update_price_no_bounds_set_allows_any_valid_price_new ... ok
+test test::test_update_price_emits_event ... FAILED
+test test::test_update_price_multiple_updates ... FAILED
+test test::test_update_price_no_bounds_set_allows_any_valid_price ... FAILED
+test test::test_update_price_provider_can_store_new_price ... FAILED
+test test::test_update_price_rejects_unapproved_symbol ... ok
+test test::test_update_price_within_bounds_succeeds ... FAILED
+test test::test_upgrade_rejects_non_admin - should panic ... ok
+test test::test_upgrade_admin_only ... ok
+
+failures:
+
+---- test::test_dummy_consumer_calls_oracle_successfully stdout ----
+
+thread 'test::test_dummy_consumer_calls_oracle_successfully' (16730) panicked at /home/abujulaybeeb/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-env-host-25.0.1/src/host.rs:907:9:
+HostError: Error(Contract, #1)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:"escalating error to panic"
+   1: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:["contract call failed", get_oracle_price, [CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, NGN]]
+   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4, topics:[error, Error(Contract, #1)], data:"caught error from function"
+   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4, topics:[error, Error(Contract, #1)], data:"escalating error to panic"
+   4: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4, topics:[error, Error(Contract, #1)], data:["contract call failed", get_last_price, [NGN]]
+   5: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #1)], data:"escalating Ok(ScErrorType::Contract) frame-exit to Err"
+   6: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[fn_return, get_last_price], data:Error(Contract, #1)
+   7: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4, topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, get_last_price], data:NGN
+   8: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4, get_oracle_price], data:[CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, NGN]
+
+Writing test snapshot file for test "test::test_dummy_consumer_calls_oracle_successfully" to "test_snapshots/test/test_dummy_consumer_calls_oracle_successfully.1.json".
+
+---- test::test_dummy_consumer_multiple_price_fetches stdout ----
+
+thread 'test::test_dummy_consumer_multiple_price_fetches' (16732) panicked at /home/abujulaybeeb/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-env-host-25.0.1/src/host.rs:907:9:
+HostError: Error(Contract, #1)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:"escalating error to panic"
+   1: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:["contract call failed", get_oracle_price, [CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, NGN]]
+   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4, topics:[error, Error(Contract, #1)], data:"caught error from function"
+   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4, topics:[error, Error(Contract, #1)], data:"escalating error to panic"
+   4: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4, topics:[error, Error(Contract, #1)], data:["contract call failed", get_last_price, [NGN]]
+   5: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #1)], data:"escalating Ok(ScErrorType::Contract) frame-exit to Err"
+   6: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[fn_return, get_last_price], data:Error(Contract, #1)
+   7: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4, topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, get_last_price], data:NGN
+   8: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4, get_oracle_price], data:[CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, NGN]
+
+Writing test snapshot file for test "test::test_dummy_consumer_multiple_price_fetches" to "test_snapshots/test/test_dummy_consumer_multiple_price_fetches.1.json".
+
+---- test::test_dummy_consumer_safe_price_fetch stdout ----
+
+thread 'test::test_dummy_consumer_safe_price_fetch' (16733) panicked at contracts/price-oracle/src/test.rs:1036:5:
+Should find existing price
+Writing test snapshot file for test "test::test_dummy_consumer_safe_price_fetch" to "test_snapshots/test/test_dummy_consumer_safe_price_fetch.1.json".
+
+---- test::test_flash_crash_protection_allows_exact_threshold stdout ----
+
+thread 'test::test_flash_crash_protection_allows_exact_threshold' (16734) panicked at /home/abujulaybeeb/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-env-host-25.0.1/src/host.rs:907:9:
+HostError: Error(Contract, #1)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:"escalating error to panic"
+   1: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:["contract call failed", get_price, [NGN]]
+   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #1)], data:"escalating Ok(ScErrorType::Contract) frame-exit to Err"
+   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[fn_return, get_price], data:Error(Contract, #1)
+   4: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, get_price], data:NGN
+
+Writing test snapshot file for test "test::test_flash_crash_protection_allows_exact_threshold" to "test_snapshots/test/test_flash_crash_protection_allows_exact_threshold.1.json".
+
+---- test::test_flash_crash_protection_allows_within_threshold stdout ----
+
+thread 'test::test_flash_crash_protection_allows_within_threshold' (16736) panicked at /home/abujulaybeeb/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-env-host-25.0.1/src/host.rs:907:9:
+HostError: Error(Contract, #1)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:"escalating error to panic"
+   1: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:["contract call failed", get_price, [NGN]]
+   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #1)], data:"escalating Ok(ScErrorType::Contract) frame-exit to Err"
+   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[fn_return, get_price], data:Error(Contract, #1)
+   4: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, get_price], data:NGN
+
+Writing test snapshot file for test "test::test_flash_crash_protection_allows_within_threshold" to "test_snapshots/test/test_flash_crash_protection_allows_within_threshold.1.json".
+
+---- test::test_flash_crash_protection_allows_first_price_update stdout ----
+
+thread 'test::test_flash_crash_protection_allows_first_price_update' (16735) panicked at contracts/price-oracle/src/test.rs:1427:18:
+expected PriceOutOfBounds, got Ok(Ok(()))
+Writing test snapshot file for test "test::test_flash_crash_protection_allows_first_price_update" to "test_snapshots/test/test_flash_crash_protection_allows_first_price_update.1.json".
+
+---- test::test_flash_crash_protection_rejects_large_increase stdout ----
+
+thread 'test::test_flash_crash_protection_rejects_large_increase' (16739) panicked at contracts/price-oracle/src/test.rs:720:18:
+expected FlashCrashDetected, got Ok(Ok(()))
+Writing test snapshot file for test "test::test_flash_crash_protection_rejects_large_increase" to "test_snapshots/test/test_flash_crash_protection_rejects_large_increase.1.json".
+
+---- test::test_flash_crash_protection_rejects_large_drop stdout ----
+
+thread 'test::test_flash_crash_protection_rejects_large_drop' (16738) panicked at contracts/price-oracle/src/test.rs:912:18:
+expected FlashCrashDetected, got Ok(Ok(()))
+Writing test snapshot file for test "test::test_flash_crash_protection_rejects_large_drop" to "test_snapshots/test/test_flash_crash_protection_rejects_large_drop.1.json".
+
+---- test::test_get_price_after_update stdout ----
+
+thread 'test::test_get_price_after_update' (16746) panicked at contracts/price-oracle/src/test.rs:246:48:
+called `Result::unwrap()` on an `Err` value: Ok(AssetNotFound)
+Writing test snapshot file for test "test::test_get_price_after_update" to "test_snapshots/test/test_get_price_after_update.1.json".
+
+---- test::test_get_price_existing_asset stdout ----
+
+thread 'test::test_get_price_existing_asset' (16748) panicked at /home/abujulaybeeb/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-env-host-25.0.1/src/host.rs:907:9:
+HostError: Error(Contract, #1)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:"escalating error to panic"
+   1: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:["contract call failed", get_price, [XLM]]
+   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #1)], data:"escalating Ok(ScErrorType::Contract) frame-exit to Err"
+   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[fn_return, get_price], data:Error(Contract, #1)
+   4: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, get_price], data:XLM
+
+Writing test snapshot file for test "test::test_get_price_existing_asset" to "test_snapshots/test/test_get_price_existing_asset.1.json".
+
+---- test::test_get_prices_returns_none_for_missing_asset stdout ----
+
+thread 'test::test_get_prices_returns_none_for_missing_asset' (16756) panicked at contracts/price-oracle/src/test.rs:1175:5:
+assertion failed: results.get(0).unwrap().is_some()
+Writing test snapshot file for test "test::test_get_prices_returns_none_for_missing_asset" to "test_snapshots/test/test_get_prices_returns_none_for_missing_asset.1.json".
+
+---- test::test_get_prices_preserves_order stdout ----
+
+thread 'test::test_get_prices_preserves_order' (16754) panicked at contracts/price-oracle/src/test.rs:1221:40:
+called `Option::unwrap()` on a `None` value
+Writing test snapshot file for test "test::test_get_prices_preserves_order" to "test_snapshots/test/test_get_prices_preserves_order.1.json".
+
+---- test::test_get_prices_returns_all_requested_assets stdout ----
+
+thread 'test::test_get_prices_returns_all_requested_assets' (16755) panicked at contracts/price-oracle/src/test.rs:1150:40:
+called `Option::unwrap()` on a `None` value
+Writing test snapshot file for test "test::test_get_prices_returns_all_requested_assets" to "test_snapshots/test/test_get_prices_returns_all_requested_assets.1.json".
+
+---- test::test_provider_warmup_guard stdout ----
+
+thread 'test::test_provider_warmup_guard' (16774) panicked at /home/abujulaybeeb/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-env-host-25.0.1/src/host.rs:907:9:
+HostError: Error(Contract, #1)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:"escalating error to panic"
+   1: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:["contract call failed", get_price, [NGN]]
+   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #1)], data:"escalating Ok(ScErrorType::Contract) frame-exit to Err"
+   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[fn_return, get_price], data:Error(Contract, #1)
+   4: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, get_price], data:NGN
+
+Writing test snapshot file for test "test::test_provider_warmup_guard" to "test_snapshots/test/test_provider_warmup_guard.1.json".
+
+---- test::test_remove_admin_fails_if_last_admin stdout ----
+
+thread 'test::test_remove_admin_fails_if_last_admin' (16779) panicked at contracts/price-oracle/src/test.rs:2138:18:
+expected NotAuthorized, got Err(Err(Abort))
+Writing test snapshot file for test "test::test_remove_admin_fails_if_last_admin" to "test_snapshots/test/test_remove_admin_fails_if_last_admin.1.json".
+
+---- test::test_remove_asset_deletes_price_entry_new stdout ----
+
+thread 'test::test_remove_asset_deletes_price_entry_new' (16782) panicked at contracts/price-oracle/src/test.rs:836:5:
+assertion failed: client.get_price_safe(&asset).is_some()
+Writing test snapshot file for test "test::test_remove_asset_deletes_price_entry_new" to "test_snapshots/test/test_remove_asset_deletes_price_entry_new.1.json".
+
+---- test::test_rescue_tokens_admin_can_recover_assets stdout ----
+
+thread 'test::test_rescue_tokens_admin_can_recover_assets' (16790) panicked at contracts/price-oracle/src/test.rs:548:5:
+assertion failed: debug_str.contains("TokenTransferEvent")
+Writing test snapshot file for test "test::test_rescue_tokens_admin_can_recover_assets" to "test_snapshots/test/test_rescue_tokens_admin_can_recover_assets.1.json".
+
+---- test::test_remove_asset_deletes_price_entry stdout ----
+
+thread 'test::test_remove_asset_deletes_price_entry' (16781) panicked at contracts/price-oracle/src/test.rs:819:18:
+expected FlashCrashDetected, got Ok(Ok(()))
+Writing test snapshot file for test "test::test_remove_asset_deletes_price_entry" to "test_snapshots/test/test_remove_asset_deletes_price_entry.1.json".
+
+---- test::test_remove_asset_non_admin_is_rejected stdout ----
+
+thread 'test::test_remove_asset_non_admin_is_rejected' (16783) panicked at contracts/price-oracle/src/test.rs:932:18:
+expected Unauthorized, got Err(Err(Abort))
+Writing test snapshot file for test "test::test_remove_asset_non_admin_is_rejected" to "test_snapshots/test/test_remove_asset_non_admin_is_rejected.1.json".
+
+---- test::test_remove_asset_not_in_get_all_assets stdout ----
+
+thread 'test::test_remove_asset_not_in_get_all_assets' (16785) panicked at /home/abujulaybeeb/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-env-host-25.0.1/src/host.rs:907:9:
+HostError: Error(Contract, #1)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:"escalating error to panic"
+   1: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:["contract call failed", remove_asset, [CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4, NGN]]
+   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #1)], data:"escalating Ok(ScErrorType::Contract) frame-exit to Err"
+   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[fn_return, remove_asset], data:Error(Contract, #1)
+   4: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, remove_asset], data:[CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4, NGN]
+
+Writing test snapshot file for test "test::test_remove_asset_not_in_get_all_assets" to "test_snapshots/test/test_remove_asset_not_in_get_all_assets.1.json".
+
+---- test::test_set_price_different_value_writes_new_price stdout ----
+
+thread 'test::test_set_price_different_value_writes_new_price' (16795) panicked at /home/abujulaybeeb/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-env-host-25.0.1/src/host.rs:907:9:
+HostError: Error(Contract, #1)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:"escalating error to panic"
+   1: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:["contract call failed", get_price, [KES]]
+   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #1)], data:"escalating Ok(ScErrorType::Contract) frame-exit to Err"
+   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[fn_return, get_price], data:Error(Contract, #1)
+   4: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, get_price], data:KES
+
+Writing test snapshot file for test "test::test_set_price_different_value_writes_new_price" to "test_snapshots/test/test_set_price_different_value_writes_new_price.1.json".
+
+---- test::test_set_price_identical_value_only_updates_timestamp stdout ----
+
+thread 'test::test_set_price_identical_value_only_updates_timestamp' (16798) panicked at /home/abujulaybeeb/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-env-host-25.0.1/src/host.rs:907:9:
+HostError: Error(Contract, #1)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:"escalating error to panic"
+   1: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:["contract call failed", get_price, [NGN]]
+   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #1)], data:"escalating Ok(ScErrorType::Contract) frame-exit to Err"
+   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[fn_return, get_price], data:Error(Contract, #1)
+   4: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, get_price], data:NGN
+
+Writing test snapshot file for test "test::test_set_price_identical_value_only_updates_timestamp" to "test_snapshots/test/test_set_price_identical_value_only_updates_timestamp.1.json".
+
+---- test::test_set_price_rejects_negative_price stdout ----
+
+thread 'test::test_set_price_rejects_negative_price' (16800) panicked at /home/abujulaybeeb/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-env-host-25.0.1/src/host.rs:907:9:
+HostError: Error(Contract, #4)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(Contract, #4)], data:"escalating error to panic"
+   1: [Diagnostic Event] topics:[error, Error(Contract, #4)], data:["contract call failed", set_price, [NGN, -1, 2, 3600]]
+   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #4)], data:"caught error from function"
+   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #4)], data:"escalating error to panic"
+   4: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #4)], data:["failing with contract error", 4]
+   5: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, set_price], data:[NGN, -1, 2, 3600]
+
+Writing test snapshot file for test "test::test_set_price_rejects_negative_price" to "test_snapshots/test/test_set_price_rejects_negative_price.1.json".
+note: panic did not contain expected string
+      panic message: "HostError: Error(Contract, #4)\n\nEvent log (newest first):\n   0: [Diagnostic Event] topics:[error, Error(Contract, #4)], data:\"escalating error to panic\"\n   1: [Diagnostic Event] topics:[error, Error(Contract, #4)], data:[\"contract call failed\", set_price, [NGN, -1, 2, 3600]]\n   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #4)], data:\"caught error from function\"\n   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #4)], data:\"escalating error to panic\"\n   4: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #4)], data:[\"failing with contract error\", 4]\n   5: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, set_price], data:[NGN, -1, 2, 3600]\n"
+ expected substring: "Error(InvalidPrice)"
+---- test::test_set_price_rejects_zero_price stdout ----
+
+thread 'test::test_set_price_rejects_zero_price' (16801) panicked at /home/abujulaybeeb/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-env-host-25.0.1/src/host.rs:907:9:
+HostError: Error(Contract, #4)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(Contract, #4)], data:"escalating error to panic"
+   1: [Diagnostic Event] topics:[error, Error(Contract, #4)], data:["contract call failed", set_price, [NGN, 0, 2, 3600]]
+   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #4)], data:"caught error from function"
+   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #4)], data:"escalating error to panic"
+   4: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #4)], data:["failing with contract error", 4]
+   5: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, set_price], data:[NGN, 0, 2, 3600]
+
+Writing test snapshot file for test "test::test_set_price_rejects_zero_price" to "test_snapshots/test/test_set_price_rejects_zero_price.1.json".
+note: panic did not contain expected string
+      panic message: "HostError: Error(Contract, #4)\n\nEvent log (newest first):\n   0: [Diagnostic Event] topics:[error, Error(Contract, #4)], data:\"escalating error to panic\"\n   1: [Diagnostic Event] topics:[error, Error(Contract, #4)], data:[\"contract call failed\", set_price, [NGN, 0, 2, 3600]]\n   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #4)], data:\"caught error from function\"\n   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #4)], data:\"escalating error to panic\"\n   4: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #4)], data:[\"failing with contract error\", 4]\n   5: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, set_price], data:[NGN, 0, 2, 3600]\n"
+ expected substring: "Error(InvalidPrice)"
+---- test::test_toggle_pause_fails_with_non_admin stdout ----
+
+thread 'test::test_toggle_pause_fails_with_non_admin' (16803) panicked at contracts/price-oracle/src/test.rs:2012:18:
+expected NotAuthorized, got Err(Err(Abort))
+Writing test snapshot file for test "test::test_toggle_pause_fails_with_non_admin" to "test_snapshots/test/test_toggle_pause_fails_with_non_admin.1.json".
+
+---- test::test_toggle_pause_fails_with_only_one_admin stdout ----
+
+thread 'test::test_toggle_pause_fails_with_only_one_admin' (16804) panicked at contracts/price-oracle/src/test.rs:2033:18:
+expected NotAuthorized, got Err(Err(Abort))
+Writing test snapshot file for test "test::test_toggle_pause_fails_with_only_one_admin" to "test_snapshots/test/test_toggle_pause_fails_with_only_one_admin.1.json".
+
+---- test::test_toggle_pause_fails_with_same_admin_twice stdout ----
+
+thread 'test::test_toggle_pause_fails_with_same_admin_twice' (16805) panicked at contracts/price-oracle/src/test.rs:1988:18:
+expected MultiSigValidationFailed, got Err(Err(Abort))
+Writing test snapshot file for test "test::test_toggle_pause_fails_with_same_admin_twice" to "test_snapshots/test/test_toggle_pause_fails_with_same_admin_twice.1.json".
+
+---- test::test_set_price_uses_current_ledger_timestamp stdout ----
+
+thread 'test::test_set_price_uses_current_ledger_timestamp' (16802) panicked at /home/abujulaybeeb/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-env-host-25.0.1/src/host.rs:907:9:
+HostError: Error(Contract, #1)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:"escalating error to panic"
+   1: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:["contract call failed", get_price, [NGN]]
+   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #1)], data:"escalating Ok(ScErrorType::Contract) frame-exit to Err"
+   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[fn_return, get_price], data:Error(Contract, #1)
+   4: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, get_price], data:NGN
+
+Writing test snapshot file for test "test::test_set_price_uses_current_ledger_timestamp" to "test_snapshots/test/test_set_price_uses_current_ledger_timestamp.1.json".
+
+---- test::test_update_price_above_max_bound_rejected stdout ----
+
+thread 'test::test_update_price_above_max_bound_rejected' (16807) panicked at contracts/price-oracle/src/test.rs:1457:18:
+expected PriceOutOfBounds, got Ok(Ok(()))
+Writing test snapshot file for test "test::test_update_price_above_max_bound_rejected" to "test_snapshots/test/test_update_price_above_max_bound_rejected.1.json".
+
+---- test::test_update_price_at_exact_bounds_succeeds stdout ----
+
+thread 'test::test_update_price_at_exact_bounds_succeeds' (16809) panicked at /home/abujulaybeeb/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-env-host-25.0.1/src/host.rs:907:9:
+HostError: Error(Contract, #1)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:"escalating error to panic"
+   1: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:["contract call failed", get_price, [NGN]]
+   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #1)], data:"escalating Ok(ScErrorType::Contract) frame-exit to Err"
+   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[fn_return, get_price], data:Error(Contract, #1)
+   4: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, get_price], data:NGN
+
+Writing test snapshot file for test "test::test_update_price_at_exact_bounds_succeeds" to "test_snapshots/test/test_update_price_at_exact_bounds_succeeds.1.json".
+
+---- test::test_update_price_delta_limit_rejection_emits_anomaly_event stdout ----
+
+thread 'test::test_update_price_delta_limit_rejection_emits_anomaly_event' (16811) panicked at contracts/price-oracle/src/test.rs:656:5:
+assertion failed: debug_str.contains("price_anomaly_event")
+Writing test snapshot file for test "test::test_update_price_delta_limit_rejection_emits_anomaly_event" to "test_snapshots/test/test_update_price_delta_limit_rejection_emits_anomaly_event.1.json".
+
+---- test::test_update_price_below_min_bound_rejected stdout ----
+
+thread 'test::test_update_price_below_min_bound_rejected' (16810) panicked at /home/abujulaybeeb/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-env-host-25.0.1/src/host.rs:907:9:
+HostError: Error(Contract, #1)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:"escalating error to panic"
+   1: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:["contract call failed", get_price, [NGN]]
+   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #1)], data:"escalating Ok(ScErrorType::Contract) frame-exit to Err"
+   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[fn_return, get_price], data:Error(Contract, #1)
+   4: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, get_price], data:NGN
+
+Writing test snapshot file for test "test::test_update_price_below_min_bound_rejected" to "test_snapshots/test/test_update_price_below_min_bound_rejected.1.json".
+
+---- test::test_update_price_emits_event stdout ----
+
+thread 'test::test_update_price_emits_event' (16812) panicked at contracts/price-oracle/src/test.rs:623:5:
+assertion failed: debug_str.contains("price_updated_event")
+Writing test snapshot file for test "test::test_update_price_emits_event" to "test_snapshots/test/test_update_price_emits_event.1.json".
+
+---- test::test_update_price_multiple_updates stdout ----
+
+thread 'test::test_update_price_multiple_updates' (16813) panicked at /home/abujulaybeeb/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-env-host-25.0.1/src/host.rs:907:9:
+HostError: Error(Contract, #1)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:"escalating error to panic"
+   1: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:["contract call failed", get_price, [NGN]]
+   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #1)], data:"escalating Ok(ScErrorType::Contract) frame-exit to Err"
+   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[fn_return, get_price], data:Error(Contract, #1)
+   4: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, get_price], data:NGN
+
+Writing test snapshot file for test "test::test_update_price_multiple_updates" to "test_snapshots/test/test_update_price_multiple_updates.1.json".
+
+---- test::test_update_price_no_bounds_set_allows_any_valid_price stdout ----
+
+thread 'test::test_update_price_no_bounds_set_allows_any_valid_price' (16814) panicked at contracts/price-oracle/src/test.rs:1541:18:
+expected FlashCrashDetected, got Ok(Ok(()))
+Writing test snapshot file for test "test::test_update_price_no_bounds_set_allows_any_valid_price" to "test_snapshots/test/test_update_price_no_bounds_set_allows_any_valid_price.1.json".
+
+---- test::test_update_price_provider_can_store_new_price stdout ----
+
+thread 'test::test_update_price_provider_can_store_new_price' (16816) panicked at /home/abujulaybeeb/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-env-host-25.0.1/src/host.rs:907:9:
+HostError: Error(Contract, #1)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:"escalating error to panic"
+   1: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:["contract call failed", get_price, [NGN]]
+   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #1)], data:"escalating Ok(ScErrorType::Contract) frame-exit to Err"
+   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[fn_return, get_price], data:Error(Contract, #1)
+   4: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, get_price], data:NGN
+
+Writing test snapshot file for test "test::test_update_price_provider_can_store_new_price" to "test_snapshots/test/test_update_price_provider_can_store_new_price.1.json".
+
+---- test::test_update_price_within_bounds_succeeds stdout ----
+
+thread 'test::test_update_price_within_bounds_succeeds' (16818) panicked at /home/abujulaybeeb/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-env-host-25.0.1/src/host.rs:907:9:
+HostError: Error(Contract, #1)
+
+Event log (newest first):
+   0: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:"escalating error to panic"
+   1: [Diagnostic Event] topics:[error, Error(Contract, #1)], data:["contract call failed", get_price, [NGN]]
+   2: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[error, Error(Contract, #1)], data:"escalating Ok(ScErrorType::Contract) frame-exit to Err"
+   3: [Failed Diagnostic Event (not emitted)] contract:CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, topics:[fn_return, get_price], data:Error(Contract, #1)
+   4: [Diagnostic Event] topics:[fn_call, CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM, get_price], data:NGN
+
+Writing test snapshot file for test "test::test_update_price_within_bounds_succeeds" to "test_snapshots/test/test_update_price_within_bounds_succeeds.1.json".
+
+
+failures:
+    test::test_dummy_consumer_calls_oracle_successfully
+    test::test_dummy_consumer_multiple_price_fetches
+    test::test_dummy_consumer_safe_price_fetch
+    test::test_flash_crash_protection_allows_exact_threshold
+    test::test_flash_crash_protection_allows_first_price_update
+    test::test_flash_crash_protection_allows_within_threshold
+    test::test_flash_crash_protection_rejects_large_drop
+    test::test_flash_crash_protection_rejects_large_increase
+    test::test_get_price_after_update
+    test::test_get_price_existing_asset
+    test::test_get_prices_preserves_order
+    test::test_get_prices_returns_all_requested_assets
+    test::test_get_prices_returns_none_for_missing_asset
+    test::test_provider_warmup_guard
+    test::test_remove_admin_fails_if_last_admin
+    test::test_remove_asset_deletes_price_entry
+    test::test_remove_asset_deletes_price_entry_new
+    test::test_remove_asset_non_admin_is_rejected
+    test::test_remove_asset_not_in_get_all_assets
+    test::test_rescue_tokens_admin_can_recover_assets
+    test::test_set_price_different_value_writes_new_price
+    test::test_set_price_identical_value_only_updates_timestamp
+    test::test_set_price_rejects_negative_price
+    test::test_set_price_rejects_zero_price
+    test::test_set_price_uses_current_ledger_timestamp
+    test::test_toggle_pause_fails_with_non_admin
+    test::test_toggle_pause_fails_with_only_one_admin
+    test::test_toggle_pause_fails_with_same_admin_twice
+    test::test_update_price_above_max_bound_rejected
+    test::test_update_price_at_exact_bounds_succeeds
+    test::test_update_price_below_min_bound_rejected
+    test::test_update_price_delta_limit_rejection_emits_anomaly_event
+    test::test_update_price_emits_event
+    test::test_update_price_multiple_updates
+    test::test_update_price_no_bounds_set_allows_any_valid_price
+    test::test_update_price_provider_can_store_new_price
+    test::test_update_price_within_bounds_succeeds
+
+test result: FAILED. 100 passed; 37 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.31s
+
+error: test failed, to rerun pass `--lib`
