@@ -1,6 +1,5 @@
 use soroban_sdk::{Env, String};
 extern crate alloc;
-use alloc::string::ToString;
 
 /// Format a scaled integer price into a human-readable decimal string.
 ///

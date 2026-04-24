@@ -1,0 +1,150 @@
+    Checking price-oracle v0.0.0 (/home/abujulaybeeb/Documents/Drips 13/stellarflow-contracts/contracts/price-oracle)
+error[E0425]: cannot find type `PriceDataWithStatus` in this scope
+  --> contracts/price-oracle/src/lib.rs:27:65
+   |
+27 |     fn get_price_with_status(env: Env, asset: Symbol) -> Result<PriceDataWithStatus, Error>;
+   |                                                                 ^^^^^^^^^^^^^^^^^^^ not found in this scope
+   |
+help: consider importing this struct
+   |
+ 3 + use crate::types::PriceDataWithStatus;
+   |
+
+error[E0425]: cannot find type `PriceDataWithStatus` in this scope
+   --> contracts/price-oracle/src/lib.rs:523:69
+    |
+523 |     pub fn get_price_with_status(env: Env, asset: Symbol) -> Result<PriceDataWithStatus, Error> {
+    |                                                                     ^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+  3 + use crate::types::PriceDataWithStatus;
+    |
+
+error[E0422]: cannot find struct, variant or union type `PriceDataWithStatus` in this scope
+   --> contracts/price-oracle/src/lib.rs:533:20
+    |
+533 |                 Ok(PriceDataWithStatus {
+    |                    ^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+  3 + use crate::types::PriceDataWithStatus;
+    |
+
+error[E0425]: cannot find type `PriceEntryWithStatus` in this scope
+   --> contracts/price-oracle/src/lib.rs:600:34
+    |
+600 |     ) -> soroban_sdk::Vec<Option<PriceEntryWithStatus>> {
+    |                                  ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+  3 + use crate::types::PriceEntryWithStatus;
+    |
+
+error[E0422]: cannot find struct, variant or union type `PriceEntryWithStatus` in this scope
+   --> contracts/price-oracle/src/lib.rs:611:52
+    |
+611 |             let entry = prices.get(asset).map(|pd| PriceEntryWithStatus {
+    |                                                    ^^^^^^^^^^^^^^^^^^^^ not found in this scope
+    |
+help: consider importing this struct
+    |
+  3 + use crate::types::PriceEntryWithStatus;
+    |
+
+error[E0422]: cannot find struct, variant or union type `RescueTokensEvent` in this scope
+   --> contracts/price-oracle/src/lib.rs:734:37
+    |
+734 |         env.events().publish_event(&RescueTokensEvent {
+    |                                     ^^^^^^^^^^^^^^^^^ not found in this scope
+
+warning: unused import: `alloc::string::ToString`
+ --> contracts/price-oracle/src/math.rs:3:5
+  |
+3 | use alloc::string::ToString;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `Symbol`
+ --> contracts/price-oracle/src/types.rs:1:42
+  |
+1 | use soroban_sdk::{contracttype, Address, Symbol};
+  |                                          ^^^^^^
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/price-oracle/src/lib.rs:326:22
+    |
+326 |         env.events().publish(
+    |                      ^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/price-oracle/src/lib.rs:351:22
+    |
+351 |         env.events().publish(
+    |                      ^^^^^^^
+
+error[E0599]: no variant or associated item named `AssetDescription` found for enum `types::DataKey` in the current scope
+   --> contracts/price-oracle/src/lib.rs:640:28
+    |
+640 |             .set(&DataKey::AssetDescription(asset), &description);
+    |                            ^^^^^^^^^^^^^^^^ variant or associated item not found in `types::DataKey`
+    |
+   ::: contracts/price-oracle/src/types.rs:5:1
+    |
+  5 | pub enum DataKey {
+    | ---------------- variant or associated item `AssetDescription` not found for this enum
+
+error[E0599]: no variant or associated item named `AssetDescription` found for enum `types::DataKey` in the current scope
+   --> contracts/price-oracle/src/lib.rs:649:28
+    |
+649 |             .get(&DataKey::AssetDescription(asset))
+    |                            ^^^^^^^^^^^^^^^^ variant or associated item not found in `types::DataKey`
+    |
+   ::: contracts/price-oracle/src/types.rs:5:1
+    |
+  5 | pub enum DataKey {
+    | ---------------- variant or associated item `AssetDescription` not found for this enum
+
+error[E0433]: failed to resolve: use of undeclared type `TokenContractClient`
+   --> contracts/price-oracle/src/lib.rs:731:28
+    |
+731 |         let token_client = TokenContractClient::new(&env, &token);
+    |                            ^^^^^^^^^^^^^^^^^^^ use of undeclared type `TokenContractClient`
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+   --> contracts/price-oracle/src/lib.rs:989:22
+    |
+989 |         env.events().publish(
+    |                      ^^^^^^^
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+    --> contracts/price-oracle/src/lib.rs:1033:22
+     |
+1033 |         env.events().publish(
+     |                      ^^^^^^^
+
+warning: use of deprecated method `soroban_sdk::events::Events::publish`: use the #[contractevent] macro on a contract event type
+    --> contracts/price-oracle/src/lib.rs:1082:22
+     |
+1082 |         env.events().publish(
+     |                      ^^^^^^^
+
+warning: variable does not need to be mutable
+   --> contracts/price-oracle/src/lib.rs:771:13
+    |
+771 |         let mut tracked = get_tracked_assets(&env);
+    |             ----^^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+Some errors have detailed explanations: E0422, E0425, E0433, E0599.
+For more information about an error, try `rustc --explain E0422`.
+warning: `price-oracle` (lib) generated 8 warnings
+error: could not compile `price-oracle` (lib) due to 9 previous errors; 8 warnings emitted

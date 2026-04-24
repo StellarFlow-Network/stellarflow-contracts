@@ -20,7 +20,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "symbol": "ZAR"
+                  "symbol": "NGN"
                 }
               ]
             }
@@ -61,7 +61,7 @@
                 "map": [
                   {
                     "key": {
-                      "symbol": "ZAR"
+                      "symbol": "NGN"
                     },
                     "val": {
                       "map": [
@@ -166,7 +166,7 @@
                       "val": {
                         "vec": [
                           {
-                            "symbol": "ZAR"
+                            "symbol": "NGN"
                           }
                         ]
                       }
@@ -188,7 +188,7 @@
                                   "symbol": "asset"
                                 },
                                 "val": {
-                                  "symbol": "ZAR"
+                                  "symbol": "NGN"
                                 }
                               },
                               {

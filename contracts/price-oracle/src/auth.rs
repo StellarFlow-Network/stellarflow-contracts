@@ -4,14 +4,7 @@ use soroban_sdk::{contracttype, Address, Env, Vec};
 // Storage Key
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[contracttype]
-pub enum DataKey {
-    Admin,
-    Provider(Address),
-    ProviderWeight(Address),
-    IsPaused,
-    AssetDescription(soroban_sdk::Symbol),
-}
+use crate::types::DataKey;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -460,7 +453,7 @@ mod auth_tests {
 
     #[test]
     fn test_renounce_ownership_removes_all_admins() {
-        let (env, contract_id, admin1) = setup();
+        let (env, contract_id, _admin1) = setup();
         let admin2 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
         env.as_contract(&contract_id, || {
             _add_authorized(&env, &admin2);

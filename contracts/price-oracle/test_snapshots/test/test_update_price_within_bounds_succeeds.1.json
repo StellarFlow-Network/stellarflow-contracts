@@ -46,7 +46,7 @@
   ],
   "ledger": {
     "protocol_version": 25,
-    "sequence_number": 0,
+    "sequence_number": 200,
     "timestamp": 0,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
     "base_reserve": 0,
@@ -68,7 +68,7 @@
                   }
                 ]
               },
-              "durability": "persistent",
+              "durability": "temporary",
               "val": {
                 "map": [
                   {
@@ -98,7 +98,7 @@
                             "symbol": "price"
                           },
                           "val": {
-                            "i128": "1000000"
+                            "i128": "1050000"
                           }
                         },
                         {
@@ -106,7 +106,7 @@
                             "symbol": "provider"
                           },
                           "val": {
-                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                           }
                         },
                         {
@@ -134,7 +134,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 4095
+        "live_until": 215
       },
       {
         "entry": {
@@ -232,7 +232,7 @@
                                   "symbol": "event_type"
                                 },
                                 "val": {
-                                  "symbol": "price_warmup"
+                                  "symbol": "price_updated"
                                 }
                               },
                               {
@@ -319,7 +319,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 6311999
+        "live_until": 6312199
       },
       {
         "entry": {

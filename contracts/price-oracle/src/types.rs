@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, Symbol};
+use soroban_sdk::{contracttype, Address};
 
 /// Storage keys for contract data
 #[contracttype]
@@ -12,6 +12,10 @@ pub enum DataKey {
     AdminUpdateTimestamp,
     RecentEvents,
     Initialized,
+    AssetDescription(soroban_sdk::Symbol),
+    Provider(Address),
+    ProviderWeight(Address),
+    IsPaused,
 }
 
 /// Canonical storage format for a price entry.

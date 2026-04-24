@@ -89,7 +89,7 @@
   ],
   "ledger": {
     "protocol_version": 25,
-    "sequence_number": 50,
+    "sequence_number": 200,
     "timestamp": 0,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
     "base_reserve": 0,
@@ -174,7 +174,7 @@
                               "symbol": "joined_ledger"
                             },
                             "val": {
-                              "u32": 10
+                              "u32": 200
                             }
                           }
                         ]
@@ -312,7 +312,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 6312009
+        "live_until": 6312199
       },
       {
         "entry": {
@@ -332,7 +332,7 @@
           },
           "ext": "v0"
         },
-        "live_until": 6312049
+        "live_until": 6312199
       },
       {
         "entry": {
