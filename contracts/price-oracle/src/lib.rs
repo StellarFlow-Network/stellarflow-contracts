@@ -441,6 +441,10 @@ impl PriceOracle {
         let admins = soroban_sdk::vec![&env, new_admin.clone()];
         crate::auth::_set_admin(&env, &admins);
 
+        env.storage()
+            .instance()
+            .set(&DataKey::AdminUpdateTimestamp, &now);
+
         env.storage().instance().remove(&DataKey::PendingAdmin);
         env.storage()
             .instance()

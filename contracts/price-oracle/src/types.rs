@@ -9,6 +9,7 @@ pub enum DataKey {
     PriceBoundsData,
     PendingAdmin,
     PendingAdminTimestamp,
+    AdminUpdateTimestamp,
     RecentEvents,
     Initialized,
 }
