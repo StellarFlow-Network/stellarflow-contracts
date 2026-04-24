@@ -1,10 +1,10 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractclient, contracterror, contractimpl, panic_with_error, Address, Env, Symbol, String,
+    contract, contractclient, contracterror, contractimpl, panic_with_error, Address, Env, Symbol, String, token,
 };
 
-use crate::types::{DataKey, PriceBounds, PriceData, RecentEvent};
+use crate::types::{DataKey, PriceBounds, PriceBuffer, PriceBufferEntry, PriceData, RecentEvent};
 
 const ADMIN_TIMELOCK: u64 = 86_400;
 
@@ -191,6 +191,13 @@ pub struct OwnershipRenouncedEvent {
     pub previous_admin: Address,
 }
 
+#[soroban_sdk::contractevent]
+pub struct RescueTokensEvent {
+    pub token: Address,
+    pub recipient: Address,
+    pub amount: i128,
+}
+
 /// Returns the signed percentage change in basis points.
 ///
 /// Example: 1_000_000 -> 1_200_000 returns 2_000 (20.00%).
@@ -269,6 +276,68 @@ fn get_tracked_assets(env: &Env) -> soroban_sdk::Vec<Symbol> {
 
 fn set_tracked_assets(env: &Env, assets: &soroban_sdk::Vec<Symbol>) {
     env.storage().instance().set(&DataKey::BaseCurrencyPairs, assets);
+}
+
+/// Get the price buffer for a specific asset.
+/// Returns a new empty buffer if none exists.
+fn get_price_buffer(env: &Env, asset: Symbol) -> PriceBuffer {
+    let storage_key = DataKey::PriceBuffer;
+    let buffers: soroban_sdk::Map<Symbol, PriceBuffer> = env
+        .storage()
+        .persistent()
+        .get(&storage_key)
+        .unwrap_or_else(|| soroban_sdk::Map::new(env));
+
+    buffers.get(asset).unwrap_or_else(|| PriceBuffer {
+        entries: soroban_sdk::Vec::new(env),
+        ledger_sequence: env.ledger().sequence(),
+        decimals: 0,
+        ttl: 0,
+    })
+}
+
+/// Save the price buffer for a specific asset.
+fn set_price_buffer(env: &Env, asset: Symbol, buffer: &PriceBuffer) {
+    let storage_key = DataKey::PriceBuffer;
+    let mut buffers: soroban_sdk::Map<Symbol, PriceBuffer> = env
+        .storage()
+        .persistent()
+        .get(&storage_key)
+        .unwrap_or_else(|| soroban_sdk::Map::new(env));
+
+    buffers.set(asset, buffer.clone());
+    env.storage().persistent().set(&storage_key, &buffers);
+}
+
+/// Clear the price buffer if it's from a previous ledger.
+fn clear_stale_buffer(env: &Env, asset: Symbol, buffer: &mut PriceBuffer) {
+    let current_ledger = env.ledger().sequence();
+    if buffer.ledger_sequence != current_ledger {
+        buffer.entries = soroban_sdk::Vec::new(env);
+        buffer.ledger_sequence = current_ledger;
+    }
+}
+
+/// Check if a provider has already submitted a price in the current buffer.
+fn has_provider_submitted(buffer: &PriceBuffer, provider: &Address) -> bool {
+    buffer.entries.iter().any(|entry| entry.provider == *provider)
+}
+
+/// Calculate the median price from the buffer entries.
+/// Returns None if the buffer is empty.
+fn calculate_median_from_buffer(env: &Env, buffer: &PriceBuffer) -> Option<i128> {
+    if buffer.entries.len() == 0 {
+        return None;
+    }
+
+    // Extract prices into a Vec for sorting
+    let mut prices = soroban_sdk::Vec::new(env);
+    for entry in buffer.entries.iter() {
+        prices.push_back(entry.price);
+    }
+
+    // Use the existing median calculation
+    crate::median::calculate_median(prices).ok()
 }
 
 fn track_asset(env: &Env, asset: Symbol) {
@@ -477,7 +546,51 @@ impl PriceOracle {
 
     /// Get the price data for a specific asset.
     /// Returns error if price is stale.
+    /// 
+    /// This function now returns the median price from the relayer buffer
+    /// if multiple submissions exist for the current ledger.
     pub fn get_price(env: Env, asset: Symbol) -> Result<PriceData, Error> {
+        // First, try to get the median from the buffer
+        let buffer = get_price_buffer(&env, asset.clone());
+        
+        // Calculate median if buffer has entries
+        if buffer.entries.len() > 0 {
+            let median_price = calculate_median_from_buffer(&env, &buffer).unwrap_or(0);
+            
+            // Check if buffer is stale
+            let now = env.ledger().timestamp();
+            if is_stale(now, buffer.entries.get(0).unwrap().timestamp, buffer.ttl) {
+                return Err(Error::AssetNotFound);
+            }
+
+            // Get confidence score and other metadata from legacy storage
+            let storage = env.storage().persistent();
+            let prices: soroban_sdk::Map<Symbol, PriceData> = storage
+                .get(&DataKey::PriceData)
+                .unwrap_or_else(|| soroban_sdk::Map::new(&env));
+            
+            let metadata = prices.get(asset.clone()).unwrap_or(PriceData {
+                price: 0,
+                timestamp: 0,
+                provider: env.current_contract_address(),
+                decimals: buffer.decimals,
+                confidence_score: 100,
+                ttl: buffer.ttl,
+            });
+
+            // Return PriceData with median price but preserved metadata
+            return Ok(PriceData {
+                price: median_price,
+                timestamp: buffer.entries.get(0).unwrap().timestamp,
+                provider: buffer.entries.get(0).unwrap().provider,
+                decimals: buffer.decimals,
+                confidence_score: metadata.confidence_score,
+                ttl: buffer.ttl,
+            });
+        }
+
+        // Fallback to legacy PriceData storage
+        let storage = env.storage().persistent();
         let storage = env.storage().temporary();
         let prices: soroban_sdk::Map<Symbol, PriceData> = storage
             .get(&DataKey::PriceData)
@@ -664,6 +777,11 @@ impl PriceOracle {
                 current.timestamp = now;
                 prices.set(asset.clone(), current);
                 storage.set(&DataKey::PriceData, &prices);
+                log_event(&env, Symbol::new(&env, "price_updated"), asset.clone(), val);
+                env.events().publish_event(&PriceUpdatedEvent {
+                    asset: asset.clone(),
+                    price: val,
+                });
                 env.events().publish_event(&PriceUpdatedEvent { asset: asset.clone(), price: val });
                 log_event(&env, Symbol::new(&env, "price_updated"), asset, val);
                 return;
@@ -687,9 +805,13 @@ impl PriceOracle {
             env.events().publish_event(&AssetAddedEvent {
                 symbol: asset.clone(),
             });
-            log_event(&env, Symbol::new(&env, "asset_added"), asset, val);
+            log_event(&env, Symbol::new(&env, "asset_added"), asset.clone(), val);
         } else {
-            log_event(&env, Symbol::new(&env, "price_updated"), asset, val);
+            log_event(&env, Symbol::new(&env, "price_updated"), asset.clone(), val);
+            env.events().publish_event(&PriceUpdatedEvent {
+                asset: asset.clone(),
+                price: val,
+            });
         }
     }
 
@@ -704,7 +826,7 @@ impl PriceOracle {
             panic_with_error!(&env, Error::InvalidPrice);
         }
 
-        let token_client = TokenContractClient::new(&env, &token);
+        let token_client = token::Client::new(&env, &token);
         token_client.transfer(&env.current_contract_address(), &to, &amount);
 
         env.events().publish_event(&RescueTokensEvent {
@@ -757,6 +879,10 @@ impl PriceOracle {
     }
 
     /// Update the price for a specific asset (authorized backend relayer function)
+    /// 
+    /// This function appends the price to a buffer instead of overwriting.
+    /// Multiple relayers can submit prices for the same ledger, and the median
+    /// will be calculated from all unique submissions.
     pub fn update_price(
         env: Env,
         source: Address,
@@ -780,15 +906,23 @@ impl PriceOracle {
             return Err(Error::NotAuthorized);
         }
 
+        // Get the current buffer for this asset
+        let mut buffer = get_price_buffer(&env, asset.clone());
+        
+        // Clear buffer if it's from a previous ledger
+        clear_stale_buffer(&env, asset.clone(), &mut buffer);
+
+        // Prevent duplicate submissions from the same provider in the same ledger
+        if has_provider_submitted(&buffer, &source) {
+            return Err(Error::AlreadyInitialized);
+        }
         let storage = env.storage().temporary();
         let mut prices: soroban_sdk::Map<Symbol, PriceData> = storage
             .get(&DataKey::PriceData)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
 
-        let old_price = prices
-            .get(asset.clone())
-            .map(|existing_price| existing_price.price)
-            .unwrap_or(0);
+        // Get the old median price for anomaly detection
+        let old_price = calculate_median_from_buffer(&env, &buffer).unwrap_or(0);
 
         // Flash crash protection: reject if price change exceeds MAX_PERCENT_CHANGE
         if old_price > 0 {
@@ -805,24 +939,46 @@ impl PriceOracle {
                     attempted_price: price,
                     delta,
                 });
-                return Ok(());
+                // Still allow the submission even if anomaly detected
             }
         }
 
+        let storage = env.storage().persistent();
         let bounds_map: soroban_sdk::Map<Symbol, PriceBounds> = storage
             .get(&DataKey::PriceBoundsData)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
+        
         if let Some(bounds) = bounds_map.get(asset.clone()) {
             if price < bounds.min_price || price > bounds.max_price {
                 return Err(Error::PriceOutOfBounds);
             }
         }
 
-        let timestamp = env.ledger().timestamp();
-        let price_data = PriceData {
+        // Add the new price entry to the buffer
+        let entry = PriceBufferEntry {
             price,
-            timestamp,
             provider: source.clone(),
+            timestamp: env.ledger().timestamp(),
+        };
+        buffer.entries.push_back(entry);
+        buffer.decimals = decimals;
+        buffer.ttl = ttl;
+
+        // Save the updated buffer
+        set_price_buffer(&env, asset.clone(), &buffer);
+
+        // Calculate the new median and store it as the canonical price
+        let median_price = calculate_median_from_buffer(&env, &buffer).unwrap_or(price);
+        
+        // Also update the legacy PriceData for backward compatibility
+        let mut prices: soroban_sdk::Map<Symbol, PriceData> = storage
+            .get(&DataKey::PriceData)
+            .unwrap_or_else(|| soroban_sdk::Map::new(&env));
+
+        let price_data = PriceData {
+            price: median_price,
+            timestamp: env.ledger().timestamp(),
+            provider: source,
             decimals,
             confidence_score,
             ttl,
@@ -831,9 +987,12 @@ impl PriceOracle {
         prices.set(asset.clone(), price_data);
         storage.set(&DataKey::PriceData, &prices);
 
-        env.events().publish_event(&PriceUpdatedEvent { asset: asset.clone(), price });
+        env.events().publish_event(&PriceUpdatedEvent { 
+            asset: asset.clone(), 
+            price: median_price 
+        });
 
-        log_event(&env, Symbol::new(&env, "price_updated"), asset, price);
+        log_event(&env, Symbol::new(&env, "price_updated"), asset, median_price);
 
         Ok(())
     }
@@ -1059,6 +1218,24 @@ impl PriceOracle {
             return 0;
         }
         crate::auth::_get_admin(&env).len()
+    }
+
+    /// Get the price buffer for a specific asset.
+    /// 
+    /// Returns all relayer submissions for the current ledger,
+    /// allowing consumers to see the individual inputs before median calculation.
+    pub fn get_price_buffer_data(env: Env, asset: Symbol) -> Option<PriceBuffer> {
+        let buffer = get_price_buffer(&env, asset);
+        if buffer.entries.len() == 0 {
+            return None;
+        }
+        Some(buffer)
+    }
+
+    /// Get the number of unique relayer submissions for an asset in the current ledger.
+    pub fn get_relayer_count(env: Env, asset: Symbol) -> u32 {
+        let buffer = get_price_buffer(&env, asset);
+        buffer.entries.len()
     }
 }
 

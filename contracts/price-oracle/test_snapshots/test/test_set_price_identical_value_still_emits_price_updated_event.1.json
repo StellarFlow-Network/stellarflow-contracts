@@ -1,0 +1,247 @@
+{
+  "generators": {
+    "address": 1,
+    "nonce": 0,
+    "mux_id": 0
+  },
+  "auth": [
+    [],
+    [],
+    [],
+    []
+  ],
+  "ledger": {
+    "protocol_version": 25,
+    "sequence_number": 2,
+    "timestamp": 3001000,
+    "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
+    "base_reserve": 0,
+    "min_persistent_entry_ttl": 4096,
+    "min_temp_entry_ttl": 16,
+    "max_entry_ttl": 6312000,
+    "ledger_entries": [
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": {
+                "vec": [
+                  {
+                    "symbol": "PriceData"
+                  }
+                ]
+              },
+              "durability": "persistent",
+              "val": {
+                "map": [
+                  {
+                    "key": {
+                      "symbol": "GHS"
+                    },
+                    "val": {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "confidence_score"
+                          },
+                          "val": {
+                            "u32": 100
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "decimals"
+                          },
+                          "val": {
+                            "u32": 2
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "price"
+                          },
+                          "val": {
+                            "i128": "5000"
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "provider"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "timestamp"
+                          },
+                          "val": {
+                            "u64": "3001000"
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "ttl"
+                          },
+                          "val": {
+                            "u64": "3600"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4096
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_data": {
+              "ext": "v0",
+              "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+              "key": "ledger_key_contract_instance",
+              "durability": "persistent",
+              "val": {
+                "contract_instance": {
+                  "executable": {
+                    "wasm": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  },
+                  "storage": [
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "BaseCurrencyPairs"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "vec": [
+                          {
+                            "symbol": "GHS"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "RecentEvents"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "vec": [
+                          {
+                            "map": [
+                              {
+                                "key": {
+                                  "symbol": "asset"
+                                },
+                                "val": {
+                                  "symbol": "GHS"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "event_type"
+                                },
+                                "val": {
+                                  "symbol": "price_updated"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "price"
+                                },
+                                "val": {
+                                  "i128": "5000"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "timestamp"
+                                },
+                                "val": {
+                                  "u64": "3001000"
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "map": [
+                              {
+                                "key": {
+                                  "symbol": "asset"
+                                },
+                                "val": {
+                                  "symbol": "GHS"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "event_type"
+                                },
+                                "val": {
+                                  "symbol": "asset_added"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "price"
+                                },
+                                "val": {
+                                  "i128": "5000"
+                                }
+                              },
+                              {
+                                "key": {
+                                  "symbol": "timestamp"
+                                },
+                                "val": {
+                                  "u64": "3000000"
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4095
+      },
+      {
+        "entry": {
+          "last_modified_ledger_seq": 0,
+          "data": {
+            "contract_code": {
+              "ext": "v0",
+              "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "code": ""
+            }
+          },
+          "ext": "v0"
+        },
+        "live_until": 4095
+      }
+    ]
+  },
+  "events": []
+}

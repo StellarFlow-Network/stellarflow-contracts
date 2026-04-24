@@ -120,6 +120,22 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "BaseCurrencyPairs"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "vec": [
+                          {
+                            "symbol": "NGN"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "RecentEvents"
                           }
                         ]
@@ -226,5 +242,43 @@
       }
     ]
   },
-  "events": []
+  "events": [
+    {
+      "event": {
+        "ext": "v0",
+        "contract_id": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+        "type_": "contract",
+        "body": {
+          "v0": {
+            "topics": [
+              {
+                "symbol": "price_updated_event"
+              }
+            ],
+            "data": {
+              "map": [
+                {
+                  "key": {
+                    "symbol": "asset"
+                  },
+                  "val": {
+                    "symbol": "NGN"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "price"
+                  },
+                  "val": {
+                    "i128": "1600"
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "failed_call": false
+    }
+  ]
 }
