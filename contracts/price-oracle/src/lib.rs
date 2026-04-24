@@ -73,6 +73,13 @@ pub trait StellarFlowTrait {
     /// Finalize an admin transfer after the timelock has passed.
     fn accept_admin(env: Env, new_admin: Address);
 
+    /// Permanently renounce ownership of the contract.
+    ///
+    /// This deletes all admin keys from storage, making the contract immutable.
+    /// No admin-only functions (upgrade, add_asset, set_price_bounds, etc.)
+    /// will ever be callable again. This action is irreversible.
+    fn renounce_ownership(env: Env, admin: Address);
+
     /// Get the last N activity events from the on-chain log.
     ///
     /// Returns a vector of the most recent events (max 5).
@@ -84,10 +91,10 @@ pub trait StellarFlowTrait {
     /// correct version of the oracle and to track contract compatibility.
     fn get_ledger_version(env: Env) -> u32;
 
-    /// Rescue tokens accidentally sent to this contract.
+    /// Get the human-readable name of this contract.
     ///
-    /// Only the authorized admin may call this function.
-    fn rescue_tokens(env: Env, admin: Address, token: Address, to: Address, amount: i128);
+    /// Returns a static string identifying the oracle contract.
+    fn get_contract_name(env: Env) -> String;
 }
 
 /// Error types for the price oracle contract
@@ -144,16 +151,8 @@ pub struct AssetAddedEvent {
 }
 
 #[soroban_sdk::contractevent]
-pub struct RescueTokensEvent {
-    pub token: Address,
-    pub recipient: Address,
-    pub amount: i128,
-}
-
-/// Generic token contract client interface used to send recovered assets to a safe address.
-#[contractclient(name = "TokenContractClient")]
-pub trait TokenContract {
-    fn transfer(env: Env, from: Address, to: Address, amount: i128);
+pub struct OwnershipRenouncedEvent {
+    pub previous_admin: Address,
 }
 
 /// Returns the signed percentage change in basis points.
@@ -412,6 +411,22 @@ impl PriceOracle {
             .remove(&DataKey::PendingAdminTimestamp);
     }
 
+    /// Permanently renounce ownership of the contract.
+    ///
+    /// This deletes all admin keys from storage, making the contract immutable.
+    /// No admin-only functions (upgrade, add_asset, set_price_bounds, etc.)
+    /// will ever be callable again. This action is irreversible.
+    pub fn renounce_ownership(env: Env, admin: Address) {
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        crate::auth::_renounce_ownership(&env);
+
+        env.events().publish_event(&OwnershipRenouncedEvent {
+            previous_admin: admin,
+        });
+    }
+
     /// A low-gas health check to verify the contract is responding.
     ///
     /// Returns a simple "PONG" symbol with minimal gas consumption.
@@ -519,6 +534,10 @@ impl PriceOracle {
     /// * `decimals` - Number of decimals for the price
     /// * `ttl` - Time-to-live in seconds for this price (per-asset expiration)
     pub fn set_price(env: Env, asset: Symbol, val: i128, decimals: u32, ttl: u64) {
+        if !is_valid(val) {
+            panic_with_error!(&env, Error::InvalidPrice);
+        }
+
         let storage = env.storage().persistent();
         let mut prices: soroban_sdk::Map<Symbol, PriceData> = storage
             .get(&DataKey::PriceData)
@@ -750,6 +769,13 @@ impl PriceOracle {
     /// Useful for the frontend and backend to verify contract compatibility.
     pub fn get_ledger_version(env: Env) -> u32 {
         env.ledger().sequence()
+    }
+
+    /// Get the human-readable name of this contract.
+    ///
+    /// Returns a static string identifying the oracle contract.
+    pub fn get_contract_name(env: Env) -> String {
+        String::from_str(&env, "StellarFlow Africa Oracle")
     }
 
     /// Get the last N activity events from the on-chain log.
