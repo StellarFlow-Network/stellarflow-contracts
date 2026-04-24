@@ -7,6 +7,7 @@ use soroban_sdk::{
 use crate::types::{DataKey, PriceBounds, PriceData, RecentEvent};
 
 const ADMIN_TIMELOCK: u64 = 86_400;
+const MAX_CLEAR_ASSETS: u32 = 20;
 
 /// A clean, gas-optimized interface for other Soroban contracts to fetch prices from StellarFlow.
 ///
@@ -156,6 +157,8 @@ pub enum Error {
     MaxAdminsReached = 11,
     /// Cannot remove admin - would leave contract without any admins.
     CannotRemoveLastAdmin = 12,
+    /// Requested asset batch exceeds the supported maximum.
+    TooManyAssets = 13,
 }
 
 #[contract]
@@ -277,6 +280,35 @@ fn track_asset(env: &Env, asset: Symbol) {
         assets.push_back(asset);
         set_tracked_assets(env, &assets);
     }
+}
+
+fn clear_assets_from_storage(env: &Env, assets: soroban_sdk::Vec<Symbol>) -> Result<(), Error> {
+    if assets.len() > MAX_CLEAR_ASSETS {
+        return Err(Error::TooManyAssets);
+    }
+
+    let storage = env.storage().persistent();
+    let mut prices: soroban_sdk::Map<Symbol, PriceData> = storage
+        .get(&DataKey::PriceData)
+        .unwrap_or_else(|| soroban_sdk::Map::new(env));
+
+    for asset in assets.iter() {
+        storage.remove(&DataKey::Price(asset.clone()));
+        prices.remove(asset.clone());
+    }
+
+    storage.set(&DataKey::PriceData, &prices);
+
+    let tracked = get_tracked_assets(env);
+    let mut remaining_assets = soroban_sdk::Vec::new(env);
+    for tracked_asset in tracked.iter() {
+        if !assets.contains(&tracked_asset) {
+            remaining_assets.push_back(tracked_asset);
+        }
+    }
+    set_tracked_assets(env, &remaining_assets);
+
+    Ok(())
 }
 
 fn log_event(env: &Env, event_type: Symbol, asset: Symbol, price: i128) {
@@ -754,6 +786,14 @@ impl PriceOracle {
         set_tracked_assets(&env, &updated_assets);
 
         Ok(())
+    }
+
+    /// Remove a batch of assets atomically.
+    ///
+    /// The full batch is rejected when more than 20 symbols are supplied, so
+    /// no storage is mutated before the resource-limit guard passes.
+    pub fn clear_assets(env: Env, assets: soroban_sdk::Vec<Symbol>) -> Result<(), Error> {
+        clear_assets_from_storage(&env, assets)
     }
 
     /// Update the price for a specific asset (authorized backend relayer function)

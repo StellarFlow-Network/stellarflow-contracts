@@ -863,6 +863,86 @@ fn test_flash_crash_protection_allows_within_threshold() {
     assert!(result.is_err());
 }
 
+#[test]
+fn test_clear_assets_removes_persistent_price_keys() {
+    let env = Env::default();
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let ngn = symbol_short!("NGN");
+    let kes = symbol_short!("KES");
+
+    env.as_contract(&contract_id, || {
+        env.storage().persistent().set(
+            &DataKey::Price(ngn.clone()),
+            &PriceData {
+                price: 1_000,
+                timestamp: 10,
+                provider: env.current_contract_address(),
+                decimals: 2,
+                confidence_score: 100,
+                ttl: 60,
+            },
+        );
+        env.storage().persistent().set(
+            &DataKey::Price(kes.clone()),
+            &PriceData {
+                price: 2_000,
+                timestamp: 10,
+                provider: env.current_contract_address(),
+                decimals: 2,
+                confidence_score: 100,
+                ttl: 60,
+            },
+        );
+    });
+
+    let assets = soroban_sdk::vec![&env, ngn.clone(), kes.clone()];
+    client.clear_assets(&assets);
+
+    env.as_contract(&contract_id, || {
+        assert!(!env.storage().persistent().has(&DataKey::Price(ngn)));
+        assert!(!env.storage().persistent().has(&DataKey::Price(kes)));
+    });
+}
+
+#[test]
+fn test_clear_assets_rejects_batches_above_limit_atomically() {
+    let env = Env::default();
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let protected = symbol_short!("NGN");
+    env.as_contract(&contract_id, || {
+        env.storage().persistent().set(
+            &DataKey::Price(protected.clone()),
+            &PriceData {
+                price: 1_000,
+                timestamp: 10,
+                provider: env.current_contract_address(),
+                decimals: 2,
+                confidence_score: 100,
+                ttl: 60,
+            },
+        );
+    });
+
+    let mut assets = soroban_sdk::Vec::new(&env);
+    for _ in 0..21 {
+        assets.push_back(protected.clone());
+    }
+
+    let result = client.try_clear_assets(&assets);
+    match result {
+        Err(Ok(e)) => assert_eq!(e, Error::TooManyAssets),
+        other => panic!("expected TooManyAssets, got {:?}", other),
+    }
+
+    env.as_contract(&contract_id, || {
+        assert!(env.storage().persistent().has(&DataKey::Price(protected)));
+    });
+}
+
 // ============================================================================
 // Cross-Contract Tests - Dummy Consumer calling the Oracle
 // ============================================================================

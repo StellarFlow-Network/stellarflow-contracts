@@ -5,8 +5,10 @@ use soroban_sdk::{contracttype, Address, Symbol};
 pub enum DataKey {
     Admin,
     BaseCurrencyPairs,
+    Price(Symbol),
     PriceData,
     PriceBoundsData,
+    AssetDescription(Symbol),
     PendingAdmin,
     PendingAdminTimestamp,
     AdminUpdateTimestamp,
