@@ -215,6 +215,44 @@ fn test_get_price_after_update() {
 }
 
 #[test]
+fn test_get_price_with_status_marks_stale_entry() {
+    let env = Env::default();
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+    let asset = symbol_short!("NGN");
+
+    env.ledger().set_timestamp(1_000_000);
+    env.ledger().set_sequence_number(1);
+    client.set_price(&asset, &1_500_i128, &2u32, &100u64);
+
+    env.ledger().set_timestamp(1_000_200);
+    env.ledger().set_sequence_number(2);
+
+    let result = client.get_price_with_status(&asset);
+    assert_eq!(result.data.price, 1_500_i128);
+    assert!(result.is_stale);
+}
+
+#[test]
+fn test_get_price_with_status_marks_fresh_entry() {
+    let env = Env::default();
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+    let asset = symbol_short!("NGN");
+
+    env.ledger().set_timestamp(1_000_000);
+    env.ledger().set_sequence_number(1);
+    client.set_price(&asset, &1_500_i128, &2u32, &100u64);
+
+    env.ledger().set_timestamp(1_000_050);
+    env.ledger().set_sequence_number(2);
+
+    let result = client.get_price_with_status(&asset);
+    assert_eq!(result.data.price, 1_500_i128);
+    assert!(!result.is_stale);
+}
+
+#[test]
 fn test_get_price_safe_nonexistent_returns_none() {
     let (_, client) = setup();
     assert_eq!(client.get_price_safe(&symbol_short!("NGN")), None);
@@ -808,6 +846,51 @@ fn test_get_prices_empty_input_returns_empty_vec() {
     let results = client.get_prices(&assets);
 
     assert_eq!(results.len(), 0);
+}
+
+#[test]
+fn test_get_prices_with_status_marks_stale_entry() {
+    let env = Env::default();
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let ngn = symbol_short!("NGN");
+
+    env.ledger().set_timestamp(1_000_000);
+    env.ledger().set_sequence_number(1);
+    client.set_price(&ngn, &1_500_i128, &2u32, &100u64);
+
+    env.ledger().set_timestamp(1_000_200);
+    env.ledger().set_sequence_number(2);
+
+    let assets = soroban_sdk::vec![&env, ngn.clone()];
+    let results = client.get_prices_with_status(&assets);
+
+    assert_eq!(results.len(), 1);
+    let entry = results.get(0).unwrap().unwrap();
+    assert_eq!(entry.price, 1_500_i128);
+    assert!(entry.is_stale);
+}
+
+#[test]
+fn test_get_prices_with_status_returns_none_for_missing_asset() {
+    let env = Env::default();
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let ngn = symbol_short!("NGN");
+    let btc = symbol_short!("BTC");
+
+    env.ledger().set_timestamp(1_000_000);
+    env.ledger().set_sequence_number(1);
+    client.set_price(&ngn, &1_500_i128, &2u32, &3600u64);
+
+    let assets = soroban_sdk::vec![&env, ngn.clone(), btc.clone()];
+    let results = client.get_prices_with_status(&assets);
+
+    assert_eq!(results.len(), 2);
+    assert!(results.get(0).unwrap().is_some());
+    assert!(results.get(1).unwrap().is_none());
 }
 
 // ============================================================================

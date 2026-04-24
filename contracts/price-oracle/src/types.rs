@@ -35,6 +35,23 @@ pub struct PriceEntry {
     pub timestamp: u64,
 }
 
+/// Full price payload returned to consumers with freshness status.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PriceDataWithStatus {
+    pub data: PriceData,
+    pub is_stale: bool,
+}
+
+/// Lightweight price payload returned to consumers with freshness status.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PriceEntryWithStatus {
+    pub price: i128,
+    pub timestamp: u64,
+    pub is_stale: bool,
+}
+
 /// Min/max price bounds for an asset to prevent fat-finger errors.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
