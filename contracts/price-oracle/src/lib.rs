@@ -177,6 +177,8 @@ pub enum Error {
     MaxAdminsReached = 12,
     /// Cannot remove admin - would leave contract without any admins.
     CannotRemoveLastAdmin = 13,
+    /// Reentrancy detected - function is already executing.
+    ReentrancyDetected = 14,
 }
 
 #[contract]
@@ -295,6 +297,28 @@ fn _require_not_destroyed(env: &Env) {
 /// `true` if the price is stale (expired), `false` otherwise
 pub fn is_stale(current_time: u64, stored_timestamp: u64, ttl: u64) -> bool {
     current_time >= stored_timestamp.saturating_add(ttl)
+}
+
+/// Acquire the reentrancy lock for set_price.
+/// Returns an error if the lock is already held.
+fn acquire_lock(env: &Env) -> Result<(), Error> {
+    let is_locked: bool = env
+        .storage()
+        .instance()
+        .get(&DataKey::IsLocked)
+        .unwrap_or(false);
+    
+    if is_locked {
+        return Err(Error::ReentrancyDetected);
+    }
+    
+    env.storage().instance().set(&DataKey::IsLocked, &true);
+    Ok(())
+}
+
+/// Release the reentrancy lock for set_price.
+fn release_lock(env: &Env) {
+    env.storage().instance().set(&DataKey::IsLocked, &false);
 }
 
 /// Contract version - must match Cargo.toml version
@@ -791,37 +815,80 @@ impl PriceOracle {
     /// full `storage().set()` call is skipped entirely.  Only the timestamp
     /// field is updated in-place, saving the write fee for the price value
     /// while keeping the freshness indicator current.
+    ///
+    /// # Reentrancy Protection
+    /// This function is protected against cross-function state manipulation
+    /// using a reentrancy lock (DataKey::IsLocked).
     pub fn set_price(env: Env, asset: Symbol, val: i128, decimals: u32, ttl: u64) {
         _require_not_destroyed(&env);
-        if !is_valid(val) {
-            panic_with_error!(&env, Error::InvalidPrice);
-        }
-        if let Err(err) = enforce_price_floor(&env, &asset, val) {
+        
+        // Acquire reentrancy lock
+        if let Err(err) = acquire_lock(&env) {
             panic_with_error!(&env, err);
         }
-
-        let storage = env.storage().temporary();
-        let key = DataKey::VerifiedPrice(asset.clone());
-        let existing: Option<PriceData> = storage.get(&key);
-        let is_new_asset = existing.is_none();
-
-        track_asset(&env, asset.clone());
-
-        let now = env.ledger().timestamp();
-
-        if let Some(mut current) = existing {
-            if current.price == val {
-                // Price unchanged — only refresh the timestamp (zero-write optimisation).
-                current.timestamp = now;
-                storage.set(&key, &current);
-                env.events().publish_event(&PriceUpdatedEvent { asset: asset.clone(), price: val });
-                log_event(&env, Symbol::new(&env, "price_updated"), asset, val);
-                return;
+        
+        // Ensure lock is released even on error
+        let result = (|| -> Result<(), Error> {
+            if !is_valid(val) {
+                return Err(Error::InvalidPrice);
             }
-        }
+            if let Err(err) = enforce_price_floor(&env, &asset, val) {
+                return Err(err);
+            }
 
-        let price_data = PriceData {
-            price: val,
+            let storage = env.storage().temporary();
+            let key = DataKey::VerifiedPrice(asset.clone());
+            let existing: Option<PriceData> = storage.get(&key);
+            let is_new_asset = existing.is_none();
+
+            track_asset(&env, asset.clone());
+
+            let now = env.ledger().timestamp();
+
+            if let Some(mut current) = existing {
+                if current.price == val {
+                    // Price unchanged — only refresh the timestamp (zero-write optimisation).
+                    current.timestamp = now;
+                    storage.set(&key, &current);
+                    env.events().publish_event(&PriceUpdatedEvent { asset: asset.clone(), price: val });
+                    log_event(&env, Symbol::new(&env, "price_updated"), asset, val);
+                    return Ok(());
+                }
+            }
+
+            let price_data = PriceData {
+                price: val,
+                timestamp: now,
+                provider: env.current_contract_address(),
+                decimals,
+                confidence_score: 100,
+                ttl,
+            };
+
+            storage.set(&key, &price_data);
+
+            if is_new_asset {
+                env.events().publish_event(&AssetAddedEvent { symbol: asset.clone() });
+                log_event(&env, Symbol::new(&env, "asset_added"), asset, val);
+            } else {
+                log_event(&env, Symbol::new(&env, "price_updated"), asset.clone(), val);
+                env.events().publish_event(&PriceUpdatedEvent {
+                    asset: asset.clone(),
+                    price: val,
+                });
+            }
+            
+            Ok(())
+        })();
+        
+        // Always release lock
+        release_lock(&env);
+        
+        // Propagate error if any
+        if let Err(err) = result {
+            panic_with_error!(&env, err);
+        }
+    }
             timestamp: now,
             provider: env.current_contract_address(),
             decimals,
