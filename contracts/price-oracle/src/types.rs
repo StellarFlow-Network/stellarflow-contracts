@@ -16,12 +16,19 @@ pub enum DataKey {
     AdminUpdateTimestamp,
     RecentEvents,
     Initialized,
-    AssetDescription(Symbol),
     /// Verified price bucket: written only by whitelisted providers / admins.
     /// Internal math and `get_price` default to this bucket.
     VerifiedPrice(Symbol),
     /// Community price bucket: written by any caller; never used in internal math.
     CommunityPrice(Symbol),
+    /// Reentrancy lock for set_price function.
+    IsLocked,
+    /// Query fee amount for get_price calls.
+    QueryFee,
+    /// List of all active relayer addresses.
+    ActiveRelayers,
+    /// Destroyed flag to mark contract as permanently unusable.
+    Destroyed,
 }
 
 /// Canonical storage format for a price entry.
@@ -110,4 +117,18 @@ pub struct PriceBuffer {
     pub decimals: u32,
     /// Time-to-live in seconds for this buffer.
     pub ttl: u64,
+}
+
+/// Health status of the oracle for the Admin Dashboard.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OracleHealth {
+    /// Number of active relayers (whitelisted providers).
+    pub active_relayers: u32,
+    /// Whether the contract is currently paused.
+    pub paused: bool,
+    /// Total number of tracked assets.
+    pub total_assets: u32,
+    /// Current ledger sequence number.
+    pub last_ledger: u32,
 }

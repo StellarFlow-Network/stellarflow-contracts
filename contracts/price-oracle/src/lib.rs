@@ -130,6 +130,12 @@ pub trait StellarFlowTrait {
 
     /// Get the total number of registered admins.
     fn get_admin_count(env: Env) -> u32;
+
+    /// Get the health status of the oracle for the Admin Dashboard.
+    ///
+    /// Returns aggregated data from multiple storage keys in a single call.
+    /// This is a read-only function that provides a snapshot of the oracle's current state.
+    fn get_oracle_health(env: Env) -> crate::types::OracleHealth;
 }
 
 #[contractclient(name = "TokenContractClient")]
@@ -1389,6 +1395,24 @@ impl PriceOracle {
     pub fn get_relayer_count(env: Env, asset: Symbol) -> u32 {
         let buffer = get_price_buffer(&env, asset);
         buffer.entries.len()
+    }
+
+    /// Get the health status of the oracle for the Admin Dashboard.
+    ///
+    /// This is a read-only function that aggregates data from 4 different storage keys
+    /// into one single return object for efficient dashboard queries.
+    pub fn get_oracle_health(env: Env) -> crate::types::OracleHealth {
+        let active_relayers = crate::auth::_get_active_relayers(&env).len();
+        let paused = crate::auth::_is_paused(&env);
+        let total_assets = get_tracked_assets(&env).len();
+        let last_ledger = env.ledger().sequence();
+
+        crate::types::OracleHealth {
+            active_relayers,
+            paused,
+            total_assets,
+            last_ledger,
+        }
     }
 }
 
