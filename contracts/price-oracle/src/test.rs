@@ -603,6 +603,38 @@ fn test_price_volatility_increase() {
 }
 
 #[test]
+fn test_twap_buffer_limits_to_10_entries_and_calculates_average() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+    let asset = symbol_short!("NGN");
+
+    let admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        crate::auth::_set_admin(&env, &soroban_sdk::vec![&env, admin.clone()]);
+    });
+
+    client.add_asset(&admin, &asset);
+
+    // Initial TWAP is None
+    assert_eq!(client.get_twap(&asset), None);
+
+    // Push 15 prices
+    for i in 1..=15 {
+        env.ledger().set_timestamp(1_000_000 + i * 10);
+        client.set_price(&asset, &(i as i128 * 100), &6, &3600);
+    }
+
+    // Since max entries is 10, it should only keep the last 10 entries.
+    // The prices kept should be: 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500
+    // Sum = 10500. Average = 1050
+    assert_eq!(client.get_twap(&asset), Some(1050));
+}
+
+#[test]
 fn test_price_volatility_decrease() {
     assert_eq!(
         calculate_price_volatility(1_200_000, 1_000_000),
