@@ -145,6 +145,30 @@ pub fn normalize_to_nine(value: i128, native_decimals: u32) -> i128 {
     }
 }
 
+/// Calculate the inverse of a price (e.g., NGN/XLM → XLM/NGN).
+///
+/// Uses a fixed-point scale factor of `10^decimals` so that the result
+/// preserves the same decimal precision as the input.
+///
+/// Formula: `(10^decimals * 10^decimals) / price`
+///
+/// # Returns
+/// `Some(inverse)` on success, or `None` when `price` is zero (divide-by-zero).
+///
+/// # Examples
+/// ```text
+/// calculate_inverse_price(2_000, 3)  => Some(500_000)   // 1/2.000 = 0.500 (scaled)
+/// calculate_inverse_price(0,     7)  => None             // divide-by-zero guard
+/// ```
+pub fn calculate_inverse_price(price: i128, decimals: u32) -> Option<i128> {
+    if price == 0 {
+        return None;
+    }
+    let scale = 10_i128.checked_pow(decimals)?;
+    let numerator = scale.checked_mul(scale)?;
+    numerator.checked_div(price)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
