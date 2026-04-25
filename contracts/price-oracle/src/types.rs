@@ -30,6 +30,8 @@ pub enum DataKey {
     Destroyed,
     /// Asset decimal metadata (base_decimals, quote_decimals).
     AssetMeta(Symbol),
+    /// List of contracts subscribed to price update callbacks.
+    PriceUpdateSubscribers,
 }
 
 /// Decimal metadata for an asset pair.
@@ -145,4 +147,25 @@ pub struct OracleHealth {
     pub total_assets: u32,
     /// Current ledger sequence number.
     pub last_ledger: u32,
+}
+
+/// Callback payload sent to subscribed contracts when a price is updated.
+///
+/// This struct is passed to the `on_price_update` function of subscribed contracts.
+/// It contains all necessary information for a downstream contract to react to price changes.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PriceUpdatePayload {
+    /// The asset symbol that was updated (e.g., NGN, KES, GHS).
+    pub asset: Symbol,
+    /// The new price value (normalized to 9 decimal places).
+    pub price: i128,
+    /// Timestamp when the price was updated.
+    pub timestamp: u64,
+    /// The provider/relayer that submitted this price update.
+    pub provider: Address,
+    /// Number of decimals for the price (always 9 for normalized prices).
+    pub decimals: u32,
+    /// Confidence score (0-100, higher is more confident).
+    pub confidence_score: u32,
 }
