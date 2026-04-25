@@ -1,6 +1,7 @@
 use soroban_sdk::{contracttype, Address, Symbol};
 
 /// Storage keys for contract data
+#[allow(clippy::enum_variant_names)] // Soroban SDK generates these names
 #[contracttype]
 pub enum DataKey {
     Admin,

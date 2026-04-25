@@ -4,8 +4,7 @@ use soroban_sdk::{
     contract, contractclient, contracterror, contractimpl, panic_with_error, Address, Env, Symbol, String, token,
 };
 
-use crate::types::{DataKey, PriceBounds, PriceData, PriceDataWithStatus, PriceEntryWithStatus, RecentEvent};
-use crate::types::{DataKey, PriceBounds, PriceBuffer, PriceBufferEntry, PriceData, RecentEvent};
+use crate::types::{DataKey, PriceBounds, PriceBuffer, PriceBufferEntry, PriceData, PriceDataWithStatus, PriceEntryWithStatus, RecentEvent, AdminAction, AdminLogEntry};
 
 const ADMIN_TIMELOCK: u64 = 86_400;
 const MAX_CLEAR_ASSETS: u32 = 20;
@@ -283,10 +282,10 @@ fn is_valid(price: i128) -> bool {
     price > 0
 }
 
-fn is_whitelisted_provider(env: &Env, source: &Address) -> bool {
+/// Checks if the given address is a whitelisted provider.
+fn _is_whitelisted_provider(env: &Env, source: &Address) -> bool {
     crate::auth::_is_provider(env, source)
 }
-
 /// Panic if the contract has been destroyed.
 fn _require_not_destroyed(env: &Env) {
     if env.storage().instance().has(&DataKey::Destroyed) {
@@ -342,12 +341,12 @@ fn get_tracked_assets(env: &Env) -> soroban_sdk::Vec<Symbol> {
         .unwrap_or_else(|| soroban_sdk::Vec::new(&env))
 }
 
-fn set_tracked_assets(env: &Env, assets: &soroban_sdk::Vec<Symbol>) {
+fn _set_tracked_assets(env: &Env, assets: &soroban_sdk::Vec<Symbol>) {
     env.storage().instance().set(&DataKey::BaseCurrencyPairs, assets);
 }
 
 /// Get the price buffer for a specific asset.
-/// Returns a new empty buffer if none exists.
+/// Returns a new empty buffer if none exists for the current ledger.
 fn get_price_buffer(env: &Env, asset: Symbol) -> PriceBuffer {
     let storage_key = DataKey::PriceBuffer;
     let buffers: soroban_sdk::Map<Symbol, PriceBuffer> = env
@@ -408,41 +407,13 @@ fn calculate_median_from_buffer(env: &Env, buffer: &PriceBuffer) -> Option<i128>
     crate::median::calculate_median(prices).ok()
 }
 
-fn track_asset(env: &Env, asset: Symbol) {
+/// Adds an asset to the list of tracked assets if it's not already present.
+fn _track_asset(env: &Env, asset: Symbol) {
     let mut assets = get_tracked_assets(env);
     if !assets.contains(&asset) {
-        assets.push_back(asset);
-        set_tracked_assets(env, &assets);
+        assets.push_back(asset.clone());
+        _set_tracked_assets(env, &assets);
     }
-}
-
-fn clear_assets_from_storage(env: &Env, assets: soroban_sdk::Vec<Symbol>) -> Result<(), Error> {
-    if assets.len() > MAX_CLEAR_ASSETS {
-        return Err(Error::TooManyAssets);
-    }
-
-    let storage = env.storage().persistent();
-    let mut prices: soroban_sdk::Map<Symbol, PriceData> = storage
-        .get(&DataKey::PriceData)
-        .unwrap_or_else(|| soroban_sdk::Map::new(env));
-
-    for asset in assets.iter() {
-        storage.remove(&DataKey::Price(asset.clone()));
-        prices.remove(asset.clone());
-    }
-
-    storage.set(&DataKey::PriceData, &prices);
-
-    let tracked = get_tracked_assets(env);
-    let mut remaining_assets = soroban_sdk::Vec::new(env);
-    for tracked_asset in tracked.iter() {
-        if !assets.contains(&tracked_asset) {
-            remaining_assets.push_back(tracked_asset);
-        }
-    }
-    set_tracked_assets(env, &remaining_assets);
-
-    Ok(())
 }
 
 fn log_event(env: &Env, event_type: Symbol, asset: Symbol, price: i128) {
@@ -523,6 +494,7 @@ impl PriceOracle {
             (admin.clone(), String::from_str(&env, VERSION)),
         );
 
+        _log_admin_action(&env, &admin, AdminAction::Initialize, None);
         let admins = soroban_sdk::vec![&env, admin];
         crate::auth::_set_admin(&env, &admins);
         env.storage()
@@ -549,6 +521,7 @@ impl PriceOracle {
             (admin.clone(), String::from_str(&env, VERSION)),
         );
 
+        _log_admin_action(&env, &admin, AdminAction::InitAdmin, None);
         let admins = soroban_sdk::vec![&env, admin];
         crate::auth::_set_admin(&env, &admins);
 
@@ -564,7 +537,7 @@ impl PriceOracle {
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
 
-        track_asset(&env, asset.clone());
+        _track_asset(&env, asset.clone());
 
         let key = DataKey::VerifiedPrice(asset.clone());
         if env.storage().temporary().get::<DataKey, PriceData>(&key).is_none() {
@@ -581,6 +554,7 @@ impl PriceOracle {
             );
         }
 
+        _log_admin_action(&env, &admin, AdminAction::AddAsset, Some(asset.to_string()));
         env.events().publish_event(&AssetAddedEvent { symbol: asset.clone() });
         log_event(&env, Symbol::new(&env, "asset_added"), asset, 0);
 
@@ -605,6 +579,7 @@ impl PriceOracle {
         current_admin.require_auth();
         crate::auth::_require_authorized(&env, &current_admin);
 
+        _log_admin_action(&env, &current_admin, AdminAction::TransferAdminInitiated, Some(new_admin.to_string()));
         let now = env.ledger().timestamp();
 
         env.storage().instance().set(&DataKey::PendingAdmin, &new_admin);
@@ -640,6 +615,7 @@ impl PriceOracle {
             panic!("Timelock not expired");
         }
 
+        _log_admin_action(&env, &new_admin, AdminAction::TransferAdminAccepted, None);
         let admins = soroban_sdk::vec![&env, new_admin.clone()];
         crate::auth::_set_admin(&env, &admins);
 
@@ -663,6 +639,7 @@ impl PriceOracle {
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
 
+        _log_admin_action(&env, &admin, AdminAction::RenounceOwnership, None);
         crate::auth::_renounce_ownership(&env);
 
         env.events().publish_event(&OwnershipRenouncedEvent {
@@ -989,6 +966,7 @@ impl PriceOracle {
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
 
+        _log_admin_action(&env, &admin, AdminAction::RescueTokens, Some(format!("Token: {}, To: {}, Amount: {}", token.to_string(), to.to_string(), amount)));
         if amount <= 0 {
             panic_with_error!(&env, Error::InvalidPrice);
         }
@@ -1011,6 +989,7 @@ impl PriceOracle {
         _require_not_destroyed(&env);
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
+        _log_admin_action(&env, &admin, AdminAction::Upgrade, Some(format!("New WASM hash: {:?}", new_wasm_hash)));
         env.deployer().update_current_contract_wasm(new_wasm_hash);
     }
 
@@ -1022,6 +1001,7 @@ impl PriceOracle {
         _require_not_destroyed(&env);
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
+        _log_admin_action(&env, &admin, AdminAction::RemoveAsset, Some(asset.to_string()));
 
         let storage = env.storage().temporary();
 
@@ -1060,14 +1040,14 @@ impl PriceOracle {
         source.require_auth();
 
         if !get_tracked_assets(&env).contains(&asset) {
-            return Err(Error::InvalidAssetSymbol);
+            return Err(Error::AssetNotFound);
         }
 
         if !is_valid(price) {
             return Err(Error::InvalidPrice);
         }
 
-        if !is_whitelisted_provider(&env, &source) {
+        if !_is_whitelisted_provider(&env, &source) {
             return Err(Error::NotAuthorized);
         }
 
@@ -1165,6 +1145,7 @@ impl PriceOracle {
     pub fn set_price_floor(env: Env, admin: Address, asset: Symbol, price_floor: i128) {
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
+        _log_admin_action(&env, &admin, AdminAction::SetPriceFloor, Some(format!("{}: {}", asset.to_string(), price_floor)));
 
         assert!(price_floor > 0, "price_floor must be positive");
 
@@ -1200,6 +1181,7 @@ impl PriceOracle {
         _require_not_destroyed(&env);
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
+        _log_admin_action(&env, &admin, AdminAction::SetPriceBounds, Some(format!("{}: min={}, max={}", asset.to_string(), min_price, max_price)));
 
         assert!(min_price > 0 && max_price > 0, "bounds must be positive");
         assert!(min_price <= max_price, "min_price must be <= max_price");
@@ -1305,6 +1287,7 @@ impl PriceOracle {
         // Toggle the pause state
         let current_paused = crate::auth::_is_paused(&env);
         let new_paused = !current_paused;
+        _log_admin_action(&env, &admin1, AdminAction::TogglePause, Some(format!("New state: {}", new_paused)));
         crate::auth::_set_paused(&env, new_paused);
 
         // Emit event
@@ -1349,6 +1332,7 @@ impl PriceOracle {
             return Err(Error::MaxAdminsReached);
         }
 
+        _log_admin_action(&env, &admin1, AdminAction::RegisterAdmin, Some(new_admin.to_string()));
         // Add the new admin
         crate::auth::_add_authorized(&env, &new_admin);
 
@@ -1399,6 +1383,7 @@ impl PriceOracle {
             return Err(Error::NotAuthorized);
         }
 
+        _log_admin_action(&env, &admin1, AdminAction::RemoveAdmin, Some(admin_to_remove.to_string()));
         // Remove the admin
         crate::auth::_remove_authorized(&env, &admin_to_remove);
 
@@ -1425,6 +1410,7 @@ impl PriceOracle {
             return Err(Error::MultiSigValidationFailed);
         }
 
+        _log_admin_action(&env, &admin1, AdminAction::SelfDestruct, None);
         crate::auth::_require_authorized(&env, &admin1);
         crate::auth::_require_authorized(&env, &admin2);
 
