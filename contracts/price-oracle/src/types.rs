@@ -25,6 +25,21 @@ pub enum DataKey {
     QueryFee,
     /// Destroyed flag to mark contract as permanently unusable.
     Destroyed,
+    /// Asset decimal metadata (base_decimals, quote_decimals).
+    AssetMeta(Symbol),
+}
+
+/// Decimal metadata for an asset pair.
+///
+/// Stores the native decimal precision of the base and quote assets so the
+/// contract can normalize all prices to 9 fixed-point decimals on entry.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssetMeta {
+    /// Native decimal precision of the base asset (e.g. 7 for XLM).
+    pub base_decimals: u32,
+    /// Native decimal precision of the quote asset (e.g. 2 for NGN).
+    pub quote_decimals: u32,
 }
 
 /// Canonical storage format for a price entry.
