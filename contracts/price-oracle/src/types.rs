@@ -17,12 +17,15 @@ pub enum DataKey {
     AdminUpdateTimestamp,
     RecentEvents,
     Initialized,
-    AssetDescription(Symbol),
     /// Verified price bucket: written only by whitelisted providers / admins.
     /// Internal math and `get_price` default to this bucket.
     VerifiedPrice(Symbol),
     /// Community price bucket: written by any caller; never used in internal math.
     CommunityPrice(Symbol),
+    /// Query fee amount for get_price calls (in stroops).
+    QueryFee,
+    /// Destroyed flag to mark contract as permanently unusable.
+    Destroyed,
 }
 
 /// Canonical storage format for a price entry.
@@ -113,35 +116,16 @@ pub struct PriceBuffer {
     pub ttl: u64,
 }
 
-/// Enum representing different types of admin actions that can be logged.
+/// Health status of the oracle for the Admin Dashboard.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum AdminAction {
-    Initialize,
-    InitAdmin,
-    AddAsset,
-    RemoveAsset,
-    SetPriceFloor,
-    SetPriceBounds,
-    SetAssetDescription,
-    TransferAdminInitiated,
-    TransferAdminAccepted,
-    RenounceOwnership,
-    RescueTokens,
-    Upgrade,
-    TogglePause,
-    RegisterAdmin,
-    RemoveAdmin,
-    SelfDestruct,
-}
-
-/// Structure for an entry in the persistent admin action audit log.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AdminLogEntry {
-    pub id: u32,
-    pub action: AdminAction,
-    pub admin: Address,
-    pub timestamp: u64,
-    pub details: Option<String>, // Generic string for additional context
+pub struct OracleHealth {
+    /// Number of active relayers (whitelisted providers).
+    pub active_relayers: u32,
+    /// Whether the contract is currently paused.
+    pub paused: bool,
+    /// Total number of tracked assets.
+    pub total_assets: u32,
+    /// Current ledger sequence number.
+    pub last_ledger: u32,
 }

@@ -10,6 +10,7 @@ pub enum DataKey {
     Provider(Address),
     ProviderWeight(Address),
     IsPaused,
+    ActiveRelayers,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -112,6 +113,7 @@ pub fn _add_provider(env: &Env, provider: &Address) {
     env.storage()
         .instance()
         .set(&DataKey::Provider(provider.clone()), &true);
+    _add_to_active_relayers(env, provider);
 }
 
 /// Remove a provider from the whitelist.
@@ -119,6 +121,7 @@ pub fn _remove_provider(env: &Env, provider: &Address) {
     env.storage()
         .instance()
         .remove(&DataKey::Provider(provider.clone()));
+    _remove_from_active_relayers(env, provider);
 }
 
 /// Returns `true` if the address is a whitelisted provider.
@@ -147,6 +150,35 @@ pub fn _get_provider_weight(env: &Env, provider: &Address) -> u32 {
         .instance()
         .get::<DataKey, u32>(&DataKey::ProviderWeight(provider.clone()))
         .unwrap_or(0)
+}
+
+/// Get the list of all active relayers (whitelisted providers).
+pub fn _get_active_relayers(env: &Env) -> Vec<Address> {
+    env.storage()
+        .instance()
+        .get(&DataKey::ActiveRelayers)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+/// Add a relayer to the active relayers list.
+fn _add_to_active_relayers(env: &Env, provider: &Address) {
+    let mut relayers = _get_active_relayers(env);
+    if !relayers.iter().any(|r| r == *provider) {
+        relayers.push_back(provider.clone());
+        env.storage().instance().set(&DataKey::ActiveRelayers, &relayers);
+    }
+}
+
+/// Remove a relayer from the active relayers list.
+fn _remove_from_active_relayers(env: &Env, provider: &Address) {
+    let relayers = _get_active_relayers(env);
+    let mut filtered = Vec::new(env);
+    for relayer in relayers.iter() {
+        if relayer != *provider {
+            filtered.push_back(relayer);
+        }
+    }
+    env.storage().instance().set(&DataKey::ActiveRelayers, &filtered);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
