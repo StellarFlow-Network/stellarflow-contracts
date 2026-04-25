@@ -99,6 +99,10 @@ pub fn _set_paused(env: &Env, paused: bool) {
     env.storage().instance().set(&DataKey::IsPaused, &paused);
 }
 
+pub fn _remove_paused(env: &Env) {
+    env.storage().instance().remove(&DataKey::IsPaused);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Provider Helpers
 // ─────────────────────────────────────────────────────────────────────────────

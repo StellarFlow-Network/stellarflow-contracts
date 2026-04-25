@@ -2074,3 +2074,172 @@ fn test_full_multi_sig_workflow() {
     let paused = client.toggle_pause(&admin1, &admin3);
     assert_eq!(paused, false);
 }
+
+// ============================================================================
+// Self-Destruct Tests
+// ============================================================================
+
+#[test]
+fn test_self_destruct_requires_two_admins() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let admin1 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin2 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+    client.init_admin(&admin1);
+    env.as_contract(&contract_id, || {
+        crate::auth::_add_authorized(&env, &admin2);
+    });
+
+    client.self_destruct(&admin1, &admin2);
+
+    // Verify contract is destroyed — no admins remain
+    env.as_contract(&contract_id, || {
+        assert!(!crate::auth::_has_admin(&env));
+        assert!(env.storage().instance().has(&DataKey::Destroyed));
+    });
+}
+
+#[test]
+fn test_self_destruct_fails_with_same_admin_twice() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let admin1 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin2 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+    client.init_admin(&admin1);
+    env.as_contract(&contract_id, || {
+        crate::auth::_add_authorized(&env, &admin2);
+    });
+
+    let result = client.try_self_destruct(&admin1, &admin1);
+    match result {
+        Err(Ok(e)) => assert_eq!(e, Error::MultiSigValidationFailed),
+        other => panic!("expected MultiSigValidationFailed, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_self_destruct_fails_with_non_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let admin1 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin2 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let non_admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+    client.init_admin(&admin1);
+    env.as_contract(&contract_id, || {
+        crate::auth::_add_authorized(&env, &admin2);
+    });
+
+    let result = client.try_self_destruct(&admin1, &non_admin);
+    match result {
+        Err(Ok(e)) => assert_eq!(e, Error::MultiSigValidationFailed),
+        other => panic!("expected MultiSigValidationFailed, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_self_destruct_fails_with_only_one_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let admin1 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let fake_admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+    client.init_admin(&admin1);
+
+    let result = client.try_self_destruct(&admin1, &fake_admin);
+    match result {
+        Err(Ok(e)) => assert_eq!(e, Error::MultiSigValidationFailed),
+        other => panic!("expected MultiSigValidationFailed, got {:?}", other),
+    }
+}
+
+#[test]
+#[should_panic(expected = "Error(ContractDestroyed)")]
+fn test_self_destruct_blocks_admin_functions() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let admin1 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin2 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+    client.init_admin(&admin1);
+    env.as_contract(&contract_id, || {
+        crate::auth::_add_authorized(&env, &admin2);
+    });
+
+    // Destroy the contract
+    client.self_destruct(&admin1, &admin2);
+
+    // Any admin-only function should now fail with ContractDestroyed
+    let dummy_hash = soroban_sdk::BytesN::from_array(&env, &[0u8; 32]);
+    client.upgrade(&admin1, &dummy_hash);
+}
+
+#[test]
+fn test_self_destruct_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let admin1 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin2 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+    client.init_admin(&admin1);
+    env.as_contract(&contract_id, || {
+        crate::auth::_add_authorized(&env, &admin2);
+    });
+
+    client.self_destruct(&admin1, &admin2);
+
+    let events = env.events().all();
+    let debug_str = alloc::format!("{:?}", events);
+    assert!(debug_str.contains("contract_destroyed"), "Should emit contract_destroyed event");
+    assert!(debug_str.contains(&format!("{:?}", admin1)), "Event should contain admin1");
+    assert!(debug_str.contains(&format!("{:?}", admin2)), "Event should contain admin2");
+}
+
+#[test]
+#[should_panic(expected = "Error(ContractDestroyed)")]
+fn test_self_destruct_prevents_double_destruct() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let admin1 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin2 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+
+    client.init_admin(&admin1);
+    env.as_contract(&contract_id, || {
+        crate::auth::_add_authorized(&env, &admin2);
+    });
+
+    client.self_destruct(&admin1, &admin2);
+
+    // Second call should panic with ContractDestroyed
+    client.self_destruct(&admin1, &admin2);
+}
