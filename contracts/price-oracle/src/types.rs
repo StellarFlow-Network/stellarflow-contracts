@@ -9,6 +9,7 @@ pub enum DataKey {
     PriceData,
     PriceBuffer,
     PriceBoundsData,
+    PriceFloorData,
     AssetDescription(Symbol),
     PendingAdmin,
     PendingAdminTimestamp,

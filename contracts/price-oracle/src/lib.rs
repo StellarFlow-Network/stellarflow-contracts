@@ -65,6 +65,14 @@ pub trait StellarFlowTrait {
     /// The new asset is added to the internal asset list and initialized with a zero-price placeholder.
     fn add_asset(env: Env, admin: Address, asset: Symbol) -> Result<(), Error>;
 
+    /// Set an absolute floor price for an asset.
+    ///
+    /// Any attempted price update below this value will be rejected.
+    fn set_price_floor(env: Env, admin: Address, asset: Symbol, price_floor: i128);
+
+    /// Get the configured absolute floor price for an asset, if any.
+    fn get_price_floor(env: Env, asset: Symbol) -> Option<i128>;
+
     /// Get the current admin address.
     ///
     /// Returns the address of the contract administrator.
@@ -122,6 +130,11 @@ pub trait StellarFlowTrait {
 
     /// Get the total number of registered admins.
     fn get_admin_count(env: Env) -> u32;
+}
+
+#[contractclient(name = "TokenContractClient")]
+pub trait TokenContractTrait {
+    fn transfer(env: Env, from: Address, to: Address, amount: i128);
 }
 
 /// Maximum allowed percentage change between price updates (10% = 1000 basis points).
@@ -413,12 +426,31 @@ fn log_event(env: &Env, event_type: Symbol, asset: Symbol, price: i128) {
     env.storage().instance().set(&DataKey::RecentEvents, &events);
 }
 
+fn read_price_floor(env: &Env, asset: &Symbol) -> Option<i128> {
+    let floors: soroban_sdk::Map<Symbol, i128> = env
+        .storage()
+        .persistent()
+        .get(&DataKey::PriceFloorData)
+        .unwrap_or_else(|| soroban_sdk::Map::new(env));
+    floors.get(asset.clone())
+}
+
+fn enforce_price_floor(env: &Env, asset: &Symbol, price: i128) -> Result<(), Error> {
+    if let Some(price_floor) = read_price_floor(env, asset) {
+        if price < price_floor {
+            return Err(Error::PriceOutOfBounds);
+        }
+    }
+
+    Ok(())
+}
+
 #[contractimpl]
 impl PriceOracle {
     /// Initialize the contract with admin and base currency pairs.
     /// Can only be called once.
     pub fn initialize(env: Env, admin: Address, base_currency_pairs: soroban_sdk::Vec<Symbol>) {
-        if env.storage().instance().has(&DataKey::Admin) {
+        if env.storage().instance().has(&DataKey::Initialized) || crate::auth::_has_admin(&env) {
             panic_with_error!(&env, Error::AlreadyInitialized);
         }
 
@@ -750,6 +782,9 @@ impl PriceOracle {
         if !is_valid(val) {
             panic_with_error!(&env, Error::InvalidPrice);
         }
+        if let Err(err) = enforce_price_floor(&env, &asset, val) {
+            panic_with_error!(&env, err);
+        }
 
         let storage = env.storage().temporary();
         let key = DataKey::VerifiedPrice(asset.clone());
@@ -939,7 +974,6 @@ impl PriceOracle {
             .map(|pd| pd.price)
             .unwrap_or(0);
 
-        // Flash crash protection: reject if price change exceeds MAX_PERCENT_CHANGE
         if old_price > 0 {
             if let Some(pct_change_bps) = calculate_percentage_difference_bps(old_price, price) {
                 if pct_change_bps > MAX_PERCENT_CHANGE_BPS {
@@ -960,6 +994,8 @@ impl PriceOracle {
                 // Still allow the submission even if anomaly detected
             }
         }
+
+        enforce_price_floor(&env, &asset, price)?;
 
         let storage = env.storage().persistent();
         let bounds_map: soroban_sdk::Map<Symbol, PriceBounds> = storage
@@ -1010,6 +1046,34 @@ impl PriceOracle {
         Ok(())
     }
 
+    /// Set an absolute floor price for an asset.
+    pub fn set_price_floor(env: Env, admin: Address, asset: Symbol, price_floor: i128) {
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        assert!(price_floor > 0, "price_floor must be positive");
+
+        if let Some(bounds) = Self::get_price_bounds(env.clone(), asset.clone()) {
+            assert!(
+                price_floor <= bounds.max_price,
+                "price_floor must be <= max_price"
+            );
+        }
+
+        let storage = env.storage().persistent();
+        let mut floor_map: soroban_sdk::Map<Symbol, i128> = storage
+            .get(&DataKey::PriceFloorData)
+            .unwrap_or_else(|| soroban_sdk::Map::new(&env));
+
+        floor_map.set(asset, price_floor);
+        storage.set(&DataKey::PriceFloorData, &floor_map);
+    }
+
+    /// Get the configured absolute floor price for an asset, if any.
+    pub fn get_price_floor(env: Env, asset: Symbol) -> Option<i128> {
+        read_price_floor(&env, &asset)
+    }
+
     /// Set the min/max price bounds for an asset.
     pub fn set_price_bounds(
         env: Env,
@@ -1023,8 +1087,11 @@ impl PriceOracle {
 
         assert!(min_price > 0 && max_price > 0, "bounds must be positive");
         assert!(min_price <= max_price, "min_price must be <= max_price");
+        if let Some(price_floor) = read_price_floor(&env, &asset) {
+            assert!(price_floor <= max_price, "price_floor must be <= max_price");
+        }
 
-        let storage = env.storage().temporary();
+        let storage = env.storage().persistent();
         let mut bounds_map: soroban_sdk::Map<Symbol, PriceBounds> = storage
             .get(&DataKey::PriceBoundsData)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
@@ -1043,7 +1110,7 @@ impl PriceOracle {
     pub fn get_price_bounds(env: Env, asset: Symbol) -> Option<PriceBounds> {
         let bounds_map: soroban_sdk::Map<Symbol, PriceBounds> = env
             .storage()
-            .temporary()
+            .persistent()
             .get(&DataKey::PriceBoundsData)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
         bounds_map.get(asset)
