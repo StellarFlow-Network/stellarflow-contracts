@@ -21,8 +21,8 @@ pub enum DataKey {
     VerifiedPrice(Symbol),
     /// Community price bucket: written by any caller; never used in internal math.
     CommunityPrice(Symbol),
-    /// Reentrancy lock for set_price function.
-    IsLocked,
+    /// Query fee amount for get_price calls (in stroops).
+    QueryFee,
     /// Destroyed flag to mark contract as permanently unusable.
     Destroyed,
 }
