@@ -5,7 +5,7 @@ use soroban_sdk::{contracttype, Address, Symbol};
 pub enum DataKey {
     Admin,
     BaseCurrencyPairs,
-    Price(Symbol),
+    /// Legacy flat price map — kept for migration compatibility only.
     PriceData,
     PriceBuffer,
     PriceBoundsData,

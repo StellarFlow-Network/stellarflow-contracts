@@ -164,8 +164,6 @@ pub enum Error {
     MaxAdminsReached = 12,
     /// Cannot remove admin - would leave contract without any admins.
     CannotRemoveLastAdmin = 13,
-    /// Requested asset batch exceeds the supported maximum.
-    TooManyAssets = 13,
 }
 
 #[contract]
@@ -585,56 +583,19 @@ impl PriceOracle {
     }
 
     /// Get the price data for a specific asset.
-    /// Returns error if price is stale.
-    /// 
-    /// This function now returns the median price from the relayer buffer
-    /// if multiple submissions exist for the current ledger.
-    pub fn get_price(env: Env, asset: Symbol) -> Result<PriceData, Error> {
-        // First, try to get the median from the buffer
-        let buffer = get_price_buffer(&env, asset.clone());
-        
-        // Calculate median if buffer has entries
-        if buffer.entries.len() > 0 {
-            let median_price = calculate_median_from_buffer(&env, &buffer).unwrap_or(0);
-            
-            // Check if buffer is stale
-            let now = env.ledger().timestamp();
-            if is_stale(now, buffer.entries.get(0).unwrap().timestamp, buffer.ttl) {
-                return Err(Error::AssetNotFound);
-            }
-
-            // Get confidence score and other metadata from legacy storage
-            let storage = env.storage().persistent();
-            let prices: soroban_sdk::Map<Symbol, PriceData> = storage
-                .get(&DataKey::PriceData)
-                .unwrap_or_else(|| soroban_sdk::Map::new(&env));
-            
-            let metadata = prices.get(asset.clone()).unwrap_or(PriceData {
-                price: 0,
-                timestamp: 0,
-                provider: env.current_contract_address(),
-                decimals: buffer.decimals,
-                confidence_score: 100,
-                ttl: buffer.ttl,
-            });
-
-            // Return PriceData with median price but preserved metadata
-            return Ok(PriceData {
-                price: median_price,
-                timestamp: buffer.entries.get(0).unwrap().timestamp,
-                provider: buffer.entries.get(0).unwrap().provider,
-                decimals: buffer.decimals,
-                confidence_score: metadata.confidence_score,
-                ttl: buffer.ttl,
-            });
-        }
-
-        // Fallback to legacy PriceData storage
-        let storage = env.storage().persistent();
-        let storage = env.storage().temporary();
-        let prices: soroban_sdk::Map<Symbol, PriceData> = storage
-            .get(&DataKey::PriceData)
-            .unwrap_or_else(|| soroban_sdk::Map::new(&env));
+    ///
+    /// When `verified` is `true` (the default for internal math), data is read
+    /// from the `VerifiedPrice` bucket — written only by whitelisted providers
+    /// and admins.  When `verified` is `false`, data is read from the
+    /// `CommunityPrice` bucket instead.
+    ///
+    /// Returns `Error::AssetNotFound` when the asset is missing or stale.
+    pub fn get_price(env: Env, asset: Symbol, verified: bool) -> Result<PriceData, Error> {
+        let key = if verified {
+            DataKey::VerifiedPrice(asset)
+        } else {
+            DataKey::CommunityPrice(asset)
+        };
 
         match env.storage().temporary().get::<DataKey, PriceData>(&key) {
             Some(price_data) => {
@@ -803,13 +764,7 @@ impl PriceOracle {
             if current.price == val {
                 // Price unchanged — only refresh the timestamp (zero-write optimisation).
                 current.timestamp = now;
-                prices.set(asset.clone(), current);
-                storage.set(&DataKey::PriceData, &prices);
-                log_event(&env, Symbol::new(&env, "price_updated"), asset.clone(), val);
-                env.events().publish_event(&PriceUpdatedEvent {
-                    asset: asset.clone(),
-                    price: val,
-                });
+                storage.set(&key, &current);
                 env.events().publish_event(&PriceUpdatedEvent { asset: asset.clone(), price: val });
                 log_event(&env, Symbol::new(&env, "price_updated"), asset, val);
                 return;
@@ -828,10 +783,8 @@ impl PriceOracle {
         storage.set(&key, &price_data);
 
         if is_new_asset {
-            env.events().publish_event(&AssetAddedEvent {
-                symbol: asset.clone(),
-            });
-            log_event(&env, Symbol::new(&env, "asset_added"), asset.clone(), val);
+            env.events().publish_event(&AssetAddedEvent { symbol: asset.clone() });
+            log_event(&env, Symbol::new(&env, "asset_added"), asset, val);
         } else {
             log_event(&env, Symbol::new(&env, "price_updated"), asset.clone(), val);
             env.events().publish_event(&PriceUpdatedEvent {
@@ -943,19 +896,9 @@ impl PriceOracle {
         Ok(())
     }
 
-    /// Remove a batch of assets atomically.
+    /// Update the price for a specific asset (authorized backend relayer function).
     ///
-    /// The full batch is rejected when more than 20 symbols are supplied, so
-    /// no storage is mutated before the resource-limit guard passes.
-    pub fn clear_assets(env: Env, assets: soroban_sdk::Vec<Symbol>) -> Result<(), Error> {
-        clear_assets_from_storage(&env, assets)
-    }
-
-    /// Update the price for a specific asset (authorized backend relayer function)
-    /// 
-    /// This function appends the price to a buffer instead of overwriting.
-    /// Multiple relayers can submit prices for the same ledger, and the median
-    /// will be calculated from all unique submissions.
+    /// Writes to the `VerifiedPrice` bucket. Only whitelisted providers may call this.
     pub fn update_price(
         env: Env,
         source: Address,
@@ -1061,25 +1004,7 @@ impl PriceOracle {
 
         storage.set(&key, &price_data);
 
-        env.events().publish_event(&PriceUpdatedEvent { 
-            asset: asset.clone(), 
-            price: median_price 
-        });
-
-        // Cross-contract volatility signal: publish a dedicated "cross_call" topic
-        // whenever the price moves more than 5% (500 bps). Downstream contracts
-        // such as liquidation bots can subscribe to this specific topic pair.
-        if old_price > 0 {
-            if let Some(pct_change_bps) = calculate_percentage_difference_bps(old_price, price) {
-                if pct_change_bps > VOLATILITY_THRESHOLD_BPS {
-                    env.events().publish(
-                        (Symbol::new(&env, "cross_call"), asset.clone()),
-                        (old_price, price, pct_change_bps),
-                    );
-                }
-            }
-        }
-
+        env.events().publish_event(&PriceUpdatedEvent { asset: asset.clone(), price });
         log_event(&env, Symbol::new(&env, "price_updated"), asset, price);
 
         Ok(())
