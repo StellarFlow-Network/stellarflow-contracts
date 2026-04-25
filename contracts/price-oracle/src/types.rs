@@ -16,12 +16,15 @@ pub enum DataKey {
     AdminUpdateTimestamp,
     RecentEvents,
     Initialized,
-    AssetDescription(Symbol),
     /// Verified price bucket: written only by whitelisted providers / admins.
     /// Internal math and `get_price` default to this bucket.
     VerifiedPrice(Symbol),
     /// Community price bucket: written by any caller; never used in internal math.
     CommunityPrice(Symbol),
+    /// Query fee amount for get_price calls (in stroops).
+    QueryFee,
+    /// Destroyed flag to mark contract as permanently unusable.
+    Destroyed,
 }
 
 /// Canonical storage format for a price entry.
