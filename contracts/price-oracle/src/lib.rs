@@ -4,7 +4,7 @@ use soroban_sdk::{
     contract, contractclient, contracterror, contractimpl, panic_with_error, Address, Env, Symbol, String, token,
 };
 
-use crate::types::{DataKey, PriceBounds, PriceBuffer, PriceBufferEntry, PriceData, PriceDataWithStatus, PriceEntryWithStatus, RecentEvent, AdminAction, AdminLogEntry};
+use crate::types::{DataKey, PriceBounds, PriceBuffer, PriceBufferEntry, PriceData, PriceDataWithStatus, PriceEntryWithStatus, RecentEvent, AdminAction, AdminLogEntry, PriceUpdatePayload};
 
 const ADMIN_TIMELOCK: u64 = 86_400;
 const MAX_CLEAR_ASSETS: u32 = 20;
@@ -140,6 +140,34 @@ pub trait StellarFlowTrait {
     /// Returns aggregated data from multiple storage keys in a single call.
     /// This is a read-only function that provides a snapshot of the oracle's current state.
     fn get_oracle_health(env: Env) -> crate::types::OracleHealth;
+
+    /// Subscribe a contract to receive price update callbacks.
+    ///
+    /// When a price is updated, the oracle will invoke the `on_price_update` function
+    /// on all subscribed contracts with the new price data. This enables downstream
+    /// contracts (e.g., Lending protocols, DEXs) to react to price changes without polling.
+    ///
+    /// # Arguments
+    /// * `callback_contract` - The address of the contract that implements `on_price_update`
+    ///
+    /// # Returns
+    /// Returns an error if the contract is already subscribed.
+    fn subscribe_to_price_updates(env: Env, callback_contract: Address) -> Result<(), String>;
+
+    /// Unsubscribe a contract from price update callbacks.
+    ///
+    /// # Arguments
+    /// * `callback_contract` - The address of the contract to unsubscribe
+    ///
+    /// # Returns
+    /// Returns an error if the contract is not found in the subscriber list.
+    fn unsubscribe_from_price_updates(env: Env, callback_contract: Address) -> Result<(), String>;
+
+    /// Get the list of all contracts subscribed to price updates.
+    ///
+    /// # Returns
+    /// A vector of addresses of all contracts currently subscribed to price updates.
+    fn get_price_update_subscribers(env: Env) -> soroban_sdk::Vec<Address>;
 }
 
 #[contractclient(name = "TokenContractClient")]
@@ -889,15 +917,16 @@ impl PriceOracle {
 
             let now = env.ledger().timestamp();
 
-        if let Some(mut current) = existing {
-            if current.price == val {
-                // Price unchanged — only refresh the timestamp (zero-write optimisation).
-                current.timestamp = now;
-                storage.set(&key, &current);
-                update_twap(&env, asset.clone(), val, now);
-                env.events().publish_event(&PriceUpdatedEvent { asset: asset.clone(), price: val });
-                log_event(&env, Symbol::new(&env, "price_updated"), asset, val);
-                return;
+            if let Some(mut current) = existing {
+                if current.price == val {
+                    // Price unchanged — only refresh the timestamp (zero-write optimisation).
+                    current.timestamp = now;
+                    storage.set(&key, &current);
+                    update_twap(&env, asset.clone(), val, now);
+                    env.events().publish_event(&PriceUpdatedEvent { asset: asset.clone(), price: val });
+                    log_event(&env, Symbol::new(&env, "price_updated"), asset, val);
+                    return Ok(());
+                }
             }
 
             let price_data = PriceData {
@@ -911,10 +940,11 @@ impl PriceOracle {
             };
 
             storage.set(&key, &price_data);
+            update_twap(&env, asset.clone(), normalized, now);
 
             if is_new_asset {
                 env.events().publish_event(&AssetAddedEvent { symbol: asset.clone() });
-                log_event(&env, Symbol::new(&env, "asset_added"), asset, normalized);
+                log_event(&env, Symbol::new(&env, "asset_added"), asset.clone(), normalized);
             } else {
                 log_event(&env, Symbol::new(&env, "price_updated"), asset.clone(), normalized);
                 env.events().publish_event(&PriceUpdatedEvent {
@@ -922,6 +952,17 @@ impl PriceOracle {
                     price: normalized,
                 });
             }
+
+            // Notify subscribers of the price update
+            let payload = PriceUpdatePayload {
+                asset: asset.clone(),
+                price: normalized,
+                timestamp: now,
+                provider: env.current_contract_address(),
+                decimals: 9,
+                confidence_score: 100,
+            };
+            callbacks::notify_subscribers(&env, &payload);
             
             Ok(())
         })();
@@ -932,27 +973,6 @@ impl PriceOracle {
         // Propagate error if any
         if let Err(err) = result {
             panic_with_error!(&env, err);
-        }
-    }
-            timestamp: now,
-            provider: env.current_contract_address(),
-            decimals,
-            confidence_score: 100,
-            ttl,
-        };
-
-        storage.set(&key, &price_data);
-        update_twap(&env, asset.clone(), val, now);
-
-        if is_new_asset {
-            env.events().publish_event(&AssetAddedEvent { symbol: asset.clone() });
-            log_event(&env, Symbol::new(&env, "asset_added"), asset, val);
-        } else {
-            log_event(&env, Symbol::new(&env, "price_updated"), asset.clone(), val);
-            env.events().publish_event(&PriceUpdatedEvent {
-                asset: asset.clone(),
-                price: val,
-            });
         }
     }
 
@@ -1185,7 +1205,18 @@ impl PriceOracle {
         update_twap(&env, asset.clone(), median_price, env.ledger().timestamp());
 
         env.events().publish_event(&PriceUpdatedEvent { asset: asset.clone(), price: normalized });
-        log_event(&env, Symbol::new(&env, "price_updated"), asset, normalized);
+        log_event(&env, Symbol::new(&env, "price_updated"), asset.clone(), normalized);
+
+        // Notify all subscribed contracts of the price update
+        let payload = PriceUpdatePayload {
+            asset: asset.clone(),
+            price: median_price,
+            timestamp: env.ledger().timestamp(),
+            provider: source,
+            decimals: 9,
+            confidence_score,
+        };
+        callbacks::notify_subscribers(&env, &payload);
 
         Ok(())
     }
@@ -1543,10 +1574,45 @@ impl PriceOracle {
 
         Some(sum / (len as i128))
     }
+
+    /// Subscribe a contract to receive price update callbacks.
+    ///
+    /// When a price is updated, the oracle will invoke the `on_price_update` function
+    /// on all subscribed contracts with the new price data. This enables downstream
+    /// contracts (e.g., Lending protocols, DEXs) to react to price changes without polling.
+    ///
+    /// # Arguments
+    /// * `callback_contract` - The address of the contract that implements `on_price_update`
+    ///
+    /// # Returns
+    /// Returns an error if the contract is already subscribed.
+    pub fn subscribe_to_price_updates(env: Env, callback_contract: Address) -> Result<(), String> {
+        callbacks::subscribe(&env, callback_contract)
+    }
+
+    /// Unsubscribe a contract from price update callbacks.
+    ///
+    /// # Arguments
+    /// * `callback_contract` - The address of the contract to unsubscribe
+    ///
+    /// # Returns
+    /// Returns an error if the contract is not found in the subscriber list.
+    pub fn unsubscribe_from_price_updates(env: Env, callback_contract: Address) -> Result<(), String> {
+        callbacks::unsubscribe(&env, &callback_contract)
+    }
+
+    /// Get the list of all contracts subscribed to price updates.
+    ///
+    /// # Returns
+    /// A vector of addresses of all contracts currently subscribed to price updates.
+    pub fn get_price_update_subscribers(env: Env) -> soroban_sdk::Vec<Address> {
+        callbacks::get_subscribers(&env)
+    }
 }
 
 mod asset_symbol;
 mod auth;
+mod callbacks;
 pub mod math;
 mod median;
 mod test;
