@@ -11,6 +11,8 @@ pub enum DataKey {
     ProviderWeight(Address),
     IsPaused,
     ActiveRelayers,
+    CommunityCouncil,
+    EmergencyFrozen,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -179,6 +181,52 @@ fn _remove_from_active_relayers(env: &Env, provider: &Address) {
         }
     }
     env.storage().instance().set(&DataKey::ActiveRelayers, &filtered);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Community Council Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Set the Community Council address for emergency freeze functionality.
+pub fn _set_council(env: &Env, council: &Address) {
+    env.storage().instance().set(&DataKey::CommunityCouncil, council);
+}
+
+/// Get the Community Council address.
+pub fn _get_council(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::CommunityCouncil)
+}
+
+/// Check if the caller is the Community Council.
+pub fn _is_council(env: &Env, caller: &Address) -> bool {
+    _get_council(env).map(|council| council == *caller).unwrap_or(false)
+}
+
+/// Panic if the caller is not the Community Council.
+pub fn _require_council(env: &Env, caller: &Address) {
+    if !_is_council(env, caller) {
+        panic!("Unauthorized: caller is not the Community Council");
+    }
+}
+
+/// Check if the contract is in emergency freeze state.
+pub fn _is_frozen(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get::<DataKey, bool>(&DataKey::EmergencyFrozen)
+        .unwrap_or(false)
+}
+
+/// Set the emergency freeze state.
+pub fn _set_frozen(env: &Env, frozen: bool) {
+    env.storage().instance().set(&DataKey::EmergencyFrozen, &frozen);
+}
+
+/// Panic if the contract is in emergency freeze state.
+pub fn _require_not_frozen(env: &Env) {
+    if _is_frozen(env) {
+        panic!("Contract is in emergency freeze state");
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

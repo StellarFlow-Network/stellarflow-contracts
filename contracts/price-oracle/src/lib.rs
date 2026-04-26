@@ -168,6 +168,30 @@ pub trait StellarFlowTrait {
     /// # Returns
     /// A vector of addresses of all contracts currently subscribed to price updates.
     fn get_price_update_subscribers(env: Env) -> soroban_sdk::Vec<Address>;
+
+    /// Set the Community Council address for emergency freeze functionality.
+    ///
+    /// Only the admin can call this. The Council address can be used to trigger
+    /// an emergency freeze if a majority of admins are compromised.
+    fn set_council(env: Env, admin: Address, council: Address);
+
+    /// Get the current Community Council address.
+    ///
+    /// Returns the address of the Community Council, or None if not set.
+    fn get_council(env: Env) -> Option<Address>;
+
+    /// Emergency freeze the contract.
+    ///
+    /// Only the Community Council can call this function. When triggered,
+    /// the contract enters a frozen state where all state-changing operations
+    /// are blocked. This is a last-resort measure when a majority of admins
+    /// are compromised.
+    fn emergency_freeze(env: Env, council: Address) -> Result<(), Error>;
+
+    /// Check if the contract is in emergency freeze state.
+    ///
+    /// Returns true if the contract is frozen, false otherwise.
+    fn is_frozen(env: Env) -> bool;
 }
 
 #[contractclient(name = "TokenContractClient")]
@@ -467,6 +491,18 @@ fn log_event(env: &Env, event_type: Symbol, asset: Symbol, price: i128) {
     env.storage().instance().set(&DataKey::RecentEvents, &events);
 }
 
+fn _log_admin_action(env: &Env, admin: &Address, action: AdminAction, details: Option<String>) {
+    let entry = AdminLogEntry {
+        admin: admin.clone(),
+        action,
+        details: details.unwrap_or_else(|| String::from_str(env, "")),
+        timestamp: env.ledger().timestamp(),
+    };
+    // Store the admin log entry - using a simple key for now
+    // In production, you might want to store multiple entries in a vector
+    env.storage().instance().set(&DataKey::AdminUpdateTimestamp, &entry.timestamp);
+}
+
 fn read_price_floor(env: &Env, asset: &Symbol) -> Option<i128> {
     let floors: soroban_sdk::Map<Symbol, i128> = env
         .storage()
@@ -563,6 +599,7 @@ impl PriceOracle {
     /// in the `VerifiedPrice` bucket.
     pub fn add_asset(env: Env, admin: Address, asset: Symbol) -> Result<(), Error> {
         _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
 
@@ -605,6 +642,7 @@ impl PriceOracle {
         quote_decimals: u32,
     ) {
         _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
 
@@ -889,6 +927,7 @@ impl PriceOracle {
     /// using a reentrancy lock (DataKey::IsLocked).
     pub fn set_price(env: Env, asset: Symbol, val: i128, decimals: u32, ttl: u64) {
         _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
         
         // Acquire reentrancy lock
         if let Err(err) = acquire_lock(&env) {
@@ -989,6 +1028,7 @@ impl PriceOracle {
         decimals: u32,
         ttl: u64,
     ) -> Result<(), Error> {
+        crate::auth::_require_not_frozen(&env);
         source.require_auth();
 
         if !get_tracked_assets(&env).contains(&asset) {
@@ -1027,6 +1067,7 @@ impl PriceOracle {
     /// Admin-only function to move trapped XLM or other assets out of the contract.
     pub fn rescue_tokens(env: Env, admin: Address, token: Address, to: Address, amount: i128) {
         _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
 
@@ -1051,6 +1092,7 @@ impl PriceOracle {
     /// all contract storage. Strictly restricted to the admin.
     pub fn upgrade(env: Env, admin: Address, new_wasm_hash: soroban_sdk::BytesN<32>) {
         _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
         _log_admin_action(&env, &admin, AdminAction::Upgrade, Some(format!("New WASM hash: {:?}", new_wasm_hash)));
@@ -1063,6 +1105,7 @@ impl PriceOracle {
     /// is not currently tracked.
     pub fn remove_asset(env: Env, admin: Address, asset: Symbol) -> Result<(), Error> {
         _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
         _log_admin_action(&env, &admin, AdminAction::RemoveAsset, Some(asset.to_string()));
@@ -1101,6 +1144,7 @@ impl PriceOracle {
         ttl: u64,
     ) -> Result<(), Error> {
         _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
         source.require_auth();
 
         if !get_tracked_assets(&env).contains(&asset) {
@@ -1223,6 +1267,7 @@ impl PriceOracle {
 
     /// Set an absolute floor price for an asset.
     pub fn set_price_floor(env: Env, admin: Address, asset: Symbol, price_floor: i128) {
+        crate::auth::_require_not_frozen(&env);
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
         _log_admin_action(&env, &admin, AdminAction::SetPriceFloor, Some(format!("{}: {}", asset.to_string(), price_floor)));
@@ -1259,6 +1304,7 @@ impl PriceOracle {
         max_price: i128,
     ) {
         _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
         _log_admin_action(&env, &admin, AdminAction::SetPriceBounds, Some(format!("{}: min={}, max={}", asset.to_string(), min_price, max_price)));
@@ -1341,6 +1387,7 @@ impl PriceOracle {
     /// # Returns
     /// The new pause state (true = paused, false = unpaused)
     pub fn toggle_pause(env: Env, admin1: Address, admin2: Address) -> Result<bool, Error> {
+        crate::auth::_require_not_frozen(&env);
         // Verify both are distinct addresses before requiring auth
         if admin1 == admin2 {
             return Err(Error::MultiSigValidationFailed);
@@ -1389,6 +1436,7 @@ impl PriceOracle {
     /// # Returns
     /// Ok(()) if successful, Error if validation fails
     pub fn register_admin(env: Env, admin1: Address, admin2: Address, new_admin: Address) -> Result<(), Error> {
+        crate::auth::_require_not_frozen(&env);
         // Verify both are distinct addresses before requiring auth
         if admin1 == admin2 {
             return Err(Error::MultiSigValidationFailed);
@@ -1435,6 +1483,7 @@ impl PriceOracle {
     /// # Returns
     /// Ok(()) if successful, Error if validation fails
     pub fn remove_admin(env: Env, admin1: Address, admin2: Address, admin_to_remove: Address) -> Result<(), Error> {
+        crate::auth::_require_not_frozen(&env);
         // Verify both are distinct addresses before requiring auth
         if admin1 == admin2 {
             return Err(Error::MultiSigValidationFailed);
@@ -1483,6 +1532,7 @@ impl PriceOracle {
     /// can never be used again. All storage is wiped and a destroyed flag is set.
     pub fn self_destruct(env: Env, admin1: Address, admin2: Address) -> Result<(), Error> {
         _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
         admin1.require_auth();
         admin2.require_auth();
 
@@ -1534,6 +1584,71 @@ impl PriceOracle {
             return 0;
         }
         crate::auth::_get_admin(&env).len()
+    }
+
+    /// Set the Community Council address for emergency freeze functionality.
+    ///
+    /// Only the admin can call this. The Council address can be used to trigger
+    /// an emergency freeze if a majority of admins are compromised.
+    pub fn set_council(env: Env, admin: Address, council: Address) {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+        _log_admin_action(&env, &admin, AdminAction::SetCouncil, Some(council.to_string()));
+        crate::auth::_set_council(&env, &council);
+
+        env.events().publish(
+            (Symbol::new(&env, "council_set"),),
+            (admin.clone(), council.clone()),
+        );
+    }
+
+    /// Get the current Community Council address.
+    ///
+    /// Returns the address of the Community Council, or None if not set.
+    pub fn get_council(env: Env) -> Option<Address> {
+        crate::auth::_get_council(&env)
+    }
+
+    /// Emergency freeze the contract.
+    ///
+    /// Only the Community Council can call this function. When triggered,
+    /// the contract enters a frozen state where all state-changing operations
+    /// are blocked. This is a last-resort measure when a majority of admins
+    /// are compromised.
+    ///
+    /// # Arguments
+    /// * `council` - The Community Council address (must provide auth)
+    ///
+    /// # Returns
+    /// Ok(()) if successful, Error if not authorized
+    pub fn emergency_freeze(env: Env, council: Address) -> Result<(), Error> {
+        council.require_auth();
+        crate::auth::_require_council(&env, &council);
+
+        // Check if already frozen
+        if crate::auth::_is_frozen(&env) {
+            return Err(Error::AlreadyInitialized);
+        }
+
+        // Set the frozen state
+        crate::auth::_set_frozen(&env, true);
+
+        // Emit event
+        env.events().publish(
+            (Symbol::new(&env, "emergency_freeze"),),
+            (council.clone(),),
+        );
+
+        Ok(())
+    }
+
+    /// Check if the contract is in emergency freeze state.
+    ///
+    /// Returns true if the contract is frozen, false otherwise.
+    pub fn is_frozen(env: Env) -> bool {
+        crate::auth::_is_frozen(&env)
     }
 
     /// Get the price buffer for a specific asset.
