@@ -32,6 +32,12 @@ pub enum DataKey {
     AssetMeta(Symbol),
     /// List of contracts subscribed to price update callbacks.
     PriceUpdateSubscribers,
+    /// Staked amount for each relayer
+    RelayerStake(Address),
+    /// Minimum stake required to participate as a relayer
+    MinStakeAmount,
+    /// Token contract address used for staking
+    StakeToken,
 }
 
 /// Decimal metadata for an asset pair.
@@ -168,4 +174,38 @@ pub struct PriceUpdatePayload {
     pub decimals: u32,
     /// Confidence score (0-100, higher is more confident).
     pub confidence_score: u32,
+}
+
+/// Admin action types for logging and audit trails.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AdminAction {
+    Initialize,
+    InitAdmin,
+    AddAsset,
+    TransferAdminInitiated,
+    TransferAdminAccepted,
+    RenounceOwnership,
+    RescueTokens,
+    Upgrade,
+    RemoveAsset,
+    SetPriceFloor,
+    SetPriceBounds,
+    TogglePause,
+    RegisterAdmin,
+    RemoveAdmin,
+    SelfDestruct,
+    SetMinStake,
+    SetStakeToken,
+    SlashRelayer,
+}
+
+/// Log entry for admin actions.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminLogEntry {
+    pub admin: Address,
+    pub action: AdminAction,
+    pub details: Option<soroban_sdk::String>,
+    pub timestamp: u64,
 }

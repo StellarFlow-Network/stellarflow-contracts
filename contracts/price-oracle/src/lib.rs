@@ -168,6 +168,33 @@ pub trait StellarFlowTrait {
     /// # Returns
     /// A vector of addresses of all contracts currently subscribed to price updates.
     fn get_price_update_subscribers(env: Env) -> soroban_sdk::Vec<Address>;
+
+    /// Stake tokens to participate as a relayer.
+    ///
+    /// Locks the specified amount of tokens in the contract. Only whitelisted providers can stake.
+    /// The stake amount must be at least the minimum required stake.
+    fn stake(env: Env, relayer: Address, token: Address, amount: i128) -> Result<(), Error>;
+
+    /// Slash a relayer's stake for providing malicious data.
+    ///
+    /// Can only be called by governance (admin). Transfers the slashed amount to the specified recipient.
+    /// The relayer must be currently staked.
+    fn slash_relayer(env: Env, admin: Address, relayer: Address, amount: i128, recipient: Address) -> Result<(), Error>;
+
+    /// Get the staked amount for a relayer.
+    fn get_relayer_stake(env: Env, relayer: Address) -> i128;
+
+    /// Set the minimum stake amount required for relayers.
+    fn set_min_stake(env: Env, admin: Address, amount: i128);
+
+    /// Get the minimum stake amount required for relayers.
+    fn get_min_stake(env: Env) -> i128;
+
+    /// Set the token contract address used for staking.
+    fn set_stake_token(env: Env, admin: Address, token: Address);
+
+    /// Get the token contract address used for staking.
+    fn get_stake_token(env: Env) -> Address;
 }
 
 #[contractclient(name = "TokenContractClient")]
@@ -486,21 +513,20 @@ fn enforce_price_floor(env: &Env, asset: &Symbol, price: i128) -> Result<(), Err
     Ok(())
 }
 
-fn update_twap(env: &Env, asset: Symbol, price: i128, timestamp: u64) {
-    let key = DataKey::Twap(asset);
-    let mut twap_buffer: soroban_sdk::Vec<(u64, i128)> = env
-        .storage()
-        .persistent()
-        .get(&key)
-        .unwrap_or_else(|| soroban_sdk::Vec::new(env));
+fn _log_admin_action(env: &Env, admin: &Address, action: AdminAction, details: Option<String>) {
+    let entry = AdminLogEntry {
+        admin: admin.clone(),
+        action,
+        details,
+        timestamp: env.ledger().timestamp(),
+    };
 
-    twap_buffer.push_back((timestamp, price));
-
-    if twap_buffer.len() > 10 {
-        twap_buffer.pop_front();
-    }
-
-    env.storage().persistent().set(&key, &twap_buffer);
+    // Store in recent events or a separate log
+    // For now, just emit an event
+    env.events().publish(
+        (Symbol::new(env, "admin_action"),),
+        (admin.clone(), action, env.ledger().timestamp()),
+    );
 }
 
 #[contractimpl]
@@ -1607,6 +1633,132 @@ impl PriceOracle {
     /// A vector of addresses of all contracts currently subscribed to price updates.
     pub fn get_price_update_subscribers(env: Env) -> soroban_sdk::Vec<Address> {
         callbacks::get_subscribers(&env)
+    }
+
+    /// Stake tokens to participate as a relayer.
+    ///
+    /// Locks the specified amount of tokens in the contract. Only whitelisted providers can stake.
+    /// The stake amount must be at least the minimum required stake.
+    pub fn stake(env: Env, relayer: Address, token: Address, amount: i128) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        relayer.require_auth();
+
+        if !_is_whitelisted_provider(&env, &relayer) {
+            return Err(Error::NotAuthorized);
+        }
+
+        let min_stake = env
+            .storage()
+            .instance()
+            .get(&DataKey::MinStakeAmount)
+            .unwrap_or(0);
+
+        if amount < min_stake {
+            return Err(Error::InvalidPrice); // Using InvalidPrice for insufficient stake
+        }
+
+        // Transfer tokens from relayer to contract
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&relayer, &env.current_contract_address(), &amount);
+
+        // Store the stake amount (add to existing stake if any)
+        let key = DataKey::RelayerStake(relayer.clone());
+        let current_stake: i128 = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or(0);
+        let new_stake = current_stake.checked_add(amount).ok_or(Error::InvalidPrice)?;
+        env.storage().persistent().set(&key, &new_stake);
+
+        Ok(())
+    }
+
+    /// Slash a relayer's stake for providing malicious data.
+    ///
+    /// Can only be called by governance (admin). Transfers the slashed amount to the specified recipient.
+    /// The relayer must be currently staked.
+    pub fn slash_relayer(env: Env, admin: Address, relayer: Address, amount: i128, recipient: Address) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+        _log_admin_action(&env, &admin, AdminAction::SlashRelayer, Some(format!("Relayer: {}, Amount: {}, Recipient: {}", relayer.to_string(), amount, recipient.to_string())));
+
+        let key = DataKey::RelayerStake(relayer.clone());
+        let current_stake: i128 = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or(0);
+
+        if current_stake < amount {
+            return Err(Error::InvalidPrice); // Insufficient stake to slash
+        }
+
+        // Get the stake token
+        let stake_token: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::StakeToken)
+            .ok_or(Error::AssetNotFound)?;
+
+        // Transfer tokens from contract to recipient
+        let token_client = token::Client::new(&env, &stake_token);
+        token_client.transfer(&env.current_contract_address(), &recipient, &amount);
+
+        // Update the stake amount
+        let new_stake = current_stake.checked_sub(amount).unwrap();
+        if new_stake > 0 {
+            env.storage().persistent().set(&key, &new_stake);
+        } else {
+            env.storage().persistent().remove(&key);
+        }
+
+        Ok(())
+    }
+
+    /// Get the staked amount for a relayer.
+    pub fn get_relayer_stake(env: Env, relayer: Address) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::RelayerStake(relayer))
+            .unwrap_or(0)
+    }
+
+    /// Set the minimum stake amount required for relayers.
+    pub fn set_min_stake(env: Env, admin: Address, amount: i128) {
+        _require_not_destroyed(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+        _log_admin_action(&env, &admin, AdminAction::SetMinStake, Some(amount.to_string()));
+
+        env.storage().instance().set(&DataKey::MinStakeAmount, &amount);
+    }
+
+    /// Get the minimum stake amount required for relayers.
+    pub fn get_min_stake(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::MinStakeAmount)
+            .unwrap_or(0)
+    }
+
+    /// Set the token contract address used for staking.
+    pub fn set_stake_token(env: Env, admin: Address, token: Address) {
+        _require_not_destroyed(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+        _log_admin_action(&env, &admin, AdminAction::SetStakeToken, Some(token.to_string()));
+
+        env.storage().instance().set(&DataKey::StakeToken, &token);
+    }
+
+    /// Get the token contract address used for staking.
+    pub fn get_stake_token(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::StakeToken)
+            .expect("Stake token not set")
     }
 }
 
