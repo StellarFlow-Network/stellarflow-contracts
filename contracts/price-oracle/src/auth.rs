@@ -9,6 +9,7 @@ pub enum DataKey {
     Admin,
     Provider(Address),
     ProviderWeight(Address),
+    ProviderLastLedger(Address),
     IsPaused,
     ActiveRelayers,
     CommunityCouncil,
@@ -134,11 +135,45 @@ pub fn _is_provider(env: &Env, addr: &Address) -> bool {
         .unwrap_or(false)
 }
 
-/// Panics if the caller is not a whitelisted provider.
+/// Panic if the caller is not a whitelisted provider.
 pub fn _require_provider(env: &Env, caller: &Address) {
     if !_is_provider(env, caller) {
         panic!("Unauthorised: caller is not a whitelisted provider");
     }
+}
+
+/// Prune inactive relayers from the whitelist.
+///
+/// Iterates through the active relayers list and removes any provider that has not
+/// submitted a price update within `max_inactive_ledgers` ledgers.
+///
+/// # Arguments
+/// * `env` - The contract environment
+/// * `max_inactive_ledgers` - The maximum number of ledgers a provider can be inactive
+///
+/// # Panics
+/// Panics if the caller is not an authorized admin.
+pub fn _prune_inactive_relayers(env: &Env, caller: &Address, max_inactive_ledgers: u32) -> u32 {
+    // Require admin authorization
+    _require_authorized(env, caller);
+    
+    let current_ledger = env.ledger().sequence();
+    let relayers = _get_active_relayers(env);
+    let mut pruned_count: u32 = 0;
+    
+    for relayer in relayers.iter() {
+        let last_ledger = _get_provider_last_ledger(env, &relayer);
+        
+        // If provider has never submitted (last_ledger = 0) or has been inactive too long
+        let inactive_ledgers = current_ledger.saturating_sub(last_ledger);
+        
+        if last_ledger == 0 || inactive_ledgers > max_inactive_ledgers {
+            _remove_provider(env, &relayer);
+            pruned_count += 1;
+        }
+    }
+    
+    pruned_count
 }
 
 pub fn _set_provider_weight(env: &Env, provider: &Address, weight: u32) {
@@ -151,6 +186,22 @@ pub fn _get_provider_weight(env: &Env, provider: &Address) -> u32 {
     env.storage()
         .instance()
         .get::<DataKey, u32>(&DataKey::ProviderWeight(provider.clone()))
+        .unwrap_or(0)
+}
+
+/// Set the last ledger sequence when a provider submitted a price update.
+pub fn _set_provider_last_ledger(env: &Env, provider: &Address, ledger: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::ProviderLastLedger(provider.clone()), &ledger);
+}
+
+/// Get the last ledger sequence when a provider submitted a price update.
+/// Returns 0 if the provider has never submitted a price.
+pub fn _get_provider_last_ledger(env: &Env, provider: &Address) -> u32 {
+    env.storage()
+        .instance()
+        .get::<DataKey, u32>(&DataKey::ProviderLastLedger(provider.clone()))
         .unwrap_or(0)
 }
 
