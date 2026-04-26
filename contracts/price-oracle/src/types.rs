@@ -32,6 +32,10 @@ pub enum DataKey {
     AssetMeta(Symbol),
     /// List of contracts subscribed to price update callbacks.
     PriceUpdateSubscribers,
+    /// Community Council address for emergency freeze functionality.
+    CommunityCouncil,
+    /// Emergency freeze state flag.
+    EmergencyFrozen,
 }
 
 /// Decimal metadata for an asset pair.
@@ -168,4 +172,36 @@ pub struct PriceUpdatePayload {
     pub decimals: u32,
     /// Confidence score (0-100, higher is more confident).
     pub confidence_score: u32,
+}
+
+/// Admin action types for logging.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AdminAction {
+    Initialize,
+    InitAdmin,
+    AddAsset,
+    TransferAdminInitiated,
+    TransferAdminAccepted,
+    RenounceOwnership,
+    RescueTokens,
+    Upgrade,
+    RemoveAsset,
+    SetPriceFloor,
+    SetPriceBounds,
+    TogglePause,
+    RegisterAdmin,
+    RemoveAdmin,
+    SelfDestruct,
+    SetCouncil,
+}
+
+/// Admin log entry for tracking admin actions.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminLogEntry {
+    pub admin: Address,
+    pub action: AdminAction,
+    pub details: soroban_sdk::String,
+    pub timestamp: u64,
 }
