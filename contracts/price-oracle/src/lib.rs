@@ -168,6 +168,27 @@ pub trait StellarFlowTrait {
     /// # Returns
     /// A vector of addresses of all contracts currently subscribed to price updates.
     fn get_price_update_subscribers(env: Env) -> soroban_sdk::Vec<Address>;
+
+    /// Get the current dynamic read fee based on network congestion.
+    ///
+    /// Returns the fee amount in the fee token that must be paid for read operations.
+    /// The fee scales up during high-demand periods to prevent spam.
+    fn get_read_fee(env: Env) -> i128;
+
+    /// Set the base read fee amount.
+    fn set_base_read_fee(env: Env, admin: Address, fee: i128);
+
+    /// Set the fee scaling factor for congestion periods.
+    fn set_fee_scaling_factor(env: Env, admin: Address, factor: i128);
+
+    /// Set the congestion threshold (calls per ledger).
+    fn set_congestion_threshold(env: Env, admin: Address, threshold: u32);
+
+    /// Set the fee token contract address.
+    fn set_fee_token(env: Env, admin: Address, token: Address);
+
+    /// Get the fee token contract address.
+    fn get_fee_token(env: Env) -> Address;
 }
 
 #[contractclient(name = "TokenContractClient")]
@@ -1607,6 +1628,86 @@ impl PriceOracle {
     /// A vector of addresses of all contracts currently subscribed to price updates.
     pub fn get_price_update_subscribers(env: Env) -> soroban_sdk::Vec<Address> {
         callbacks::get_subscribers(&env)
+    }
+
+    /// Get the current dynamic read fee based on network congestion.
+    ///
+    /// Returns the fee amount in the fee token that must be paid for read operations.
+    /// The fee scales up during high-demand periods to prevent spam.
+    pub fn get_read_fee(env: Env) -> i128 {
+        let base_fee: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::BaseReadFee)
+            .unwrap_or(0);
+
+        let scaling_factor: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeScalingFactor)
+            .unwrap_or(1);
+
+        let threshold: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::CongestionThreshold)
+            .unwrap_or(100);
+
+        let current_calls: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ReadCallCounter)
+            .unwrap_or(0);
+
+        if current_calls > threshold {
+            base_fee.saturating_mul(scaling_factor)
+        } else {
+            base_fee
+        }
+    }
+
+    /// Set the base read fee amount.
+    pub fn set_base_read_fee(env: Env, admin: Address, fee: i128) {
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+        _log_admin_action(&env, &admin, AdminAction::SetBaseReadFee, Some(fee.to_string()));
+
+        env.storage().instance().set(&DataKey::BaseReadFee, &fee);
+    }
+
+    /// Set the fee scaling factor for congestion periods.
+    pub fn set_fee_scaling_factor(env: Env, admin: Address, factor: i128) {
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+        _log_admin_action(&env, &admin, AdminAction::SetFeeScalingFactor, Some(factor.to_string()));
+
+        env.storage().instance().set(&DataKey::FeeScalingFactor, &factor);
+    }
+
+    /// Set the congestion threshold (calls per ledger).
+    pub fn set_congestion_threshold(env: Env, admin: Address, threshold: u32) {
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+        _log_admin_action(&env, &admin, AdminAction::SetCongestionThreshold, Some(threshold.to_string()));
+
+        env.storage().instance().set(&DataKey::CongestionThreshold, &threshold);
+    }
+
+    /// Set the fee token contract address.
+    pub fn set_fee_token(env: Env, admin: Address, token: Address) {
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+        _log_admin_action(&env, &admin, AdminAction::SetFeeToken, Some(token.to_string()));
+
+        env.storage().instance().set(&DataKey::FeeToken, &token);
+    }
+
+    /// Get the fee token contract address.
+    pub fn get_fee_token(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::FeeToken)
+            .expect("Fee token not set")
     }
 }
 

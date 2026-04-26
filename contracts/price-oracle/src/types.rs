@@ -32,6 +32,22 @@ pub enum DataKey {
     AssetMeta(Symbol),
     /// List of contracts subscribed to price update callbacks.
     PriceUpdateSubscribers,
+    /// Staked amount for each relayer
+    RelayerStake(Address),
+    /// Minimum stake required to participate as a relayer
+    MinStakeAmount,
+    /// Token contract address used for staking
+    StakeToken,
+    /// Base read fee in token units
+    BaseReadFee,
+    /// Fee scaling factor (multiplier during congestion)
+    FeeScalingFactor,
+    /// Read call counter for current ledger
+    ReadCallCounter,
+    /// Congestion threshold (calls per ledger)
+    CongestionThreshold,
+    /// Fee token contract address
+    FeeToken,
 }
 
 /// Decimal metadata for an asset pair.
