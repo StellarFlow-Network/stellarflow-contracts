@@ -168,6 +168,33 @@ pub trait StellarFlowTrait {
     /// # Returns
     /// A vector of addresses of all contracts currently subscribed to price updates.
     fn get_price_update_subscribers(env: Env) -> soroban_sdk::Vec<Address>;
+
+    /// Stake tokens to participate as a relayer.
+    ///
+    /// Locks the specified amount of tokens in the contract. Only whitelisted providers can stake.
+    /// The stake amount must be at least the minimum required stake.
+    fn stake(env: Env, relayer: Address, token: Address, amount: i128) -> Result<(), Error>;
+
+    /// Slash a relayer's stake for providing malicious data.
+    ///
+    /// Can only be called by governance (admin). Transfers the slashed amount to the specified recipient.
+    /// The relayer must be currently staked.
+    fn slash_relayer(env: Env, admin: Address, relayer: Address, amount: i128, recipient: Address) -> Result<(), Error>;
+
+    /// Get the staked amount for a relayer.
+    fn get_relayer_stake(env: Env, relayer: Address) -> i128;
+
+    /// Set the minimum stake amount required for relayers.
+    fn set_min_stake(env: Env, admin: Address, amount: i128);
+
+    /// Get the minimum stake amount required for relayers.
+    fn get_min_stake(env: Env) -> i128;
+
+    /// Set the token contract address used for staking.
+    fn set_stake_token(env: Env, admin: Address, token: Address);
+
+    /// Get the token contract address used for staking.
+    fn get_stake_token(env: Env) -> Address;
 }
 
 #[contractclient(name = "TokenContractClient")]
