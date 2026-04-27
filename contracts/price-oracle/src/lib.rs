@@ -228,6 +228,11 @@ pub trait TokenContractTrait {
     fn transfer(env: Env, from: Address, to: Address, amount: i128);
 }
 
+/// Conversion factor from price changes to basis points (10,000 = 100%).
+/// Used to convert percentage changes to BPS: (delta * BPS_CONVERSION_FACTOR) / old_price.
+/// Pre-computed as a constant to reduce compute cycles.
+const BPS_CONVERSION_FACTOR: i128 = 10_000;
+
 /// Maximum allowed percentage change between price updates (10% = 1000 basis points).
 /// Any price update exceeding this threshold will be rejected to prevent flash crashes.
 const MAX_PERCENT_CHANGE_BPS: i128 = 1_000;
@@ -333,7 +338,7 @@ pub fn calculate_percentage_change_bps(old_price: i128, new_price: i128) -> Opti
     }
 
     let delta = new_price.checked_sub(old_price)?;
-    let scaled = delta.checked_mul(10_000)?;
+    let scaled = delta.checked_mul(BPS_CONVERSION_FACTOR)?;
     scaled.checked_div(old_price)
 }
 
