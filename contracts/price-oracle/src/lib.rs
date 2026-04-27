@@ -20,7 +20,7 @@ pub trait StellarFlowTrait {
     ///
     /// When `verified` is `true`, reads from the `VerifiedPrice` bucket (default for internal math).
     /// When `verified` is `false`, reads from the `CommunityPrice` bucket.
-    /// Returns `Error::AssetNotFound` if the asset does not exist or the price is stale.
+    /// Returns `Error::NotFound` if the asset does not exist or the price is stale.
     fn get_price(env: Env, asset: Symbol, verified: bool) -> Result<PriceData, Error>;
 
     /// Calculate the weighted average price of a multi-asset index basket.
@@ -279,49 +279,23 @@ const MAX_PERCENT_CHANGE_BPS: i128 = 1_000;
 const VOLATILITY_THRESHOLD_BPS: i128 = 500;
 
 /// Error types for the price oracle contract
+/// Following SEP-41 standard error codes for better ecosystem integration
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum Error {
-    /// Asset does not exist in the price oracle.
-    AssetNotFound = 1,
-    /// Unauthorized caller - not a whitelisted provider or admin.
+    /// Internal contract error
+    InternalError = 1,
+    /// Caller is not authorized to perform this action
     Unauthorized = 2,
-    /// Asset symbol is not in the approved list (NGN, KES, GHS)
-    InvalidAssetSymbol = 3,
-    /// Price must be greater than zero.
-    InvalidPrice = 4,
-    /// Price change exceeds maximum allowed threshold (flash crash protection).
-    FlashCrashDetected = 5,
-    /// Caller is not authorized to perform this action.
-    NotAuthorized = 6,
-    /// Contract or admin has already been initialized.
-    AlreadyInitialized = 7,
-    /// Price change exceeds the allowed delta limit in a single update.
-    PriceDeltaExceeded = 8,
-    /// Price is outside the configured min/max bounds for the asset.
-    PriceOutOfBounds = 9,
-    /// Provider weight must be between 0 and 100.
-    InvalidWeight = 10,
-    /// Multi-signature validation failed - insufficient or invalid admin signatures.
-    MultiSigValidationFailed = 11,
-    /// Cannot add more admins - maximum of 3 admins allowed.
-    MaxAdminsReached = 12,
-    /// Cannot remove admin - would leave contract without any admins.
-    CannotRemoveLastAdmin = 13,
-    /// Reentrancy detected - function is already executing.
-    ReentrancyDetected = 14,
-    /// Action not found or already executed/cancelled.
-    ActionNotFound = 15,
-    /// Vote threshold not reached - insufficient approvals.
-    ThresholdNotReached = 16,
-    /// Invalid action type for execution.
-    InvalidActionType = 17,
-    /// Action has already been executed.
-    ActionAlreadyExecuted = 18,
-    /// Action has been cancelled.
-    ActionCancelled = 19,
-}
+    /// Requested resource was not found
+    NotFound = 3,
+    /// Resource already exists
+    AlreadyExists = 4,
+    /// Invalid argument provided
+    InvalidArgument = 5,
+    /// Operation cannot be performed in current contract state
+    InvalidState = 6,
 
 #[contract]
 pub struct PriceOracle;
@@ -957,7 +931,7 @@ impl PriceOracle {
             Some(price_data) => {
                 let now = env.ledger().timestamp();
                 if is_stale(now, price_data.timestamp, price_data.ttl) {
-                    return Err(Error::AssetNotFound);
+                    return Err(Error::NotFound);
                 }
                 Ok(price_data)
             }
