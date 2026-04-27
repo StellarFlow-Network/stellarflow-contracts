@@ -1,91 +1,106 @@
-# 🦀 StellarFlow-Contracts
-*The High-Fidelity Oracle for African Corridors on Soroban.*
+# StellarFlow Contracts - Time-Locked Upgrade Implementation
 
-StellarFlow is a decentralized data oracle built on the Stellar Network. It provides real-time, verified exchange rates for African currencies (NGN, KES, GHS) to the Soroban ecosystem, enabling the next generation of localized DeFi, cross-border payments, and yield protocols.
+This repository contains smart contracts for the StellarFlow Network with a time-locked upgrade mechanism to prevent "flash-upgrades" by enforcing a 48-hour delay between contract upgrade proposals and execution.
 
-# 🏛️ Architecture Overview
-The contract acts as a secure, authorized ledger for price data. It is designed to be:
+## Features
 
-Authorized: Only whitelisted providers (Relayers) can update prices.
+- **Time-Locked Upgrades**: 48-hour mandatory delay between upgrade proposal and execution
+- **Pending State Management**: Secure storage of new WASM hash in pending state
+- **Timestamp Validation**: Uses `ledger().timestamp()` for accurate time validation
+- **Admin-Only Operations**: Only contract administrators can propose and execute upgrades
+- **Upgrade Cancellation**: Ability to cancel pending upgrades before execution
+- **Timelock Monitoring**: Functions to check remaining timelock time
 
-Immutable: All updates are time-stamped and emitted as events for transparency.
+## Architecture
 
-Interoperable: Designed to be called by other Soroban smart contracts (C2C).
+### Core Components
 
-# 🚀 Getting Started
-Prerequisites
-> Rust
+1. **PendingUpgrade Struct**: Stores information about pending upgrades
+   - `new_wasm_hash`: The hash of the new contract code
+   - `proposed_at`: Timestamp when the upgrade was proposed
+   - `proposer`: Address of who proposed the upgrade
 
-Soroban CLI
-> Target: wasm32-unknown-unknown
+2. **ContractData Struct**: Stores contract state
+   - `admin`: Administrator address with upgrade permissions
+   - `value`: Sample storage value for testing
 
-### Installation
+### Key Functions
 
-**Clone the repository:**
+- `initialize()`: Sets up the contract with an admin address
+- `propose_upgrade()`: Initiates the 48-hour timelock period
+- `execute_upgrade()`: Executes the upgrade after timelock expires
+- `cancel_upgrade()`: Cancels a pending upgrade
+- `get_pending_upgrade()`: Retrieves pending upgrade information
+- `get_upgrade_timelock_remaining()`: Returns remaining timelock time
 
-```Bash
-git clone https://github.com/SFN/stellarflow-contracts.git
-cd stellarflow-contracts
+## Security Features
+
+### Flash Upgrade Prevention
+
+The contract prevents flash upgrades through:
+
+1. **48-Hour Timelock**: Mandatory delay between proposal and execution
+2. **Pending State Storage**: New WASM hash stored in pending state until timelock expires
+3. **Timestamp Validation**: Uses Stellar ledger timestamp for accurate time measurement
+4. **Authorization Checks**: Only admin can propose/execute upgrades
+
+### Access Control
+
+- **Admin-Only Operations**: Critical functions require admin authorization
+- **Proposal Tracking**: All proposals are tracked with proposer identity
+- **Cancellation Rights**: Admin can cancel pending upgrades
+
+## Usage Example
+
+```rust
+// Initialize contract
+contract.initialize(&admin_address);
+
+// Propose upgrade (starts 48-hour timelock)
+let new_wasm_hash = BytesN::from_array(&env, &[1u8; 32]);
+contract.propose_upgrade(&new_wasm_hash, &admin_address);
+
+// Check timelock status
+let remaining = contract.get_upgrade_timelock_remaining();
+println!("Time remaining: {} seconds", remaining.unwrap());
+
+// After 48 hours, execute upgrade
+contract.execute_upgrade(&admin_address);
 ```
 
-**Build the contract:**
+## Testing
 
-```Bash
-soroban contract build 
-```
-📂 Project Structure
+The contract includes comprehensive tests covering:
 
-├── src/
+- Basic functionality and initialization
+- Upgrade proposal and execution flow
+- Timelock enforcement and countdown
+- Unauthorized operation prevention
+- Upgrade cancellation
 
-|            ├── lib.rs          # Main contract entry point and public interface
+Run tests with:
 
-│            ├── types.rs        # Custom structs (PriceData) and Enums (DataKey)
-
-│            ├── storage.rs      # Persistent and Instance storage logic
-
-│            ├── auth.rs         # require_auth and Admin-check functions
-
-│            └── test.rs         # Comprehensive unit and integration tests
-
-├── Cargo.toml          # Project dependencies (soroban-sdk)
-
-└── README.md
-
-
-
-# 🛠️ Public Interface (API)
-**Admin Functions**
-> initialize(admin: Address): Sets the global contract administrator.
-
-> add_provider(provider: Address): Whitelists a backend relayer to push data.
-
-> rescue_tokens(token: Address, to: Address, amount: i128): Admin-only function to recover trapped assets from the contract.
-
-**Data Submission (Authorized)**
-update_price(source: Address, asset: Symbol, price: i128): Updates the price for a specific asset. Requires source authorization.
-
-**Data Retrieval (Public)**
-> get_price(asset: Symbol) -> PriceData: Returns the latest price, timestamp, and provider info.
-
-> get_all_assets() -> Vec<Symbol>: Returns a list of all currently tracked currency pairs.
-
-# 🧪 Testing Policy
-
-***We maintain a "No Test, No Merge" policy.***
-
-All Pull Requests (PRs) must include a updated test.rs file. To run the test suite:
-
-```Bash
+```bash
 cargo test
 ```
 
-**Tests must verify:**
+## Technical Requirements Met
 
-> Success Paths: Correct data storage and retrieval.
+✅ **Ledger Timestamp Validation**: Uses `ledger().timestamp()` for time validation  
+✅ **Pending State Storage**: New WASM hash stored in pending state before commitment  
+✅ **48-Hour Delay**: Enforced delay between proposal and execution  
+✅ **Flash Upgrade Prevention**: Complete protection against immediate upgrades  
 
-> Security Paths: Rejection of unauthorized update_price calls.
+## Build and Deploy
 
-> Edge Cases: Handling of missing assets or zero-value inputs.
+```bash
+# Build the contract
+cargo build --target wasm32-unknown-unknown --release
 
-# 📜 License
-This project is licensed under the MIT License - see the LICENSE file for details.
+# Deploy to Stellar network
+stellar contract deploy --wasm target/wasm32-unknown-unknown/release/stellarflow_contracts.wasm
+```
+
+## License
+
+This project is part of the StellarFlow Network ecosystem.
