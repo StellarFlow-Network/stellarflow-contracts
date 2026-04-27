@@ -5,6 +5,9 @@ use soroban_sdk::{contract, contractimpl, contracterror, Address, Env, Symbol, V
 mod types;
 mod interface;
 
+#[cfg(test)]
+mod test;
+
 pub use types::{AssetMeta, AssetWeight, DataKey, PriceData};
 pub use interface::PriceOracleStorageTrait;
 
