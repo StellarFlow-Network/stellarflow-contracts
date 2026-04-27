@@ -2153,8 +2153,8 @@ fn test_self_destruct_fails_with_non_admin() {
 
     let result = client.try_self_destruct(&admin1, &non_admin);
     match result {
-        Err(Ok(e)) => assert_eq!(e, Error::MultiSigValidationFailed),
-        other => panic!("expected MultiSigValidationFailed, got {:?}", other),
+        Err(Ok(e)) => assert_eq!(e, Error::Unauthorized),
+        other => panic!("expected Unauthorized, got {:?}", other),
     }
 }
 
@@ -2173,8 +2173,8 @@ fn test_self_destruct_fails_with_only_one_admin() {
 
     let result = client.try_self_destruct(&admin1, &fake_admin);
     match result {
-        Err(Ok(e)) => assert_eq!(e, Error::MultiSigValidationFailed),
-        other => panic!("expected MultiSigValidationFailed, got {:?}", other),
+        Err(Ok(e)) => assert_eq!(e, Error::Unauthorized),
+        other => panic!("expected Unauthorized, got {:?}", other),
     }
 }
 

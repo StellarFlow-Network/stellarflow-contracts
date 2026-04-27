@@ -1623,7 +1623,7 @@ impl PriceOracle {
 
         // Check if we've reached the maximum of 3 admins
         if admin_count >= 3 {
-            return Err(Error::MaxAdminsReached);
+            return Err(Error::InvalidState);
         }
 
         //_log_admin_action(&env, &admin1, AdminAction::RegisterAdmin, Some(new_admin.to_string()));
@@ -1670,7 +1670,7 @@ impl PriceOracle {
 
         // Cannot remove if would leave less than 1 admin
         if admin_count <= 1 {
-            return Err(Error::CannotRemoveLastAdmin);
+            return Err(Error::InvalidState);
         }
 
         // Verify the admin to remove actually exists
@@ -1784,7 +1784,7 @@ impl PriceOracle {
             2 => AdminAction::RemoveAdmin,
             3 => AdminAction::SelfDestruct,
             4 => AdminAction::Upgrade,
-            _ => return Err(Error::InvalidActionType),
+            _ => return Err(Error::InvalidArgument),
         };
 
         // Generate unique action ID
@@ -1846,15 +1846,15 @@ impl PriceOracle {
         // Get the proposed action
         let proposed = match crate::auth::_get_proposed_action(&env, action_id) {
             Some(p) => p,
-            None => return Err(Error::ActionNotFound),
+            None => return Err(Error::NotFound),
         };
 
         // Check if already executed or cancelled
         if proposed.executed {
-            return Err(Error::ActionAlreadyExecuted);
+            return Err(Error::InvalidState);
         }
         if proposed.cancelled {
-            return Err(Error::ActionCancelled);
+            return Err(Error::InvalidState);
         }
 
         // Add the vote
@@ -1901,21 +1901,21 @@ impl PriceOracle {
         // Get the proposed action
         let mut proposed = match crate::auth::_get_proposed_action(&env, action_id) {
             Some(p) => p,
-            None => return Err(Error::ActionNotFound),
+            None => return Err(Error::NotFound),
         };
 
         // Check if already executed or cancelled
         if proposed.executed {
-            return Err(Error::ActionAlreadyExecuted);
+            return Err(Error::InvalidState);
         }
         if proposed.cancelled {
-            return Err(Error::ActionCancelled);
+            return Err(Error::InvalidState);
         }
 
         // Check if threshold is met
         let threshold = crate::auth::_get_required_threshold(&env);
         if !crate::auth::_has_reached_threshold(&env, action_id, threshold) {
-            return Err(Error::ThresholdNotReached);
+            return Err(Error::InvalidState);
         }
 
         // Execute based on action type
@@ -1951,14 +1951,14 @@ impl PriceOracle {
                         (executor.clone(), new_admin.clone()),
                     );
                 } else {
-                    return Err(Error::InvalidActionType);
+                    return Err(Error::InvalidArgument);
                 }
             }
             AdminAction::RemoveAdmin => {
                 if let Some(ref admin_to_remove) = proposed.target {
                     let admins = crate::auth::_get_admin(&env);
                     if admins.len() <= 1 {
-                        return Err(Error::CannotRemoveLastAdmin);
+                        return Err(Error::InvalidState);
                     }
                     crate::auth::_remove_authorized(&env, admin_to_remove);
                     proposed.executed = true;
@@ -1973,7 +1973,7 @@ impl PriceOracle {
                         (executor.clone(), admin_to_remove.clone()),
                     );
                 } else {
-                    return Err(Error::InvalidActionType);
+                    return Err(Error::InvalidArgument);
                 }
             }
             AdminAction::SelfDestruct => {
@@ -2025,7 +2025,7 @@ impl PriceOracle {
                     (executor.clone(),),
                 );
             }
-            _ => return Err(Error::InvalidActionType),
+            _ => return Err(Error::InvalidArgument),
         }
 
         // Update the proposal status
@@ -2081,15 +2081,15 @@ impl PriceOracle {
         // Get the proposed action
         let mut proposed = match crate::auth::_get_proposed_action(&env, action_id) {
             Some(p) => p,
-            None => return Err(Error::ActionNotFound),
+            None => return Err(Error::NotFound),
         };
 
         // Check if already executed or cancelled
         if proposed.executed {
-            return Err(Error::ActionAlreadyExecuted);
+            return Err(Error::InvalidState);
         }
         if proposed.cancelled {
-            return Err(Error::ActionCancelled);
+            return Err(Error::InvalidState);
         }
 
         // Mark as cancelled
