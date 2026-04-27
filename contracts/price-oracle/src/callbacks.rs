@@ -1,4 +1,5 @@
 use soroban_sdk::{Address, Env, Symbol, Vec};
+use alloc::string::ToString;
 
 use crate::types::{DataKey, PriceUpdatePayload};
 
@@ -22,7 +23,7 @@ pub fn subscribe(env: &Env, callback_contract: Address) -> Result<(), String> {
     let mut subscribers = get_subscribers(env);
 
     // Check if already subscribed
-    if subscribers.iter().any(|sub| sub == &callback_contract) {
+    if subscribers.iter().any(|sub| sub == callback_contract) {
         return Err("Contract is already subscribed".to_string());
     }
 
@@ -112,7 +113,7 @@ fn try_invoke_callback(env: &Env, callback_contract: &Address, payload: &PriceUp
     let result = env.invoke_contract::<()>(
         callback_contract,
         &Symbol::new(env, "on_price_update"),
-        soroban_sdk::vec![env, payload],
+        soroban_sdk::vec![env, payload.clone()],
     );
 
     result.map_err(|_| "Callback invocation failed".to_string())
@@ -142,7 +143,7 @@ mod tests {
 
         // Verify both are in the list
         let subscribers = get_subscribers(&env);
-        assert!(subscribers.iter().any(|s| s == &contract1));
+        assert!(subscribers.iter().any(|s| s == contract1));
         assert!(subscribers.iter().any(|s| s == &contract2));
     }
 
@@ -175,8 +176,8 @@ mod tests {
 
         // Verify only contract2 remains
         let subscribers = get_subscribers(&env);
-        assert!(!subscribers.iter().any(|s| s == &contract1));
-        assert!(subscribers.iter().any(|s| s == &contract2));
+        assert!(!subscribers.iter().any(|s| s == contract1));
+        assert!(subscribers.iter().any(|s| s == contract2));
     }
 
     #[test]
