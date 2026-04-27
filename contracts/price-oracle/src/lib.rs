@@ -221,6 +221,11 @@ pub trait StellarFlowTrait {
     ///
     /// Returns true if the contract is frozen, false otherwise.
     fn is_frozen(env: Env) -> bool;
+
+    /// Check if the contract is active (not paused).
+    ///
+    /// Returns true if the contract is active, false if paused.
+    fn is_contract_active(env: Env) -> bool;
 }
 
 #[contractclient(name = "TokenContractClient")]
@@ -2143,6 +2148,13 @@ impl PriceOracle {
     /// Returns true if the contract is frozen, false otherwise.
     pub fn is_frozen(env: Env) -> bool {
         crate::auth::_is_frozen(&env)
+    }
+
+    /// Check if the contract is active (not paused).
+    ///
+    /// Returns true if the contract is active, false if paused.
+    pub fn is_contract_active(env: Env) -> bool {
+        !crate::auth::_is_paused(&env)
     }
 
     /// Get the price buffer for a specific asset.
