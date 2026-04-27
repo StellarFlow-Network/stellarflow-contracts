@@ -10,6 +10,8 @@ pub enum DataKey {
     PriceData,
     PriceBuffer,
     PriceBoundsData,
+    /// Configurable global maximum allowed price deviation in basis points.
+    MaxPriceDeviationBps,
     IsLocked,
     PriceFloorData,
     AssetDescription(Symbol),

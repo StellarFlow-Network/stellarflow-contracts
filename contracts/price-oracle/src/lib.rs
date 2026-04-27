@@ -228,8 +228,8 @@ pub trait TokenContractTrait {
     fn transfer(env: Env, from: Address, to: Address, amount: i128);
 }
 
-/// Maximum allowed percentage change between price updates (10% = 1000 basis points).
-/// Any price update exceeding this threshold will be rejected to prevent flash crashes.
+/// Default maximum allowed percentage change between price updates (10% = 1000 basis points).
+/// This value is used when no configurable max deviation percentage has been set.
 const MAX_PERCENT_CHANGE_BPS: i128 = 1_000;
 
 /// Percentage move threshold (5% = 500 basis points) above which a "cross_call"
@@ -1252,9 +1252,10 @@ impl PriceOracle {
             .map(|pd| pd.price)
             .unwrap_or(0);
 
+        let max_deviation_bps = Self::get_max_deviation_percentage(env.clone());
         if old_price > 0 {
             if let Some(pct_change_bps) = calculate_percentage_difference_bps(old_price, normalized) {
-                if pct_change_bps > MAX_PERCENT_CHANGE_BPS {
+                if pct_change_bps > max_deviation_bps {
                     return Err(Error::FlashCrashDetected);
                 }
             }
@@ -1411,6 +1412,34 @@ impl PriceOracle {
             .get(&DataKey::PriceBoundsData)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
         bounds_map.get(asset)
+    }
+
+    /// Set the maximum allowed price deviation percentage (in basis points).
+    /// This value is applied in `update_price` to reject single-ledger flash crash updates.
+    pub fn set_max_deviation_percentage(
+        env: Env,
+        admin: Address,
+        max_deviation_bps: i128,
+    ) {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        assert!(max_deviation_bps > 0, "max_deviation_bps must be positive");
+        assert!(max_deviation_bps <= 10_000, "max_deviation_bps must be <= 10000");
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::MaxPriceDeviationBps, &max_deviation_bps);
+    }
+
+    /// Get the configured maximum allowed price deviation, or default to 10%.
+    pub fn get_max_deviation_percentage(env: Env) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::MaxPriceDeviationBps)
+            .unwrap_or(MAX_PERCENT_CHANGE_BPS)
     }
 
     /// Get the current ledger sequence number.

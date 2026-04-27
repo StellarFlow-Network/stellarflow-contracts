@@ -235,6 +235,38 @@ fn test_update_price_rejects_flash_crash() {
 }
 
 #[test]
+fn test_set_and_get_max_deviation_percentage() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+
+    set_admin(&env, &contract_id, &admin);
+    client.set_max_deviation_percentage(&admin, &500_i128);
+
+    let max_deviation = client.get_max_deviation_percentage();
+    assert_eq!(max_deviation, 500_i128);
+}
+
+#[test]
+fn test_update_price_rejects_configured_max_deviation() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let asset = symbol_short!("NGN");
+
+    set_admin(&env, &contract_id, &admin);
+    add_provider(&env, &contract_id, &provider);
+    client.add_asset(&admin, &asset);
+    client.set_max_deviation_percentage(&admin, &500_i128);
+    client.set_price(&asset, &1_000_i128, &2u32, &3_600u64);
+
+    let result = client.try_update_price(&provider, &asset, &1_100_i128, &2u32, &100u32, &3_600u64);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, Error::FlashCrashDetected),
+        other => panic!("expected FlashCrashDetected, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_set_and_get_price_bounds() {
     let (env, contract_id, client) = setup();
     let admin = Address::generate(&env);
