@@ -1,0 +1,25 @@
+[package]
+name = "price-oracle-storage"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = "20.0.0"
+
+[dev-dependencies]
+soroban-sdk = { version = "20.0.0", features = ["testutils"] }
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+debug = 0
+strip = "symbols"
+debug-assertions = false
+panic = "abort"
+codegen-units = 1
+lto = true
