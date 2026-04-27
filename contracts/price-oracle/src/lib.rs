@@ -420,7 +420,7 @@ fn acquire_lock(env: &Env) -> Result<(), Error> {
         .unwrap_or(false);
     
     if is_locked {
-        return Err(Error::ReentrancyDetected);
+        return Err(Error::InvalidState);
     }
     
     env.storage().instance().set(&DataKey::IsLocked, &true);
@@ -688,15 +688,14 @@ impl PriceOracle {
 
     pub fn get_index_price(env: Env, components: soroban_sdk::Vec<crate::types::AssetWeight>) -> Result<i128, Error> {
         if components.is_empty() {
-            return Err(Error::AssetNotFound); 
-        }
+            return Err(Error::InvalidArgument);
 
         let mut total_weighted_price: i128 = 0;
         let mut total_weight: u32 = 0;
 
         for component in components.iter() {
             // Fetch the verified price. 
-            // If any asset is missing or stale, this cleanly propagates Error::AssetNotFound.
+            // If any asset is missing or stale, this cleanly propagates Error::NotFound.
             let price_data = Self::get_price(env.clone(), component.asset.clone(), true)?;
             
             let weight_i128: i128 = component.weight.into();
@@ -916,7 +915,7 @@ impl PriceOracle {
     /// and admins.  When `verified` is `false`, data is read from the
     /// `CommunityPrice` bucket instead.
     ///
-    /// Returns `Error::AssetNotFound` when the asset is missing or stale.
+    /// Returns `Error::NotFound` when the asset is missing or stale.
     pub fn get_price(env: Env, asset: Symbol, verified: bool) -> Result<PriceData, Error> {
         // Collect query fee
         _collect_query_fee(&env)?;
@@ -1068,12 +1067,12 @@ impl PriceOracle {
 
     /// Get the human-readable description for an asset.
     ///
-    /// Returns `Error::AssetNotFound` if no description has been set.
+    /// Returns `Error::NotFound` if no description has been set.
     pub fn get_asset_description(env: Env, asset: Symbol) -> Result<soroban_sdk::String, Error> {
         env.storage()
             .persistent()
             .get(&DataKey::AssetDescription(asset))
-            .ok_or(Error::AssetNotFound)
+            .ok_or(Error::NotFound)
     }
 
     /// Set the price data for a specific asset (admin/internal use).
@@ -1238,7 +1237,7 @@ impl PriceOracle {
 
         //_log_admin_action(&env, &admin, AdminAction::RescueTokens, Some(format!("Token: {}, To: {}, Amount: {}", token.to_string(), to.to_string(), amount)));
         if amount <= 0 {
-            panic_with_error!(&env, Error::InvalidPrice);
+            panic_with_error!(&env, Error::InvalidArgument);
         }
 
         let token_client = token::Client::new(&env, &token);
