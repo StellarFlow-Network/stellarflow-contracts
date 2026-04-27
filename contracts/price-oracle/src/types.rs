@@ -27,6 +27,18 @@ pub enum DataKey {
     CommunityPrice(Symbol),
     /// Query fee amount for get_price calls (in stroops).
     QueryFee,
+    /// Accumulated fees collected from queries.
+    CollectedFees,
+    /// Insurance Fund address for fee distribution.
+    InsuranceFund,
+    /// Admin Treasury address for fee distribution.
+    AdminTreasury,
+    /// Relayer Rewards address for fee distribution.
+    RelayerRewards,
+    /// Transaction counter for triggering fee distribution.
+    TransactionCounter,
+    /// Distribution interval (number of transactions before auto-distribution).
+    DistributionInterval,
     /// Destroyed flag to mark contract as permanently unusable.
     Destroyed,
     /// Asset decimal metadata (base_decimals, quote_decimals).
