@@ -713,7 +713,7 @@ impl PriceOracle {
         }
 
         if total_weight == 0 {
-            return Err(Error::InvalidWeight);
+            return Err(Error::InvalidArgument);
         }
 
         // Calculate final index price. 
