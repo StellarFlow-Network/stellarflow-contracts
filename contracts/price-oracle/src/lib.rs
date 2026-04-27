@@ -873,6 +873,9 @@ impl PriceOracle {
     ///
     /// Returns `Error::AssetNotFound` when the asset is missing or stale.
     pub fn get_price(env: Env, asset: Symbol, verified: bool) -> Result<PriceData, Error> {
+        // Collect query fee
+        _collect_query_fee(&env)?;
+
         let key = if verified {
             DataKey::VerifiedPrice(asset)
         } else {
@@ -2335,6 +2338,54 @@ impl PriceOracle {
     /// Get the current fee distribution configuration.
     pub fn get_fee_distribution_config(env: Env) -> Option<crate::types::FeeDistribution> {
         env.storage().persistent().get(&DataKey::CollectedFees)
+    }
+
+    /// Set the Insurance Fund address for fee distribution.
+    pub fn set_insurance_fund(env: Env, admin: Address, address: Address) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        env.storage().persistent().set(&DataKey::InsuranceFund, &address);
+        Ok(())
+    }
+
+    /// Set the Admin Treasury address for fee distribution.
+    pub fn set_admin_treasury(env: Env, admin: Address, address: Address) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        env.storage().persistent().set(&DataKey::AdminTreasury, &address);
+        Ok(())
+    }
+
+    /// Set the Relayer Rewards address for fee distribution.
+    pub fn set_relayer_rewards(env: Env, admin: Address, address: Address) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        env.storage().persistent().set(&DataKey::RelayerRewards, &address);
+        Ok(())
+    }
+
+    /// Set the query fee amount (in stroops).
+    pub fn set_query_fee(env: Env, admin: Address, fee_amount: i128) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        if fee_amount < 0 {
+            return Err(Error::InvalidPrice);
+        }
+
+        env.storage().persistent().set(&DataKey::QueryFee, &fee_amount);
+        Ok(())
     }
 }
 
