@@ -703,10 +703,10 @@ impl PriceOracle {
             
             // Safe math to prevent overflow panics
             let weighted_val = price_data.price.checked_mul(weight_i128)
-                .ok_or(Error::InvalidPrice)?;
+                .ok_or(Error::InvalidArgument)?;
                 
             total_weighted_price = total_weighted_price.checked_add(weighted_val)
-                .ok_or(Error::InvalidPrice)?;
+                .ok_or(Error::InvalidArgument)?;
                 
             total_weight = total_weight.checked_add(component.weight)
                 .unwrap_or(total_weight); 
