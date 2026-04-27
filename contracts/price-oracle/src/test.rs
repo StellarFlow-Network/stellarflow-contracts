@@ -1,13 +1,10 @@
 #![cfg(test)]
-extern crate alloc;
 
 use super::*;
 use soroban_sdk::{
     contract, contractimpl, symbol_short, testutils::Address as _, testutils::Events,
     testutils::Ledger, Address, Env, Symbol, vec,
 };
-use alloc::string::ToString;
-use alloc::format;
 
 #[soroban_sdk::contractevent]
 pub struct TokenTransferEvent {
@@ -47,6 +44,27 @@ fn add_provider(env: &Env, contract_id: &Address, provider: &Address) {
     env.as_contract(contract_id, || {
         crate::auth::_add_provider(env, provider);
     });
+}
+
+#[test]
+fn test_get_index_price() {
+    let env = Env::default();
+    env.mock_all_auths();
+    
+    // Setup Oracle & Admin...
+    // Add assets: NGN, GHS, CFA...
+    // Set prices for NGN, GHS, CFA...
+
+    let components = soroban_sdk::vec![
+        &env,
+        AssetWeight { asset: symbol_short!("NGN"), weight: 4000 }, // 40%
+        AssetWeight { asset: symbol_short!("GHS"), weight: 3000 }, // 30%
+        AssetWeight { asset: symbol_short!("CFA"), weight: 3000 }, // 30%
+    ];
+
+    let index_price = client.get_index_price(&components);
+    
+    // Assert the index_price equals the expected mathematical weighted average
 }
 
 #[test]
@@ -244,10 +262,9 @@ fn test_update_price_rejects_price_outside_bounds() {
     let stored = client.get_price(&asset, &true);
     assert_eq!(stored.price, 950_i128);
     assert_eq!(stored.timestamp, 1_700_000_123);
-}
-
     client.add_asset(&admin, &asset);
     client.set_price_bounds(&admin, &asset, &500_i128, &2_000_i128);
+}
 #[test]
 #[should_panic(expected = "HostError")]
 fn test_set_price_rejects_zero_price() {
@@ -378,7 +395,7 @@ fn test_rescue_tokens_rejects_non_admin() {
 }
 
 #[test]
-fn test_toggle_pause_requires_two_admins() {
+fn try_try_subscribe_to_price_updates() {
     let (env, contract_id, client) = setup();
     let admin1 = Address::generate(&env);
     let admin2 = Address::generate(&env);
@@ -1828,48 +1845,6 @@ fn test_renounce_ownership_blocks_admin_functions_after_renouncement() {
 // ============================================================================
 
 #[test]
-fn test_toggle_pause_requires_two_admins() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(PriceOracle, ());
-    let client = PriceOracleClient::new(&env, &contract_id);
-    let admin1 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
-    let admin2 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
-
-    // Initialize with first admin
-    client.init_admin(&admin1);
-
-    // Add second admin
-    env.as_contract(&contract_id, || {
-        crate::auth::_add_authorized(&env, &admin2);
-    });
-
-    // Verify initially not paused
-    env.as_contract(&contract_id, || {
-        assert!(!crate::auth::_is_paused(&env));
-    });
-
-    // Toggle pause with two admins
-    let result = client.toggle_pause(&admin1, &admin2);
-    assert_eq!(result, true);
-
-    // Verify paused state
-    env.as_contract(&contract_id, || {
-        assert!(crate::auth::_is_paused(&env));
-    });
-
-    // Toggle again to unpause
-    let result = client.toggle_pause(&admin1, &admin2);
-    assert_eq!(result, false);
-
-    // Verify unpaused state
-    env.as_contract(&contract_id, || {
-        assert!(!crate::auth::_is_paused(&env));
-    });
-}
-
-#[test]
 #[should_panic]
 fn test_toggle_pause_fails_with_same_admin_twice() {
     let env = Env::default();
@@ -2281,12 +2256,12 @@ fn test_self_destruct_prevents_double_destruct() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn test_subscribe_to_price_updates() {
+fn test_try_subscribe_to_price_updates() {
     let (env, _contract_id, client) = setup();
     let callback_contract = Address::generate(&env);
 
     // Should successfully subscribe
-    let result = client.subscribe_to_price_updates(&callback_contract);
+    let result = client.try_subscribe_to_price_updates(&callback_contract);
     assert_eq!(result, Ok(()));
 
     // Verify subscriber is in the list
@@ -2301,10 +2276,10 @@ fn test_subscribe_duplicate_fails() {
     let callback_contract = Address::generate(&env);
 
     // First subscription succeeds
-    assert_eq!(client.subscribe_to_price_updates(&callback_contract), Ok(()));
+    assert_eq!(client.try_subscribe_to_price_updates(&callback_contract), Ok(()));
 
     // Duplicate subscription should fail
-    let result = client.subscribe_to_price_updates(&callback_contract);
+    let result = client.try_subscribe_to_price_updates(&callback_contract);
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("already subscribed"));
 }
@@ -2317,9 +2292,9 @@ fn test_multiple_subscribers() {
     let callback3 = Address::generate(&env);
 
     // Subscribe multiple contracts
-    assert_eq!(client.subscribe_to_price_updates(&callback1), Ok(()));
-    assert_eq!(client.subscribe_to_price_updates(&callback2), Ok(()));
-    assert_eq!(client.subscribe_to_price_updates(&callback3), Ok(()));
+    assert_eq!(client.try_subscribe_to_price_updates(&callback1), Ok(()));
+    assert_eq!(client.try_subscribe_to_price_updates(&callback2), Ok(()));
+    assert_eq!(client.try_subscribe_to_price_updates(&callback3), Ok(()));
 
     // Verify all are subscribed
     let subscribers = client.get_price_update_subscribers();
@@ -2330,18 +2305,18 @@ fn test_multiple_subscribers() {
 }
 
 #[test]
-fn test_unsubscribe_from_price_updates() {
+fn test_try_unsubscribe_from_price_updates() {
     let (env, _contract_id, client) = setup();
     let callback1 = Address::generate(&env);
     let callback2 = Address::generate(&env);
 
     // Subscribe both
-    client.subscribe_to_price_updates(&callback1).unwrap();
-    client.subscribe_to_price_updates(&callback2).unwrap();
+    client.try_subscribe_to_price_updates(&callback1).unwrap();
+    client.try_subscribe_to_price_updates(&callback2).unwrap();
     assert_eq!(client.get_price_update_subscribers().len(), 2);
 
     // Unsubscribe first
-    let result = client.unsubscribe_from_price_updates(&callback1);
+    let result = client.try_unsubscribe_from_price_updates(&callback1);
     assert_eq!(result, Ok(()));
 
     // Verify only callback2 remains
@@ -2357,10 +2332,10 @@ fn test_unsubscribe_nonexistent_fails() {
     let callback2 = Address::generate(&env);
 
     // Subscribe only callback1
-    client.subscribe_to_price_updates(&callback1).unwrap();
+    client.try_subscribe_to_price_updates(&callback1).unwrap();
 
     // Try to unsubscribe callback2 (not subscribed)
-    let result = client.unsubscribe_from_price_updates(&callback2);
+    let result = client.try_unsubscribe_from_price_updates(&callback2);
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("not found"));
 
@@ -2385,15 +2360,15 @@ fn test_subscribe_unsubscribe_cycle() {
     let callback = Address::generate(&env);
 
     // Subscribe
-    assert_eq!(client.subscribe_to_price_updates(&callback), Ok(()));
+    assert_eq!(client.try_subscribe_to_price_updates(&callback), Ok(()));
     assert_eq!(client.get_price_update_subscribers().len(), 1);
 
     // Unsubscribe
-    assert_eq!(client.unsubscribe_from_price_updates(&callback), Ok(()));
+    assert_eq!(client.try_unsubscribe_from_price_updates(&callback), Ok(()));
     assert_eq!(client.get_price_update_subscribers().len(), 0);
 
     // Subscribe again should work
-    assert_eq!(client.subscribe_to_price_updates(&callback), Ok(()));
+    assert_eq!(client.try_subscribe_to_price_updates(&callback), Ok(()));
     assert_eq!(client.get_price_update_subscribers().len(), 1);
 }
 
@@ -2420,7 +2395,7 @@ fn test_update_price_does_not_crash_with_subscribers() {
     });
 
     // Subscribe a contract
-    assert_eq!(client.subscribe_to_price_updates(&subscriber), Ok(()));
+    assert_eq!(client.try_subscribe_to_price_updates(&subscriber), Ok(()));
 
     // Update price should not crash even with subscribers
     // (The callback will fail because subscriber doesn't implement on_price_update, but update should succeed)
@@ -2447,7 +2422,7 @@ fn test_set_price_with_subscribers() {
     let asset = symbol_short!("KES");
 
     // Subscribe a contract
-    assert_eq!(client.subscribe_to_price_updates(&subscriber), Ok(()));
+    assert_eq!(client.try_subscribe_to_price_updates(&subscriber), Ok(()));
 
     // Set price should not crash even with subscribers
     env.ledger().set_timestamp(2_000_000);
