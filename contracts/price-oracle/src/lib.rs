@@ -1102,7 +1102,7 @@ impl PriceOracle {
         // Ensure lock is released even on error
         let result = (|| -> Result<(), Error> {
             if !is_valid(val) {
-                return Err(Error::InvalidPrice);
+                return Err(Error::InvalidArgument);
             }
 
             // Normalize the raw price to 9 fixed-point decimals on entry.
