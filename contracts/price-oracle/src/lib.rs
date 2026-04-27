@@ -280,6 +280,11 @@ pub enum Error {
     ActionAlreadyExecuted = 18,
     /// Action has been cancelled.
     ActionCancelled = 19,
+    /// Token decimals supplied by the caller do not match the value returned
+    /// by the Stellar Asset Contract (SAC) for this token. The caller must
+    /// query `token::Client::decimals()` on the SAC address and supply the
+    /// correct value before retrying.
+    DecimalsMismatch = 20,
 }
 
 #[contract]
@@ -1107,6 +1112,11 @@ impl PriceOracle {
         price: i128,
         decimals: u32,
         ttl: u64,
+        /// Optional Stellar Asset Contract address for the token being priced.
+        /// When `Some(addr)` is provided, `decimals()` is queried on the SAC and
+        /// compared against the supplied `decimals` value. Supplying `None` skips
+        /// the on-chain check (use for synthetic or non-SAC assets).
+        token_address: Option<Address>,
     ) -> Result<(), Error> {
         crate::auth::_require_not_frozen(&env);
         source.require_auth();
@@ -1118,6 +1128,12 @@ impl PriceOracle {
         if !is_valid(price) {
             return Err(Error::InvalidPrice);
         }
+
+        // Verify caller-supplied decimals against the SAC before any conversion.
+        // Community submissions are untrusted by definition, making this check
+        // especially important on this path.
+        Self::validate_sac_decimals(&env, &token_address, decimals)?;
+
 
         // Normalize the raw price to 9 fixed-point decimals on entry.
         let normalized = Self::normalize_price(&env, &asset, price);
@@ -1231,6 +1247,11 @@ impl PriceOracle {
         decimals: u32,
         confidence_score: u32,
         ttl: u64,
+        /// Optional Stellar Asset Contract address for the token being priced.
+        /// When `Some(addr)` is provided, `decimals()` is queried on the SAC and
+        /// compared against the supplied `decimals` value. Supplying `None` skips
+        /// the on-chain check (use for synthetic or non-SAC assets).
+        token_address: Option<Address>,
     ) -> Result<(), Error> {
         _require_not_destroyed(&env);
         crate::auth::_require_not_frozen(&env);
@@ -1247,6 +1268,11 @@ impl PriceOracle {
         if !_is_whitelisted_provider(&env, &source) {
             return Err(Error::NotAuthorized);
         }
+
+        // Verify caller-supplied decimals against the SAC before any conversion.
+        // This prevents a mismatched `decimals` value from silently corrupting the
+        // normalized price written to VerifiedPrice storage.
+        Self::validate_sac_decimals(&env, &token_address, decimals)?;
 
         // Normalize the raw price to 9 fixed-point decimals on entry.
         let normalized = Self::normalize_price(&env, &asset, price);
@@ -2159,6 +2185,56 @@ impl PriceOracle {
     pub fn normalize_price(_env: &Env, _asset: &Symbol, price: i128) -> i128 {
     price // Returns the integer directly
     } 
+
+    /// Query the decimal precision of a token directly from its Stellar Asset
+    /// Contract (SAC) on-chain.
+    ///
+    /// Uses `token::Client` to call `decimals()` on the SAC at `token_address`.
+    /// This is a cross-contract call and consumes additional gas, so it is only
+    /// invoked when the caller supplies a `token_address`.
+    ///
+    /// # Arguments
+    /// * `env`           - The Soroban execution environment.
+    /// * `token_address` - The on-chain address of the Stellar Asset Contract.
+    ///
+    /// # Returns
+    /// The `u32` decimal count reported by the SAC.
+    fn query_sac_decimals(env: &Env, token_address: &Address) -> u32 {
+        let client = token::Client::new(env, token_address);
+        client.decimals()
+    }
+
+     /// Validate that the caller-supplied `decimals` value matches the value
+    /// stored in the Stellar Asset Contract (SAC) for this token.
+    ///
+    /// When `token_address` is `Some(addr)`, this function performs a
+    /// cross-contract call to `addr.decimals()` and returns
+    /// `Err(Error::DecimalsMismatch)` if the on-chain value differs from
+    /// `caller_decimals`. When `token_address` is `None` the check is skipped
+    /// (useful for synthetic pairs or assets that have no SAC).
+    ///
+    /// # Arguments
+    /// * `env`            - The Soroban execution environment.
+    /// * `token_address`  - Optional SAC address to query.
+    /// * `caller_decimals` - The `decimals` value supplied by the caller.
+    ///
+    /// # Errors
+    /// Returns `Err(Error::DecimalsMismatch)` when the on-chain decimals differ
+    /// from `caller_decimals`.
+    fn validate_sac_decimals(
+        env: &Env,
+        token_address: &Option<Address>,
+        caller_decimals: u32,
+    ) -> Result<(), Error> {
+        if let Some(addr) = token_address {
+            let onchain_decimals = Self::query_sac_decimals(env, addr);
+            if onchain_decimals != caller_decimals {
+                return Err(Error::DecimalsMismatch);
+            }
+        }
+        Ok(())
+    }
+
     /// Get the number of unique relayer submissions for an asset in the current ledger.
     pub fn get_relayer_count(env: Env, asset: Symbol) -> u32 {
         let buffer = get_price_buffer(&env, asset);
