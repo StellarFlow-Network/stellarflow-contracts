@@ -1,10 +1,186 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractclient, contracterror, contractimpl, panic_with_error, Address, Env, Symbol, String, token,
+    contract, contractclient, contracterror, contractimpl, panic_with_error, Address, Env, Symbol, String, token, contractmeta,
 };
 
 use crate::types::{DataKey, PriceBounds, PriceBuffer, PriceBufferEntry, PriceData, PriceDataWithStatus, PriceEntryWithStatus, RecentEvent, AdminAction, AdminLogEntry, PriceUpdatePayload, ProposedAction};
+
+// Contract metadata for on-chain documentation
+contractmeta!(
+    key = "name",
+    val = "StellarFlow Price Oracle"
+);
+contractmeta!(
+    key = "description",
+    val = "A decentralized price oracle for African fiat currencies (NGN, KES, GHS) with multi-provider validation and real-time price feeds"
+);
+contractmeta!(
+    key = "version",
+    val = "1.0.0"
+);
+contractmeta!(
+    key = "author",
+    val = "StellarFlow Team"
+);
+contractmeta!(
+    key = "license",
+    val = "MIT"
+);
+contractmeta!(
+    key = "website",
+    val = "https://stellarflow.io"
+);
+contractmeta!(
+    key = "usage",
+    val = "Use StellarFlowClient to fetch verified prices for African fiat currencies. Supports batch queries, TWAP calculations, and price update callbacks"
+);
+
+// Function metadata for on-chain documentation
+contractmeta!(
+    key = "fn:get_price",
+    val = "Get full price data for an asset. Use verified=true for trusted prices, verified=false for community prices"
+);
+contractmeta!(
+    key = "fn:get_price_with_status",
+    val = "Get price data with freshness status. Returns stale prices instead of errors"
+);
+contractmeta!(
+    key = "fn:get_price_safe",
+    val = "Get price data safely. Returns None instead of errors for missing/stale assets"
+);
+contractmeta!(
+    key = "fn:get_last_price",
+    val = "Get just the price value (i128) for an asset. Fastest option when only price is needed"
+);
+contractmeta!(
+    key = "fn:get_prices",
+    val = "Batch query prices for multiple assets. Returns Vec<Option<PriceEntry>> preserving input order"
+);
+contractmeta!(
+    key = "fn:get_all_assets",
+    val = "Get all currently tracked asset symbols"
+);
+contractmeta!(
+    key = "fn:get_asset_count",
+    val = "Get the total number of tracked assets"
+);
+contractmeta!(
+    key = "fn:get_twap",
+    val = "Get Time-Weighted Average Price (last 10 updates) for an asset"
+);
+contractmeta!(
+    key = "fn:add_asset",
+    val = "Add a new asset to track. Requires admin authorization"
+);
+contractmeta!(
+    key = "fn:set_price_floor",
+    val = "Set minimum price for an asset. Updates below this value are rejected"
+);
+contractmeta!(
+    key = "fn:get_price_floor",
+    val = "Get configured minimum price floor for an asset"
+);
+contractmeta!(
+    key = "fn:get_admin",
+    val = "Get current contract administrator address"
+);
+contractmeta!(
+    key = "fn:is_admin",
+    val = "Check if an address has admin privileges"
+);
+contractmeta!(
+    key = "fn:transfer_admin",
+    val = "Initiate admin transfer with timelock protection"
+);
+contractmeta!(
+    key = "fn:accept_admin",
+    val = "Complete admin transfer after timelock expires"
+);
+contractmeta!(
+    key = "fn:renounce_ownership",
+    val = "Permanently renounce admin rights. Makes contract immutable. IRREVERSIBLE"
+);
+contractmeta!(
+    key = "fn:get_last_n_events",
+    val = "Get recent activity events from on-chain log (max 5)"
+);
+contractmeta!(
+    key = "fn:get_ledger_version",
+    val = "Get current ledger sequence for compatibility checking"
+);
+contractmeta!(
+    key = "fn:get_contract_name",
+    val = "Get human-readable contract name"
+);
+contractmeta!(
+    key = "fn:toggle_pause",
+    val = "Toggle contract pause state. Requires 2-of-3 admin signatures"
+);
+contractmeta!(
+    key = "fn:register_admin",
+    val = "Register new admin. Max 3 admins. Requires 2-of-3 existing admin signatures"
+);
+contractmeta!(
+    key = "fn:remove_admin",
+    val = "Remove admin. Cannot remove last admin. Requires 2-of-3 existing admin signatures"
+);
+contractmeta!(
+    key = "fn:get_admin_count",
+    val = "Get total number of registered admins"
+);
+contractmeta!(
+    key = "fn:get_oracle_health",
+    val = "Get oracle health status for admin dashboard"
+);
+contractmeta!(
+    key = "fn:subscribe_to_price_updates",
+    val = "Subscribe contract to receive price update callbacks"
+);
+contractmeta!(
+    key = "fn:unsubscribe_from_price_updates",
+    val = "Unsubscribe contract from price update callbacks"
+);
+contractmeta!(
+    key = "fn:get_price_update_subscribers",
+    val = "Get list of all subscribed contracts"
+);
+contractmeta!(
+    key = "fn:set_council",
+    val = "Set Community Council address for emergency freeze"
+);
+contractmeta!(
+    key = "fn:get_council",
+    val = "Get current Community Council address"
+);
+contractmeta!(
+    key = "fn:emergency_freeze",
+    val = "Emergency freeze contract. Only callable by Community Council"
+);
+contractmeta!(
+    key = "fn:is_frozen",
+    val = "Check if contract is in emergency freeze state"
+);
+contractmeta!(
+    key = "fn:initialize",
+    val = "Initialize contract with admin and base currency pairs. Can only be called once"
+);
+contractmeta!(
+    key = "fn:init_admin",
+    val = "Initialize admin address. Can only be called once"
+);
+contractmeta!(
+    key = "fn:set_asset_decimals",
+    val = "Register decimal precision for asset pair. Normalizes prices to 9 decimals"
+);
+contractmeta!(
+    key = "fn:get_asset_meta",
+    val = "Get decimal metadata for an asset"
+);
+contractmeta!(
+    key = "fn:ping",
+    val = "Health check. Returns PONG with minimal gas consumption"
+);
 
 const ADMIN_TIMELOCK: u64 = 86_400;
 const MAX_CLEAR_ASSETS: u32 = 20;
