@@ -1,5 +1,6 @@
 use soroban_sdk::{Address, Env, Symbol, Vec};
 use alloc::string::ToString;
+use soroban_sdk::{Address, Env, Symbol, Vec, IntoVal};
 
 use crate::types::{DataKey, PriceUpdatePayload};
 
@@ -19,12 +20,13 @@ pub fn get_subscribers(env: &Env) -> Vec<Address> {
 ///
 /// # Returns
 /// Returns `Err` if the contract is already subscribed to prevent duplicates.
-pub fn subscribe(env: &Env, callback_contract: Address) -> Result<(), String> {
+pub fn subscribe(env: &Env, callback_contract: Address) -> Result<(), crate::Error> {
     let mut subscribers = get_subscribers(env);
 
     // Check if already subscribed
     if subscribers.iter().any(|sub| sub == callback_contract) {
         return Err("Contract is already subscribed".to_string());
+        return Err(crate::Error::AlreadyInitialized);
     }
 
     subscribers.push_back(callback_contract);
@@ -43,7 +45,7 @@ pub fn subscribe(env: &Env, callback_contract: Address) -> Result<(), String> {
 ///
 /// # Returns
 /// Returns `Err` if the contract is not found in the subscriber list.
-pub fn unsubscribe(env: &Env, callback_contract: &Address) -> Result<(), String> {
+pub fn unsubscribe(env: &Env, callback_contract: &Address) -> Result<(), crate::Error> {
     let mut subscribers = get_subscribers(env);
 
     // Find and remove the subscriber
@@ -64,7 +66,7 @@ pub fn unsubscribe(env: &Env, callback_contract: &Address) -> Result<(), String>
     }
 
     if !found {
-        return Err("Contract not found in subscribers".to_string());
+        return Err(crate::Error::AssetNotFound);
     }
 
     env.storage()
@@ -106,17 +108,14 @@ pub fn notify_subscribers(env: &Env, payload: &PriceUpdatePayload) {
 ///
 /// This uses dynamic invocation to call the standardized callback interface.
 /// The callback contract must implement the `on_price_update(payload: PriceUpdatePayload)` function.
-fn try_invoke_callback(env: &Env, callback_contract: &Address, payload: &PriceUpdatePayload) -> Result<(), String> {
-    // Use env.invoke_contract to make a cross-contract call to on_price_update
-    // This is the standard Soroban pattern for C2C communication
-    
-    let result = env.invoke_contract::<()>(
+fn try_invoke_callback(env: &Env, callback_contract: &Address, payload: &PriceUpdatePayload) -> Result<(), crate::Error> {
+    env.invoke_contract::<()>(
         callback_contract,
         &Symbol::new(env, "on_price_update"),
         soroban_sdk::vec![env, payload.clone()],
+        soroban_sdk::vec![env, payload.into_val(env)],
     );
-
-    result.map_err(|_| "Callback invocation failed".to_string())
+    Ok(())
 }
 
 #[cfg(test)]
@@ -145,6 +144,7 @@ mod tests {
         let subscribers = get_subscribers(&env);
         assert!(subscribers.iter().any(|s| s == contract1));
         assert!(subscribers.iter().any(|s| s == &contract2));
+        assert!(subscribers.iter().any(|s| s == contract2));
     }
 
     #[test]
