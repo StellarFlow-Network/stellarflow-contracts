@@ -296,6 +296,8 @@ pub enum Error {
     InvalidArgument = 5,
     /// Operation cannot be performed in current contract state
     InvalidState = 6,
+    /// Contract has been permanently destroyed
+    ContractDestroyed = 7,
 
 #[contract]
 pub struct PriceOracle;
@@ -2283,17 +2285,17 @@ impl PriceOracle {
             .storage()
             .persistent()
             .get(&DataKey::InsuranceFund)
-            .ok_or(Error::AssetNotFound)?;
+            .ok_or(Error::NotFound)?;
         let admin_treasury = env
             .storage()
             .persistent()
             .get(&DataKey::AdminTreasury)
-            .ok_or(Error::AssetNotFound)?;
+            .ok_or(Error::NotFound)?;
         let relayer_rewards = env
             .storage()
             .persistent()
             .get(&DataKey::RelayerRewards)
-            .ok_or(Error::AssetNotFound)?;
+            .ok_or(Error::NotFound)?;
 
         // Calculate distribution amounts
         let total_fees = fee_config.collected_fees;
