@@ -631,16 +631,18 @@ impl PriceOracle {
                 .ok_or(Error::InvalidPrice)?;
                 
             total_weight = total_weight.checked_add(component.weight)
-                .unwrap_or(total_weight); 
+                .ok_or(Error::InvalidWeight)?;
         }
 
         if total_weight == 0 {
             return Err(Error::InvalidWeight);
         }
 
-        // Calculate final index price. 
+        // Calculate final index price using checked arithmetic. 
         // Because all stored prices are 9-decimal normalized, the division preserves the 9-decimal standard.
-        let index_price = total_weighted_price / (total_weight as i128);
+        let index_price = total_weighted_price
+            .checked_div(total_weight as i128)
+            .ok_or(Error::InvalidPrice)?;
         Ok(index_price)
     }
 
@@ -2122,10 +2124,10 @@ impl PriceOracle {
 
         let mut sum: i128 = 0;
         for (_, price) in twap_buffer.iter() {
-            sum += price;
+            sum = sum.checked_add(price)?;
         }
 
-        Some(sum / (len as i128))
+        sum.checked_div(len as i128)
     }
 
     /// Subscribe a contract to receive price update callbacks.

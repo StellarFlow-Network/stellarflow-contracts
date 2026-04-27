@@ -31,7 +31,7 @@ fn sort_prices(prices: &mut Vec<i128>) {
 /// - 0 inputs  → Err(MedianError::EmptyInput)
 /// - 1 input   → returns that value
 /// - odd count → returns the middle value
-/// - even count → returns the average of the two middle values
+/// - even count → returns the average of the two middle values (using checked arithmetic)
 #[allow(dead_code)]
 pub fn calculate_median(mut prices: Vec<i128>) -> Result<i128, MedianError> {
     let len = prices.len();
@@ -45,7 +45,10 @@ pub fn calculate_median(mut prices: Vec<i128>) -> Result<i128, MedianError> {
     } else {
         let lo = prices.get(mid - 1).unwrap();
         let hi = prices.get(mid).unwrap();
-        Ok((lo + hi) / 2)
+        // Use checked arithmetic to prevent overflow
+        let sum = lo.checked_add(hi).ok_or(MedianError::EmptyInput)?;
+        let avg = sum.checked_div(2).ok_or(MedianError::EmptyInput)?;
+        Ok(avg)
     }
 }
 
