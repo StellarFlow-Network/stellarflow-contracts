@@ -4,7 +4,7 @@ use soroban_sdk::{
     contract, contractclient, contracterror, contractimpl, panic_with_error, Address, Env, Symbol, String, token,
 };
 
-use crate::types::{DataKey, PriceBounds, PriceBuffer, PriceBufferEntry, PriceData, PriceDataWithStatus, PriceEntryWithStatus, RecentEvent, AdminAction, AdminLogEntry, PriceUpdatePayload, ProposedAction};
+use crate::types::{DataKey, PriceBounds, PriceBuffer, PriceBufferEntry, PriceData, PriceDataWithStatus, PriceEntryWithStatus, RecentEvent, AdminAction, AdminLogEntry, PriceUpdatePayload, ProposedAction, FeeDistribution};
 
 const ADMIN_TIMELOCK: u64 = 86_400;
 const MAX_CLEAR_ASSETS: u32 = 20;
@@ -221,6 +221,44 @@ pub trait StellarFlowTrait {
     ///
     /// Returns true if the contract is frozen, false otherwise.
     fn is_frozen(env: Env) -> bool;
+
+    /// Distribute collected fees between Insurance Fund, Admin Treasury, and Relayer Rewards.
+    ///
+    /// Automatically called after reaching the transaction threshold or can be called manually by admin.
+    /// Splits fees according to the configured percentages (in basis points).
+    fn distribute_fees(env: Env, admin: Address) -> Result<(), Error>;
+
+    /// Set the fee distribution percentages.
+    ///
+    /// Only admin can call this. Percentages are in basis points (e.g., 5000 = 50%).
+    /// The sum of all percentages must equal 10000 (100%).
+    fn set_fee_distribution(
+        env: Env,
+        admin: Address,
+        insurance_fund_bps: u32,
+        admin_treasury_bps: u32,
+        relayer_rewards_bps: u32,
+    ) -> Result<(), Error>;
+
+    /// Set the transaction distribution interval.
+    ///
+    /// After this many transactions, fees will be automatically distributed.
+    fn set_distribution_interval(env: Env, admin: Address, interval: u32) -> Result<(), Error>;
+
+    /// Get the current fee distribution configuration.
+    fn get_fee_distribution_config(env: Env) -> Option<crate::types::FeeDistribution>;
+
+    /// Set the Insurance Fund address for fee distribution.
+    fn set_insurance_fund(env: Env, admin: Address, address: Address) -> Result<(), Error>;
+
+    /// Set the Admin Treasury address for fee distribution.
+    fn set_admin_treasury(env: Env, admin: Address, address: Address) -> Result<(), Error>;
+
+    /// Set the Relayer Rewards address for fee distribution.
+    fn set_relayer_rewards(env: Env, admin: Address, address: Address) -> Result<(), Error>;
+
+    /// Set the query fee amount (in stroops).
+    fn set_query_fee(env: Env, admin: Address, fee_amount: i128) -> Result<(), Error>;
 }
 
 #[contractclient(name = "TokenContractClient")]
@@ -2155,6 +2193,148 @@ impl PriceOracle {
     /// A vector of addresses of all contracts currently subscribed to price updates.
     pub fn get_price_update_subscribers(env: Env) -> soroban_sdk::Vec<Address> {
         callbacks::get_subscribers(&env)
+    }
+
+    /// Distribute collected fees between Insurance Fund, Admin Treasury, and Relayer Rewards.
+    ///
+    /// Automatically called after reaching the transaction threshold or can be called manually by admin.
+    /// Splits fees according to the configured percentages (in basis points).
+    pub fn distribute_fees(env: Env, admin: Address) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        // Get current fee distribution config
+        let mut fee_config: FeeDistribution = env
+            .storage()
+            .persistent()
+            .get(&DataKey::CollectedFees)
+            .unwrap_or(FeeDistribution {
+                collected_fees: 0,
+                insurance_fund_bps: 4000, // 40%
+                admin_treasury_bps: 3000, // 30%
+                relayer_rewards_bps: 3000, // 30%
+                last_distribution: env.ledger().timestamp(),
+            });
+
+        if fee_config.collected_fees <= 0 {
+            return Ok(()); // No fees to distribute
+        }
+
+        // Get recipient addresses
+        let insurance_fund = env
+            .storage()
+            .persistent()
+            .get(&DataKey::InsuranceFund)
+            .ok_or(Error::AssetNotFound)?;
+        let admin_treasury = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AdminTreasury)
+            .ok_or(Error::AssetNotFound)?;
+        let relayer_rewards = env
+            .storage()
+            .persistent()
+            .get(&DataKey::RelayerRewards)
+            .ok_or(Error::AssetNotFound)?;
+
+        // Calculate distribution amounts
+        let total_fees = fee_config.collected_fees;
+        let insurance_amount = (total_fees * fee_config.insurance_fund_bps as i128) / 10000;
+        let admin_amount = (total_fees * fee_config.admin_treasury_bps as i128) / 10000;
+        let relayer_amount = total_fees - insurance_amount - admin_amount; // Remainder goes to relayers
+
+        // Get the fee token (assuming XLM for now, but could be configurable)
+        let fee_token = env
+            .storage()
+            .persistent()
+            .get(&DataKey::QueryFee)
+            .unwrap_or_else(|| Address::from_string(&soroban_sdk::String::from_str(&env, "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC")));
+
+        // Transfer fees to recipients
+        let token_client = token::Client::new(&env, &fee_token);
+        let contract_address = env.current_contract_address();
+
+        if insurance_amount > 0 {
+            token_client.transfer(&contract_address, &insurance_fund, &insurance_amount);
+        }
+        if admin_amount > 0 {
+            token_client.transfer(&contract_address, &admin_treasury, &admin_amount);
+        }
+        if relayer_amount > 0 {
+            token_client.transfer(&contract_address, &relayer_rewards, &relayer_amount);
+        }
+
+        // Reset collected fees and update timestamp
+        fee_config.collected_fees = 0;
+        fee_config.last_distribution = env.ledger().timestamp();
+        env.storage().persistent().set(&DataKey::CollectedFees, &fee_config);
+
+        // Reset transaction counter
+        env.storage().persistent().set(&DataKey::TransactionCounter, &0u32);
+
+        Ok(())
+    }
+
+    /// Set the fee distribution percentages.
+    ///
+    /// Only admin can call this. Percentages are in basis points (e.g., 5000 = 50%).
+    /// The sum of all percentages must equal 10000 (100%).
+    pub fn set_fee_distribution(
+        env: Env,
+        admin: Address,
+        insurance_fund_bps: u32,
+        admin_treasury_bps: u32,
+        relayer_rewards_bps: u32,
+    ) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        // Validate that percentages sum to 100%
+        if insurance_fund_bps + admin_treasury_bps + relayer_rewards_bps != 10000 {
+            return Err(Error::InvalidWeight);
+        }
+
+        let mut fee_config: FeeDistribution = env
+            .storage()
+            .persistent()
+            .get(&DataKey::CollectedFees)
+            .unwrap_or(FeeDistribution {
+                collected_fees: 0,
+                insurance_fund_bps: 4000,
+                admin_treasury_bps: 3000,
+                relayer_rewards_bps: 3000,
+                last_distribution: env.ledger().timestamp(),
+            });
+
+        fee_config.insurance_fund_bps = insurance_fund_bps;
+        fee_config.admin_treasury_bps = admin_treasury_bps;
+        fee_config.relayer_rewards_bps = relayer_rewards_bps;
+
+        env.storage().persistent().set(&DataKey::CollectedFees, &fee_config);
+
+        Ok(())
+    }
+
+    /// Set the transaction distribution interval.
+    ///
+    /// After this many transactions, fees will be automatically distributed.
+    pub fn set_distribution_interval(env: Env, admin: Address, interval: u32) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        env.storage().persistent().set(&DataKey::DistributionInterval, &interval);
+        Ok(())
+    }
+
+    /// Get the current fee distribution configuration.
+    pub fn get_fee_distribution_config(env: Env) -> Option<crate::types::FeeDistribution> {
+        env.storage().persistent().get(&DataKey::CollectedFees)
     }
 }
 
