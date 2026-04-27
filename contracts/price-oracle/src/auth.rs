@@ -1,4 +1,5 @@
 use soroban_sdk::{contracttype, Address, Env, Vec};
+use crate::types::{RelayerState, DataKey};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Storage Key
@@ -230,6 +231,80 @@ pub fn _require_not_frozen(env: &Env) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Relayer Penalty System
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Get the relayer state for a given provider address.
+pub fn _get_relayer_state(env: &Env, provider: &Address) -> RelayerState {
+    env.storage()
+        .instance()
+        .get(&crate::types::DataKey::RelayerState(provider.clone()))
+        .unwrap_or_else(|| RelayerState {
+            consecutive_errors: 0,
+            penalty_multiplier: 100, // No penalty by default
+            last_success_timestamp: 0,
+            last_error_timestamp: 0,
+        })
+}
+
+/// Set the relayer state for a given provider address.
+pub fn _set_relayer_state(env: &Env, provider: &Address, state: &RelayerState) {
+    env.storage().instance().set(&crate::types::DataKey::RelayerState(provider.clone()), state);
+}
+
+/// Calculate penalty multiplier based on consecutive errors.
+/// 
+/// Penalty progression:
+/// - 1-2 errors: 110 (10% penalty)
+/// - 3-4 errors: 125 (25% penalty) 
+/// - 5-7 errors: 150 (50% penalty)
+/// - 8+ errors: 200 (100% penalty - effectively suspended)
+pub fn _calculate_penalty_multiplier(consecutive_errors: u32) -> u32 {
+    match consecutive_errors {
+        0 => 100, // No penalty
+        1 | 2 => 110, // 10% penalty
+        3 | 4 => 125, // 25% penalty
+        5 | 6 | 7 => 150, // 50% penalty
+        _ => 200, // 100% penalty (suspended)
+    }
+}
+
+/// Update relayer state after a successful submission.
+/// Resets consecutive errors and updates penalty multiplier.
+pub fn _record_relayer_success(env: &Env, provider: &Address) {
+    let mut state = _get_relayer_state(env, provider);
+    state.consecutive_errors = 0;
+    state.penalty_multiplier = 100; // Reset penalty
+    state.last_success_timestamp = env.ledger().timestamp();
+    _set_relayer_state(env, provider, &state);
+}
+
+/// Update relayer state after a failed submission or missed heartbeat.
+/// Increments consecutive errors and updates penalty multiplier.
+pub fn _record_relayer_error(env: &Env, provider: &Address) {
+    let mut state = _get_relayer_state(env, provider);
+    state.consecutive_errors += 1;
+    state.penalty_multiplier = _calculate_penalty_multiplier(state.consecutive_errors);
+    state.last_error_timestamp = env.ledger().timestamp();
+    _set_relayer_state(env, provider, &state);
+}
+
+/// Get the current penalty multiplier for a relayer.
+pub fn _get_relayer_penalty_multiplier(env: &Env, provider: &Address) -> u32 {
+    let state = _get_relayer_state(env, provider);
+    state.penalty_multiplier
+}
+
+/// Check if a relayer is effectively suspended (100% penalty).
+pub fn _is_relayer_suspended(env: &Env, provider: &Address) -> bool {
+    let state = _get_relayer_state(env, provider);
+    state.penalty_multiplier >= 200
+}
+
+/// Get the number of consecutive errors for a relayer.
+pub fn _get_consecutive_errors(env: &Env, provider: &Address) -> u32 {
+    let state = _get_relayer_state(env, provider);
+    state.consecutive_errors
 // Multi-Sig Action Proposal Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -599,6 +674,106 @@ mod auth_tests {
         let random = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
         env.as_contract(&contract_id, || {
             assert_eq!(_get_provider_weight(&env, &random), 0);
+        });
+    }
+
+    // ── Relayer Penalty System tests ───────────────────────────────────────────
+
+    #[test]
+    fn test_relayer_state_initialization() {
+        let (env, contract_id, _) = setup();
+        let provider = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+        env.as_contract(&contract_id, || {
+            let state = _get_relayer_state(&env, &provider);
+            assert_eq!(state.consecutive_errors, 0);
+            assert_eq!(state.penalty_multiplier, 100);
+            assert_eq!(state.last_success_timestamp, 0);
+            assert_eq!(state.last_error_timestamp, 0);
+        });
+    }
+
+    #[test]
+    fn test_calculate_penalty_multiplier() {
+        assert_eq!(_calculate_penalty_multiplier(0), 100); // No penalty
+        assert_eq!(_calculate_penalty_multiplier(1), 110); // 10% penalty
+        assert_eq!(_calculate_penalty_multiplier(2), 110); // 10% penalty
+        assert_eq!(_calculate_penalty_multiplier(3), 125); // 25% penalty
+        assert_eq!(_calculate_penalty_multiplier(4), 125); // 25% penalty
+        assert_eq!(_calculate_penalty_multiplier(5), 150); // 50% penalty
+        assert_eq!(_calculate_penalty_multiplier(6), 150); // 50% penalty
+        assert_eq!(_calculate_penalty_multiplier(7), 150); // 50% penalty
+        assert_eq!(_calculate_penalty_multiplier(8), 200); // 100% penalty (suspended)
+        assert_eq!(_calculate_penalty_multiplier(10), 200); // 100% penalty (suspended)
+    }
+
+    #[test]
+    fn test_record_relayer_success() {
+        let (env, contract_id, _) = setup();
+        let provider = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+        env.as_contract(&contract_id, || {
+            // Start with some errors
+            _record_relayer_error(&env, &provider);
+            _record_relayer_error(&env, &provider);
+            assert_eq!(_get_consecutive_errors(&env, &provider), 2);
+            assert_eq!(_get_relayer_penalty_multiplier(&env, &provider), 110);
+
+            // Record success - should reset
+            _record_relayer_success(&env, &provider);
+            assert_eq!(_get_consecutive_errors(&env, &provider), 0);
+            assert_eq!(_get_relayer_penalty_multiplier(&env, &provider), 100);
+            assert!(_get_relayer_state(&env, &provider).last_success_timestamp > 0);
+        });
+    }
+
+    #[test]
+    fn test_record_relayer_error_progression() {
+        let (env, contract_id, _) = setup();
+        let provider = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+        env.as_contract(&contract_id, || {
+            // First error
+            _record_relayer_error(&env, &provider);
+            assert_eq!(_get_consecutive_errors(&env, &provider), 1);
+            assert_eq!(_get_relayer_penalty_multiplier(&env, &provider), 110);
+            assert!(!_is_relayer_suspended(&env, &provider));
+
+            // Second error
+            _record_relayer_error(&env, &provider);
+            assert_eq!(_get_consecutive_errors(&env, &provider), 2);
+            assert_eq!(_get_relayer_penalty_multiplier(&env, &provider), 110);
+            assert!(!_is_relayer_suspended(&env, &provider));
+
+            // Third error
+            _record_relayer_error(&env, &provider);
+            assert_eq!(_get_consecutive_errors(&env, &provider), 3);
+            assert_eq!(_get_relayer_penalty_multiplier(&env, &provider), 125);
+            assert!(!_is_relayer_suspended(&env, &provider));
+
+            // Eighth error - should be suspended
+            _record_relayer_error(&env, &provider);
+            _record_relayer_error(&env, &provider);
+            _record_relayer_error(&env, &provider);
+            _record_relayer_error(&env, &provider);
+            _record_relayer_error(&env, &provider);
+            assert_eq!(_get_consecutive_errors(&env, &provider), 8);
+            assert_eq!(_get_relayer_penalty_multiplier(&env, &provider), 200);
+            assert!(_is_relayer_suspended(&env, &provider));
+        });
+    }
+
+    #[test]
+    fn test_relayer_state_persistence() {
+        let (env, contract_id, _) = setup();
+        let provider = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+        env.as_contract(&contract_id, || {
+            // Record some errors
+            _record_relayer_error(&env, &provider);
+            _record_relayer_error(&env, &provider);
+            
+            // Verify state is saved
+            let state = _get_relayer_state(&env, &provider);
+            assert_eq!(state.consecutive_errors, 2);
+            assert_eq!(state.penalty_multiplier, 110);
+            assert!(state.last_error_timestamp > 0);
         });
     }
 
