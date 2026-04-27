@@ -968,6 +968,9 @@ impl PriceOracle {
     /// Returns the last known price data and marks it stale when TTL has expired.
     /// Always reads from the `VerifiedPrice` bucket.
     pub fn get_price_with_status(env: Env, asset: Symbol) -> Result<PriceDataWithStatus, Error> {
+        // Collect query fee
+        _collect_query_fee(&env)?;
+
         match env
             .storage()
             .temporary()
@@ -987,6 +990,9 @@ impl PriceOracle {
     /// Returns `None` instead of an error when the asset is not found.
     /// Always reads from the `VerifiedPrice` bucket.
     pub fn get_price_safe(env: Env, asset: Symbol) -> Option<PriceData> {
+        // Collect query fee
+        let _ = _collect_query_fee(&env); // Ignore errors for safe function
+
         env.storage()
             .temporary()
             .get::<DataKey, PriceData>(&DataKey::VerifiedPrice(asset))
@@ -1011,6 +1017,9 @@ impl PriceOracle {
         env: Env,
         assets: soroban_sdk::Vec<Symbol>,
     ) -> soroban_sdk::Vec<Option<crate::types::PriceEntry>> {
+        // Collect query fee for batch operation
+        _collect_query_fee(&env)?;
+
         let now = env.ledger().timestamp();
         let mut result = soroban_sdk::Vec::new(&env);
 
@@ -2456,6 +2465,17 @@ impl PriceOracle {
         }
 
         env.storage().persistent().set(&DataKey::QueryFee, &fee_amount);
+        Ok(())
+    }
+
+    /// Set the fee token address.
+    pub fn set_fee_token(env: Env, admin: Address, token_address: Address) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        env.storage().persistent().set(&DataKey::FeeToken, &token_address);
         Ok(())
     }
 }
