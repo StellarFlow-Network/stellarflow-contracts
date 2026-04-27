@@ -33,25 +33,8 @@ pub enum DataKey {
     AssetMeta(Symbol),
     /// List of contracts subscribed to price update callbacks.
     PriceUpdateSubscribers,
-    /// Community Council address for emergency freeze functionality.
-    CommunityCouncil,
-    /// Emergency freeze state flag.
-    EmergencyFrozen,
-    /// Proposed action for multi-signature voting (action_id -> ProposedAction).
-    ProposedAction(u64),
-    /// Votes for a proposed action (action_id -> Vec<Address>).
-    ActionVotes(u64),
-    /// Counter for generating unique action IDs.
-    ActionIdCounter,
-}
-
-/// Represents an asset and its relative weight in an index basket.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AssetWeight {
-    pub asset: Symbol,
-    /// Weight in relative units or basis points (e.g., 5000 = 50%)
-    pub weight: u32, 
+    /// Tracked asset flag for O(1) existence check.
+    TrackedAsset(Symbol),
 }
 
 /// Decimal metadata for an asset pair.

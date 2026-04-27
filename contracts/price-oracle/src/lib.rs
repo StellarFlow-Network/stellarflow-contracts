@@ -499,6 +499,8 @@ fn _track_asset(env: &Env, asset: Symbol) {
     if !assets.contains(&asset) {
         assets.push_back(asset.clone());
         _set_tracked_assets(env, &assets);
+        // Set persistent flag for O(1) existence check
+        env.storage().persistent().set(&DataKey::TrackedAsset(asset), &());
     }
 }
 
@@ -676,8 +678,8 @@ impl PriceOracle {
         _track_asset(&env, asset.clone());
 
         let key = DataKey::VerifiedPrice(asset.clone());
-        if env.storage().temporary().get::<DataKey, PriceData>(&key).is_none() {
-            env.storage().temporary().set(
+        if env.storage().persistent().get::<DataKey, PriceData>(&key).is_none() {
+            env.storage().persistent().set(
                 &key,
                 &PriceData {
                     price: 0,
@@ -841,7 +843,7 @@ impl PriceOracle {
             DataKey::CommunityPrice(asset)
         };
 
-        match env.storage().temporary().get::<DataKey, PriceData>(&key) {
+        match env.storage().persistent().get::<DataKey, PriceData>(&key) {
             Some(price_data) => {
                 let now = env.ledger().timestamp();
                 if is_stale(now, price_data.timestamp, price_data.ttl) {
@@ -858,7 +860,7 @@ impl PriceOracle {
     pub fn get_price_with_status(env: Env, asset: Symbol) -> Result<PriceDataWithStatus, Error> {
         match env
             .storage()
-            .temporary()
+            .persistent()
             .get::<DataKey, PriceData>(&DataKey::VerifiedPrice(asset))
         {
             Some(price_data) => {
@@ -876,7 +878,7 @@ impl PriceOracle {
     /// Always reads from the `VerifiedPrice` bucket.
     pub fn get_price_safe(env: Env, asset: Symbol) -> Option<PriceData> {
         env.storage()
-            .temporary()
+            .persistent()
             .get::<DataKey, PriceData>(&DataKey::VerifiedPrice(asset))
     }
 
@@ -905,7 +907,7 @@ impl PriceOracle {
         for asset in assets.iter() {
             let entry = env
                 .storage()
-                .temporary()
+                .persistent()
                 .get::<DataKey, PriceData>(&DataKey::VerifiedPrice(asset))
                 .and_then(|pd| {
                     if is_stale(now, pd.timestamp, pd.ttl) {
@@ -936,7 +938,7 @@ impl PriceOracle {
         for asset in assets.iter() {
             let entry = env
                 .storage()
-                .temporary()
+                .persistent()
                 .get::<DataKey, PriceData>(&DataKey::VerifiedPrice(asset))
                 .map(|pd| PriceEntryWithStatus {
                     price: pd.price,
@@ -1017,7 +1019,7 @@ impl PriceOracle {
                 return Err(err);
             }
 
-            let storage = env.storage().temporary();
+            let storage = env.storage().persistent();
             let key = DataKey::VerifiedPrice(asset.clone());
             let existing: Option<PriceData> = storage.get(&key);
             let is_new_asset = existing.is_none();
@@ -1124,7 +1126,7 @@ impl PriceOracle {
         };
 
         env.storage()
-            .temporary()
+            .persistent()
             .set(&DataKey::CommunityPrice(asset.clone()), &price_data);
 
         log_event(&env, Symbol::new(&env, "community_price"), asset, normalized);
@@ -1180,7 +1182,7 @@ impl PriceOracle {
         crate::auth::_require_authorized(&env, &admin);
         //_log_admin_action(&env, &admin, AdminAction::RemoveAsset, Some(asset.to_string()));
 
-        let storage = env.storage().temporary();
+        let storage = env.storage().persistent();
 
         // Asset must exist in at least the verified bucket
         if storage.get::<DataKey, PriceData>(&DataKey::VerifiedPrice(asset.clone())).is_none() {
@@ -1189,6 +1191,7 @@ impl PriceOracle {
 
         storage.remove(&DataKey::VerifiedPrice(asset.clone()));
         storage.remove(&DataKey::CommunityPrice(asset.clone()));
+        storage.remove(&DataKey::TrackedAsset(asset.clone()));
 
         let mut updated_assets = soroban_sdk::Vec::new(&env);
         for tracked_asset in get_tracked_assets(&env).iter() {
@@ -1217,7 +1220,7 @@ impl PriceOracle {
         crate::auth::_require_not_frozen(&env);
         source.require_auth();
 
-        if !get_tracked_assets(&env).contains(&asset) {
+        if !env.storage().persistent().has(&DataKey::TrackedAsset(asset.clone())) {
             return Err(Error::AssetNotFound);
         }
 
@@ -1242,7 +1245,7 @@ impl PriceOracle {
         if has_provider_submitted(&buffer, &source) {
             return Err(Error::AlreadyInitialized);
         }
-        let storage = env.storage().temporary();
+        let storage = env.storage().persistent();
         let key = DataKey::VerifiedPrice(asset.clone());
         let old_price: i128 = storage
             .get::<DataKey, PriceData>(&key)
