@@ -392,7 +392,7 @@ fn _is_whitelisted_provider(env: &Env, source: &Address) -> bool {
 /// Panic if the contract has been destroyed.
 fn _require_not_destroyed(env: &Env) {
     if env.storage().instance().has(&DataKey::Destroyed) {
-        panic_with_error!(env, Error::ContractDestroyed);
+        panic_with_error!(env, Error::InvalidState);
     }
 }
 
