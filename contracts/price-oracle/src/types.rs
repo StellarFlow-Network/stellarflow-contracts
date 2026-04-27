@@ -43,6 +43,38 @@ pub enum DataKey {
     ActionVotes(u64),
     /// Counter for generating unique action IDs.
     ActionIdCounter,
+    /// Delegation info for an admin (admin_address -> DelegateInfo)
+    DelegateInfo(Address),
+    /// Delegated votes for a specific delegate (delegate_address -> Vec<DelegatedVote>)
+    DelegatedVotes(Address),
+}
+
+/// Information about a vote delegation.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DelegateInfo {
+    /// The address that granted delegation (the delegator)
+    pub delegator: Address,
+    /// The delegate who receives voting power
+    pub delegate: Address,
+    /// The asset group/sector this delegation applies to
+    pub asset_group: Symbol,
+    /// Timestamp when the delegation was created
+    pub delegated_at: u64,
+    /// Whether the delegation is currently active
+    pub is_active: bool,
+}
+
+/// A single delegated vote record.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DelegatedVote {
+    /// The address that delegated their vote
+    pub delegator: Address,
+    /// The asset group for this delegation
+    pub asset_group: Symbol,
+    /// Timestamp when delegation was created
+    pub delegated_at: u64,
 }
 
 /// Represents an asset and its relative weight in an index basket.
