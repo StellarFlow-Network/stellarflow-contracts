@@ -259,6 +259,9 @@ pub trait StellarFlowTrait {
 
     /// Set the query fee amount (in stroops).
     fn set_query_fee(env: Env, admin: Address, fee_amount: i128) -> Result<(), Error>;
+
+    /// Set the fee token address.
+    fn set_fee_token(env: Env, admin: Address, token_address: Address) -> Result<(), Error>;
 }
 
 #[contractclient(name = "TokenContractClient")]
@@ -453,6 +456,74 @@ fn acquire_lock(env: &Env) -> Result<(), Error> {
 /// Release the reentrancy lock for set_price.
 fn release_lock(env: &Env) {
     env.storage().instance().set(&DataKey::IsLocked, &false);
+}
+
+/// Collect query fee from the caller and accumulate it for distribution.
+fn _collect_query_fee(env: &Env) -> Result<(), Error> {
+    // Get the fee amount
+    let fee_amount: i128 = env
+        .storage()
+        .persistent()
+        .get(&DataKey::QueryFee)
+        .unwrap_or(0);
+
+    if fee_amount <= 0 {
+        return Ok(()); // No fee configured
+    }
+
+    // Get the fee token
+    let fee_token = env
+        .storage()
+        .persistent()
+        .get(&DataKey::FeeToken)
+        .unwrap_or_else(|| Address::from_string(&soroban_sdk::String::from_str(env, "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC")));
+
+    // Transfer fee from caller to contract
+    let token_client = token::Client::new(env, &fee_token);
+    let caller = env.invoker();
+    let contract_address = env.current_contract_address();
+
+    token_client.transfer(&caller, &contract_address, &fee_amount);
+
+    // Accumulate collected fees
+    let mut fee_config: FeeDistribution = env
+        .storage()
+        .persistent()
+        .get(&DataKey::CollectedFees)
+        .unwrap_or(FeeDistribution {
+            collected_fees: 0,
+            insurance_fund_bps: 4000,
+            admin_treasury_bps: 3000,
+            relayer_rewards_bps: 3000,
+            last_distribution: env.ledger().timestamp(),
+        });
+
+    fee_config.collected_fees += fee_amount;
+    env.storage().persistent().set(&DataKey::CollectedFees, &fee_config);
+
+    // Increment transaction counter and check if we should auto-distribute
+    let mut tx_count: u32 = env
+        .storage()
+        .persistent()
+        .get(&DataKey::TransactionCounter)
+        .unwrap_or(0);
+    tx_count += 1;
+
+    let distribution_interval: u32 = env
+        .storage()
+        .persistent()
+        .get(&DataKey::DistributionInterval)
+        .unwrap_or(100); // Default to 100 transactions
+
+    if tx_count >= distribution_interval {
+        // Auto-distribute fees (this would need to be called by an authorized party)
+        // For now, we'll just reset the counter
+        tx_count = 0;
+    }
+
+    env.storage().persistent().set(&DataKey::TransactionCounter, &tx_count);
+
+    Ok(())
 }
 
 /// Contract version - must match Cargo.toml version

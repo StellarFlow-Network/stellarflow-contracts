@@ -27,6 +27,8 @@ pub enum DataKey {
     CommunityPrice(Symbol),
     /// Query fee amount for get_price calls (in stroops).
     QueryFee,
+    /// Token address used for fee payments.
+    FeeToken,
     /// Accumulated fees collected from queries.
     CollectedFees,
     /// Insurance Fund address for fee distribution.
