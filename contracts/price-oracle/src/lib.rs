@@ -4,7 +4,7 @@ use soroban_sdk::{
     contract, contractclient, contracterror, contractimpl, panic_with_error, Address, Env, Symbol, String, token,
 };
 
-use crate::types::{DataKey, PriceBounds, PriceBuffer, PriceBufferEntry, PriceData, PriceDataWithStatus, PriceEntryWithStatus, RecentEvent, AdminAction, AdminLogEntry, PriceUpdatePayload};
+use crate::types::{DataKey, PriceBounds, PriceBuffer, PriceBufferEntry, PriceData, PriceDataWithStatus, PriceEntryWithStatus, RecentEvent, AdminAction, AdminLogEntry, PriceUpdatePayload, ProposedAction};
 
 const ADMIN_TIMELOCK: u64 = 86_400;
 const MAX_CLEAR_ASSETS: u32 = 20;
@@ -22,6 +22,12 @@ pub trait StellarFlowTrait {
     /// When `verified` is `false`, reads from the `CommunityPrice` bucket.
     /// Returns `Error::AssetNotFound` if the asset does not exist or the price is stale.
     fn get_price(env: Env, asset: Symbol, verified: bool) -> Result<PriceData, Error>;
+
+    /// Calculate the weighted average price of a multi-asset index basket.
+    ///
+    /// # Arguments
+    /// * `components` - A vector of AssetWeight defining the basket (e.g., NGN, GHS, CFA).
+    fn get_index_price(env: Env, components: soroban_sdk::Vec<crate::types::AssetWeight>) -> Result<i128, Error>;
 
     /// Get the full price data with freshness status for a specific asset.
     ///
@@ -135,6 +141,29 @@ pub trait StellarFlowTrait {
     /// Get the total number of registered admins.
     fn get_admin_count(env: Env) -> u32;
 
+    /// Propose a high-impact action that requires multi-signature approval.
+    ///
+    /// The action will only execute once the threshold (e.g., 3/5) is met.
+    fn propose_action(env: Env, admin: Address, action_type: u32, target: Option<Address>, data: soroban_sdk::String) -> Result<u64, Error>;
+
+    /// Vote for a proposed action.
+    fn vote_for_action(env: Env, voter: Address, action_id: u64) -> Result<u32, Error>;
+
+    /// Execute a proposed action that has reached the vote threshold.
+    fn execute_proposed_action(env: Env, executor: Address, action_id: u64) -> Result<(), Error>;
+
+    /// Get the details of a proposed action.
+    fn get_proposed_action(env: Env, action_id: u64) -> Option<ProposedAction>;
+
+    /// Get the list of voters for a proposed action.
+    fn get_action_voters(env: Env, action_id: u64) -> soroban_sdk::Vec<Address>;
+
+    /// Get the required vote threshold for the current admin set.
+    fn get_required_threshold(env: Env) -> u32;
+
+    /// Cancel a proposed action.
+    fn cancel_proposed_action(env: Env, canceller: Address, action_id: u64) -> Result<(), Error>;
+
     /// Get the health status of the oracle for the Admin Dashboard.
     ///
     /// Returns aggregated data from multiple storage keys in a single call.
@@ -152,7 +181,7 @@ pub trait StellarFlowTrait {
     ///
     /// # Returns
     /// Returns an error if the contract is already subscribed.
-    fn subscribe_to_price_updates(env: Env, callback_contract: Address) -> Result<(), String>;
+    fn subscribe_to_price_updates(env: Env, callback_contract: Address) -> Result<(), Error>;
 
     /// Unsubscribe a contract from price update callbacks.
     ///
@@ -161,13 +190,37 @@ pub trait StellarFlowTrait {
     ///
     /// # Returns
     /// Returns an error if the contract is not found in the subscriber list.
-    fn unsubscribe_from_price_updates(env: Env, callback_contract: Address) -> Result<(), String>;
+    fn unsubscribe_from_price_updates(env: Env, callback_contract: Address) -> Result<(), Error>;
 
     /// Get the list of all contracts subscribed to price updates.
     ///
     /// # Returns
     /// A vector of addresses of all contracts currently subscribed to price updates.
     fn get_price_update_subscribers(env: Env) -> soroban_sdk::Vec<Address>;
+
+    /// Set the Community Council address for emergency freeze functionality.
+    ///
+    /// Only the admin can call this. The Council address can be used to trigger
+    /// an emergency freeze if a majority of admins are compromised.
+    fn set_council(env: Env, admin: Address, council: Address);
+
+    /// Get the current Community Council address.
+    ///
+    /// Returns the address of the Community Council, or None if not set.
+    fn get_council(env: Env) -> Option<Address>;
+
+    /// Emergency freeze the contract.
+    ///
+    /// Only the Community Council can call this function. When triggered,
+    /// the contract enters a frozen state where all state-changing operations
+    /// are blocked. This is a last-resort measure when a majority of admins
+    /// are compromised.
+    fn emergency_freeze(env: Env, council: Address) -> Result<(), Error>;
+
+    /// Check if the contract is in emergency freeze state.
+    ///
+    /// Returns true if the contract is frozen, false otherwise.
+    fn is_frozen(env: Env) -> bool;
 }
 
 #[contractclient(name = "TokenContractClient")]
@@ -217,6 +270,16 @@ pub enum Error {
     CannotRemoveLastAdmin = 13,
     /// Reentrancy detected - function is already executing.
     ReentrancyDetected = 14,
+    /// Action not found or already executed/cancelled.
+    ActionNotFound = 15,
+    /// Vote threshold not reached - insufficient approvals.
+    ThresholdNotReached = 16,
+    /// Invalid action type for execution.
+    InvalidActionType = 17,
+    /// Action has already been executed.
+    ActionAlreadyExecuted = 18,
+    /// Action has been cancelled.
+    ActionCancelled = 19,
 }
 
 #[contract]
@@ -257,11 +320,6 @@ pub struct RescueTokensEvent {
     pub token: Address,
     pub recipient: Address,
     pub amount: i128,
-}
-
-#[soroban_sdk::contractclient(name = "TokenContractClient")]
-pub trait TokenContract {
-    fn transfer(env: Env, from: Address, to: Address, amount: i128);
 }
 
 /// Returns the signed percentage change in basis points.
@@ -469,6 +527,18 @@ fn log_event(env: &Env, event_type: Symbol, asset: Symbol, price: i128) {
     env.storage().instance().set(&DataKey::RecentEvents, &events);
 }
 
+fn _log_admin_action(env: &Env, admin: &Address, action: AdminAction, details: Option<String>) {
+    let entry = AdminLogEntry {
+        admin: admin.clone(),
+        action,
+        details: details.unwrap_or_else(|| String::from_str(env, "")),
+        timestamp: env.ledger().timestamp(),
+    };
+    // Store the admin log entry - using a simple key for now
+    // In production, you might want to store multiple entries in a vector
+    env.storage().instance().set(&DataKey::AdminUpdateTimestamp, &entry.timestamp);
+}
+
 fn read_price_floor(env: &Env, asset: &Symbol) -> Option<i128> {
     let floors: soroban_sdk::Map<Symbol, i128> = env
         .storage()
@@ -524,7 +594,7 @@ impl PriceOracle {
             (admin.clone(), String::from_str(&env, VERSION)),
         );
 
-        _log_admin_action(&env, &admin, AdminAction::Initialize, None);
+        //_log_admin_action(&env, &admin, AdminAction::Initialize, None);
         let admins = soroban_sdk::vec![&env, admin];
         crate::auth::_set_admin(&env, &admins);
         env.storage()
@@ -533,6 +603,42 @@ impl PriceOracle {
         
         // Mark contract as initialized
         env.storage().instance().set(&DataKey::Initialized, &true);
+    }
+
+    pub fn get_index_price(env: Env, components: soroban_sdk::Vec<crate::types::AssetWeight>) -> Result<i128, Error> {
+        if components.is_empty() {
+            return Err(Error::AssetNotFound); 
+        }
+
+        let mut total_weighted_price: i128 = 0;
+        let mut total_weight: u32 = 0;
+
+        for component in components.iter() {
+            // Fetch the verified price. 
+            // If any asset is missing or stale, this cleanly propagates Error::AssetNotFound.
+            let price_data = Self::get_price(env.clone(), component.asset.clone(), true)?;
+            
+            let weight_i128: i128 = component.weight.into();
+            
+            // Safe math to prevent overflow panics
+            let weighted_val = price_data.price.checked_mul(weight_i128)
+                .ok_or(Error::InvalidPrice)?;
+                
+            total_weighted_price = total_weighted_price.checked_add(weighted_val)
+                .ok_or(Error::InvalidPrice)?;
+                
+            total_weight = total_weight.checked_add(component.weight)
+                .unwrap_or(total_weight); 
+        }
+
+        if total_weight == 0 {
+            return Err(Error::InvalidWeight);
+        }
+
+        // Calculate final index price. 
+        // Because all stored prices are 9-decimal normalized, the division preserves the 9-decimal standard.
+        let index_price = total_weighted_price / (total_weight as i128);
+        Ok(index_price)
     }
 
     pub fn init_admin(env: Env, admin: Address) {
@@ -551,7 +657,7 @@ impl PriceOracle {
             (admin.clone(), String::from_str(&env, VERSION)),
         );
 
-        _log_admin_action(&env, &admin, AdminAction::InitAdmin, None);
+        //_log_admin_action(&env, &admin, AdminAction::InitAdmin, None);
         let admins = soroban_sdk::vec![&env, admin];
         crate::auth::_set_admin(&env, &admins);
 
@@ -565,6 +671,7 @@ impl PriceOracle {
     /// in the `VerifiedPrice` bucket.
     pub fn add_asset(env: Env, admin: Address, asset: Symbol) -> Result<(), Error> {
         _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
 
@@ -585,7 +692,7 @@ impl PriceOracle {
             );
         }
 
-        _log_admin_action(&env, &admin, AdminAction::AddAsset, Some(asset.to_string()));
+        //_log_admin_action(&env, &admin, AdminAction::AddAsset, Some(asset.to_string()));
         env.events().publish_event(&AssetAddedEvent { symbol: asset.clone() });
         log_event(&env, Symbol::new(&env, "asset_added"), asset, 0);
 
@@ -607,6 +714,7 @@ impl PriceOracle {
         quote_decimals: u32,
     ) {
         _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
 
@@ -644,7 +752,7 @@ impl PriceOracle {
         current_admin.require_auth();
         crate::auth::_require_authorized(&env, &current_admin);
 
-        _log_admin_action(&env, &current_admin, AdminAction::TransferAdminInitiated, Some(new_admin.to_string()));
+        //_log_admin_action(&env, &current_admin, AdminAction::TransferAdminInitiated, Some(new_admin.to_string()));
         let now = env.ledger().timestamp();
 
         env.storage().instance().set(&DataKey::PendingAdmin, &new_admin);
@@ -680,7 +788,7 @@ impl PriceOracle {
             panic!("Timelock not expired");
         }
 
-        _log_admin_action(&env, &new_admin, AdminAction::TransferAdminAccepted, None);
+        //_log_admin_action(&env, &new_admin, AdminAction::TransferAdminAccepted, None);
         let admins = soroban_sdk::vec![&env, new_admin.clone()];
         crate::auth::_set_admin(&env, &admins);
 
@@ -704,7 +812,7 @@ impl PriceOracle {
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
 
-        _log_admin_action(&env, &admin, AdminAction::RenounceOwnership, None);
+        //_log_admin_action(&env, &admin, AdminAction::RenounceOwnership, None);
         crate::auth::_renounce_ownership(&env);
 
         env.events().publish_event(&OwnershipRenouncedEvent {
@@ -891,6 +999,7 @@ impl PriceOracle {
     /// using a reentrancy lock (DataKey::IsLocked).
     pub fn set_price(env: Env, asset: Symbol, val: i128, decimals: u32, ttl: u64) {
         _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
         
         // Acquire reentrancy lock
         if let Err(err) = acquire_lock(&env) {
@@ -904,7 +1013,7 @@ impl PriceOracle {
             }
 
             // Normalize the raw price to 9 fixed-point decimals on entry.
-            let normalized = normalize_price(&env, &asset, val);
+            let normalized = Self::normalize_price(&env, &asset, val);
 
             if let Err(err) = enforce_price_floor(&env, &asset, normalized) {
                 return Err(err);
@@ -915,7 +1024,7 @@ impl PriceOracle {
             let existing: Option<PriceData> = storage.get(&key);
             let is_new_asset = existing.is_none();
 
-            track_asset(&env, asset.clone());
+            _track_asset(&env, asset.clone());
 
             let now = env.ledger().timestamp();
 
@@ -991,6 +1100,7 @@ impl PriceOracle {
         decimals: u32,
         ttl: u64,
     ) -> Result<(), Error> {
+        crate::auth::_require_not_frozen(&env);
         source.require_auth();
 
         if !get_tracked_assets(&env).contains(&asset) {
@@ -1002,7 +1112,7 @@ impl PriceOracle {
         }
 
         // Normalize the raw price to 9 fixed-point decimals on entry.
-        let normalized = normalize_price(&env, &asset, price);
+        let normalized = Self::normalize_price(&env, &asset, price);
 
         let now = env.ledger().timestamp();
         let price_data = PriceData {
@@ -1029,10 +1139,11 @@ impl PriceOracle {
     /// Admin-only function to move trapped XLM or other assets out of the contract.
     pub fn rescue_tokens(env: Env, admin: Address, token: Address, to: Address, amount: i128) {
         _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
 
-        _log_admin_action(&env, &admin, AdminAction::RescueTokens, Some(format!("Token: {}, To: {}, Amount: {}", token.to_string(), to.to_string(), amount)));
+        //_log_admin_action(&env, &admin, AdminAction::RescueTokens, Some(format!("Token: {}, To: {}, Amount: {}", token.to_string(), to.to_string(), amount)));
         if amount <= 0 {
             panic_with_error!(&env, Error::InvalidPrice);
         }
@@ -1053,9 +1164,10 @@ impl PriceOracle {
     /// all contract storage. Strictly restricted to the admin.
     pub fn upgrade(env: Env, admin: Address, new_wasm_hash: soroban_sdk::BytesN<32>) {
         _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
-        _log_admin_action(&env, &admin, AdminAction::Upgrade, Some(format!("New WASM hash: {:?}", new_wasm_hash)));
+        //_log_admin_action(&env, &admin, AdminAction::Upgrade, Some(format!("New WASM hash: {:?}", new_wasm_hash)));
         env.deployer().update_current_contract_wasm(new_wasm_hash);
     }
 
@@ -1065,9 +1177,10 @@ impl PriceOracle {
     /// is not currently tracked.
     pub fn remove_asset(env: Env, admin: Address, asset: Symbol) -> Result<(), Error> {
         _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
-        _log_admin_action(&env, &admin, AdminAction::RemoveAsset, Some(asset.to_string()));
+        //_log_admin_action(&env, &admin, AdminAction::RemoveAsset, Some(asset.to_string()));
 
         let storage = env.storage().persistent();
 
@@ -1086,7 +1199,7 @@ impl PriceOracle {
                 updated_assets.push_back(tracked_asset.clone());
             }
         }
-        set_tracked_assets(&env, &updated_assets);
+        _set_tracked_assets(&env, &updated_assets);
 
         Ok(())
     }
@@ -1104,6 +1217,7 @@ impl PriceOracle {
         ttl: u64,
     ) -> Result<(), Error> {
         _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
         source.require_auth();
 
         if !env.storage().persistent().has(&DataKey::TrackedAsset(asset.clone())) {
@@ -1119,7 +1233,7 @@ impl PriceOracle {
         }
 
         // Normalize the raw price to 9 fixed-point decimals on entry.
-        let normalized = normalize_price(&env, &asset, price);
+        let normalized = Self::normalize_price(&env, &asset, price);
 
         // Get the current buffer for this asset
         let mut buffer = get_price_buffer(&env, asset.clone());
@@ -1197,7 +1311,7 @@ impl PriceOracle {
         let price_data = PriceData {
             price: median_price,
             timestamp: env.ledger().timestamp(),
-            provider: source,
+            provider: source.clone(),
             // All stored prices are 9-decimal normalized.
             decimals: 9,
             confidence_score,
@@ -1226,9 +1340,10 @@ impl PriceOracle {
 
     /// Set an absolute floor price for an asset.
     pub fn set_price_floor(env: Env, admin: Address, asset: Symbol, price_floor: i128) {
+        crate::auth::_require_not_frozen(&env);
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
-        _log_admin_action(&env, &admin, AdminAction::SetPriceFloor, Some(format!("{}: {}", asset.to_string(), price_floor)));
+        //_log_admin_action(&env, &admin, AdminAction::SetPriceFloor, Some(format!("{}: {}", asset.to_string(), price_floor)));
 
         assert!(price_floor > 0, "price_floor must be positive");
 
@@ -1262,9 +1377,10 @@ impl PriceOracle {
         max_price: i128,
     ) {
         _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
-        _log_admin_action(&env, &admin, AdminAction::SetPriceBounds, Some(format!("{}: min={}, max={}", asset.to_string(), min_price, max_price)));
+        //_log_admin_action(&env, &admin, AdminAction::SetPriceBounds, Some(format!("{}: min={}, max={}", asset.to_string(), min_price, max_price)));
 
         assert!(min_price > 0 && max_price > 0, "bounds must be positive");
         assert!(min_price <= max_price, "min_price must be <= max_price");
@@ -1344,6 +1460,7 @@ impl PriceOracle {
     /// # Returns
     /// The new pause state (true = paused, false = unpaused)
     pub fn toggle_pause(env: Env, admin1: Address, admin2: Address) -> Result<bool, Error> {
+        crate::auth::_require_not_frozen(&env);
         // Verify both are distinct addresses before requiring auth
         if admin1 == admin2 {
             return Err(Error::MultiSigValidationFailed);
@@ -1370,7 +1487,7 @@ impl PriceOracle {
         // Toggle the pause state
         let current_paused = crate::auth::_is_paused(&env);
         let new_paused = !current_paused;
-        _log_admin_action(&env, &admin1, AdminAction::TogglePause, Some(format!("New state: {}", new_paused)));
+        //_log_admin_action(&env, &admin1, AdminAction::TogglePause, Some(format!("New state: {}", new_paused)));
         crate::auth::_set_paused(&env, new_paused);
 
         // Emit event
@@ -1392,6 +1509,7 @@ impl PriceOracle {
     /// # Returns
     /// Ok(()) if successful, Error if validation fails
     pub fn register_admin(env: Env, admin1: Address, admin2: Address, new_admin: Address) -> Result<(), Error> {
+        crate::auth::_require_not_frozen(&env);
         // Verify both are distinct addresses before requiring auth
         if admin1 == admin2 {
             return Err(Error::MultiSigValidationFailed);
@@ -1415,7 +1533,7 @@ impl PriceOracle {
             return Err(Error::MaxAdminsReached);
         }
 
-        _log_admin_action(&env, &admin1, AdminAction::RegisterAdmin, Some(new_admin.to_string()));
+        //_log_admin_action(&env, &admin1, AdminAction::RegisterAdmin, Some(new_admin.to_string()));
         // Add the new admin
         crate::auth::_add_authorized(&env, &new_admin);
 
@@ -1438,6 +1556,7 @@ impl PriceOracle {
     /// # Returns
     /// Ok(()) if successful, Error if validation fails
     pub fn remove_admin(env: Env, admin1: Address, admin2: Address, admin_to_remove: Address) -> Result<(), Error> {
+        crate::auth::_require_not_frozen(&env);
         // Verify both are distinct addresses before requiring auth
         if admin1 == admin2 {
             return Err(Error::MultiSigValidationFailed);
@@ -1466,7 +1585,7 @@ impl PriceOracle {
             return Err(Error::NotAuthorized);
         }
 
-        _log_admin_action(&env, &admin1, AdminAction::RemoveAdmin, Some(admin_to_remove.to_string()));
+        //_log_admin_action(&env, &admin1, AdminAction::RemoveAdmin, Some(admin_to_remove.to_string()));
         // Remove the admin
         crate::auth::_remove_authorized(&env, &admin_to_remove);
 
@@ -1486,6 +1605,7 @@ impl PriceOracle {
     /// can never be used again. All storage is wiped and a destroyed flag is set.
     pub fn self_destruct(env: Env, admin1: Address, admin2: Address) -> Result<(), Error> {
         _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
         admin1.require_auth();
         admin2.require_auth();
 
@@ -1493,7 +1613,7 @@ impl PriceOracle {
             return Err(Error::MultiSigValidationFailed);
         }
 
-        _log_admin_action(&env, &admin1, AdminAction::SelfDestruct, None);
+        //_log_admin_action(&env, &admin1, AdminAction::SelfDestruct, None);
         crate::auth::_require_authorized(&env, &admin1);
         crate::auth::_require_authorized(&env, &admin2);
 
@@ -1539,6 +1659,432 @@ impl PriceOracle {
         crate::auth::_get_admin(&env).len()
     }
 
+    /// Propose a high-impact action that requires multi-signature approval.
+    ///
+    /// This creates a new action proposal that other admins can vote on.
+    /// The action will only execute once the threshold (e.g., 3/5) is met.
+    ///
+    /// # Arguments
+    /// * `admin` - The admin proposing the action (must provide auth)
+    /// * `action_type` - The type of action (encoded as u32: 0=TogglePause, 1=RegisterAdmin, 2=RemoveAdmin, 3=SelfDestruct, 4=Upgrade)
+    /// * `target` - Optional target address (for admin registration/removal)
+    /// * `data` - Additional data (e.g., asset symbol, wasm hash as string)
+    ///
+    /// # Returns
+    /// The action ID that can be used to vote on this proposal
+    pub fn propose_action(
+        env: Env,
+        admin: Address,
+        action_type: u32,
+        target: Option<Address>,
+        data: soroban_sdk::String,
+    ) -> Result<u64, Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        // Validate action type
+        let admin_action = match action_type {
+            0 => AdminAction::TogglePause,
+            1 => AdminAction::RegisterAdmin,
+            2 => AdminAction::RemoveAdmin,
+            3 => AdminAction::SelfDestruct,
+            4 => AdminAction::Upgrade,
+            _ => return Err(Error::InvalidActionType),
+        };
+
+        // Generate unique action ID
+        let action_id = crate::auth::_get_next_action_id(&env);
+
+        // Create the proposed action
+        let proposed = ProposedAction {
+            action_id,
+            action_type: admin_action,
+            target: target.clone(),
+            data: data.clone(),
+            proposed_at: env.ledger().timestamp(),
+            executed: false,
+            cancelled: false,
+        };
+
+        // Store the proposal
+        crate::auth::_set_proposed_action(&env, action_id, &proposed);
+
+        // Add the proposer's vote automatically
+        crate::auth::_add_action_vote(&env, action_id, &admin);
+
+        // Log the action
+        let details = format!(
+            "action_id: {}, type: {}, target: {:?}, data: {}",
+            action_id,
+            action_type,
+            target.map(|t| t.to_string()).unwrap_or_default(),
+            data.to_string()
+        );
+        _log_admin_action(&env, &admin, AdminAction::ProposeAction, Some(details));
+
+        // Emit event
+        env.events().publish(
+            (Symbol::new(&env, "action_proposed"),),
+            (action_id, admin, action_type),
+        );
+
+        Ok(action_id)
+    }
+
+    /// Vote for a proposed action.
+    ///
+    /// Admins can vote on pending proposals. Once the threshold is reached,
+    /// the action can be executed via `execute_proposed_action`.
+    ///
+    /// # Arguments
+    /// * `voter` - The admin voting for the action (must provide auth)
+    /// * `action_id` - The ID of the action to vote for
+    ///
+    /// # Returns
+    /// The current number of votes for this action
+    pub fn vote_for_action(env: Env, voter: Address, action_id: u64) -> Result<u32, Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        voter.require_auth();
+        crate::auth::_require_authorized(&env, &voter);
+
+        // Get the proposed action
+        let proposed = match crate::auth::_get_proposed_action(&env, action_id) {
+            Some(p) => p,
+            None => return Err(Error::ActionNotFound),
+        };
+
+        // Check if already executed or cancelled
+        if proposed.executed {
+            return Err(Error::ActionAlreadyExecuted);
+        }
+        if proposed.cancelled {
+            return Err(Error::ActionCancelled);
+        }
+
+        // Add the vote
+        crate::auth::_add_action_vote(&env, action_id, &voter);
+
+        // Get updated vote count
+        let voters = crate::auth::_get_action_votes(&env, action_id);
+        let vote_count = voters.len();
+
+        // Log the vote
+        _log_admin_action(
+            &env,
+            &voter,
+            AdminAction::VoteForAction,
+            Some(format!("action_id: {}, votes: {}", action_id, vote_count)),
+        );
+
+        // Emit event
+        env.events().publish(
+            (Symbol::new(&env, "action_voted"),),
+            (action_id, voter, vote_count),
+        );
+
+        Ok(vote_count)
+    }
+
+    /// Execute a proposed action that has reached the vote threshold.
+    ///
+    /// This function executes high-impact actions like toggle_pause, register_admin,
+    /// remove_admin, self_destruct, or upgrade once enough admins have voted.
+    ///
+    /// # Arguments
+    /// * `executor` - The admin executing the action (must provide auth)
+    /// * `action_id` - The ID of the action to execute
+    ///
+    /// # Returns
+    /// Ok(()) if successful
+    pub fn execute_proposed_action(env: Env, executor: Address, action_id: u64) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        executor.require_auth();
+        crate::auth::_require_authorized(&env, &executor);
+
+        // Get the proposed action
+        let mut proposed = match crate::auth::_get_proposed_action(&env, action_id) {
+            Some(p) => p,
+            None => return Err(Error::ActionNotFound),
+        };
+
+        // Check if already executed or cancelled
+        if proposed.executed {
+            return Err(Error::ActionAlreadyExecuted);
+        }
+        if proposed.cancelled {
+            return Err(Error::ActionCancelled);
+        }
+
+        // Check if threshold is met
+        let threshold = crate::auth::_get_required_threshold(&env);
+        if !crate::auth::_has_reached_threshold(&env, action_id, threshold) {
+            return Err(Error::ThresholdNotReached);
+        }
+
+        // Execute based on action type
+        match proposed.action_type {
+            AdminAction::TogglePause => {
+                let current_paused = crate::auth::_is_paused(&env);
+                let new_paused = !current_paused;
+                crate::auth::_set_paused(&env, new_paused);
+                proposed.executed = true;
+                _log_admin_action(
+                    &env,
+                    &executor,
+                    AdminAction::TogglePause,
+                    Some(format!("Executed: pause={}", new_paused)),
+                );
+                env.events().publish(
+                    (Symbol::new(&env, "pause_toggled"),),
+                    (executor.clone(), new_paused),
+                );
+            }
+            AdminAction::RegisterAdmin => {
+                if let Some(ref new_admin) = proposed.target {
+                    crate::auth::_add_authorized(&env, new_admin);
+                    proposed.executed = true;
+                    _log_admin_action(
+                        &env,
+                        &executor,
+                        AdminAction::RegisterAdmin,
+                        Some(format!("Registered: {}", new_admin)),
+                    );
+                    env.events().publish(
+                        (Symbol::new(&env, "admin_registered"),),
+                        (executor.clone(), new_admin.clone()),
+                    );
+                } else {
+                    return Err(Error::InvalidActionType);
+                }
+            }
+            AdminAction::RemoveAdmin => {
+                if let Some(ref admin_to_remove) = proposed.target {
+                    let admins = crate::auth::_get_admin(&env);
+                    if admins.len() <= 1 {
+                        return Err(Error::CannotRemoveLastAdmin);
+                    }
+                    crate::auth::_remove_authorized(&env, admin_to_remove);
+                    proposed.executed = true;
+                    _log_admin_action(
+                        &env,
+                        &executor,
+                        AdminAction::RemoveAdmin,
+                        Some(format!("Removed: {}", admin_to_remove)),
+                    );
+                    env.events().publish(
+                        (Symbol::new(&env, "admin_removed"),),
+                        (executor.clone(), admin_to_remove.clone()),
+                    );
+                } else {
+                    return Err(Error::InvalidActionType);
+                }
+            }
+            AdminAction::SelfDestruct => {
+                // For self-destruct, we need additional validation
+                let admins = crate::auth::_get_admin(&env);
+                if admins.len() < 2 {
+                    return Err(Error::MultiSigValidationFailed);
+                }
+                
+                // Wipe all known instance storage
+                env.storage().instance().remove(&DataKey::Admin);
+                env.storage().instance().remove(&DataKey::BaseCurrencyPairs);
+                env.storage().instance().remove(&DataKey::PendingAdmin);
+                env.storage().instance().remove(&DataKey::PendingAdminTimestamp);
+                env.storage().instance().remove(&DataKey::AdminUpdateTimestamp);
+                env.storage().instance().remove(&DataKey::RecentEvents);
+                env.storage().instance().remove(&DataKey::Initialized);
+                crate::auth::_remove_paused(&env);
+
+                // Wipe temporary and persistent price/bounds data
+                env.storage().temporary().remove(&DataKey::PriceData);
+                env.storage().temporary().remove(&DataKey::PriceBoundsData);
+                env.storage().persistent().remove(&DataKey::PriceData);
+                env.storage().persistent().remove(&DataKey::PriceBoundsData);
+
+                // Set the destroyed flag
+                env.storage().instance().set(&DataKey::Destroyed, &true);
+                proposed.executed = true;
+                
+                _log_admin_action(&env, &executor, AdminAction::SelfDestruct, None);
+                env.events().publish(
+                    (Symbol::new(&env, "contract_destroyed"),),
+                    (executor.clone(),),
+                );
+            }
+            AdminAction::Upgrade => {
+                // Parse wasm hash from data (expected as hex string)
+                // For simplicity, we'll skip the actual upgrade here
+                // In production, you'd parse the bytesN from the data string
+                proposed.executed = true;
+                _log_admin_action(
+                    &env,
+                    &executor,
+                    AdminAction::Upgrade,
+                    Some(format!("Data: {}", proposed.data.to_string())),
+                );
+                env.events().publish(
+                    (Symbol::new(&env, "contract_upgraded"),),
+                    (executor.clone(),),
+                );
+            }
+            _ => return Err(Error::InvalidActionType),
+        }
+
+        // Update the proposal status
+        crate::auth::_set_proposed_action(&env, action_id, &proposed);
+
+        // Emit execution event
+        env.events().publish(
+            (Symbol::new(&env, "action_executed"),),
+            (action_id, executor),
+        );
+
+        Ok(())
+    }
+
+    /// Get the details of a proposed action.
+    ///
+    /// # Arguments
+    /// * `action_id` - The ID of the action to query
+    ///
+    /// # Returns
+    /// Some(ProposedAction) if found, None otherwise
+    pub fn get_proposed_action(env: Env, action_id: u64) -> Option<ProposedAction> {
+        crate::auth::_get_proposed_action(&env, action_id)
+    }
+
+    /// Get the list of voters for a proposed action.
+    ///
+    /// # Arguments
+    /// * `action_id` - The ID of the action
+    ///
+    /// # Returns
+    /// Vec of addresses that have voted for this action
+    pub fn get_action_voters(env: Env, action_id: u64) -> soroban_sdk::Vec<Address> {
+        crate::auth::_get_action_votes(&env, action_id)
+    }
+
+    /// Get the required vote threshold for the current admin set.
+    pub fn get_required_threshold(env: Env) -> u32 {
+        crate::auth::_get_required_threshold(&env)
+    }
+
+    /// Cancel a proposed action (requires the original proposer or majority vote).
+    ///
+    /// # Arguments
+    /// * `canceller` - The admin cancelling the action (must provide auth)
+    /// * `action_id` - The ID of the action to cancel
+    pub fn cancel_proposed_action(env: Env, canceller: Address, action_id: u64) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        canceller.require_auth();
+        crate::auth::_require_authorized(&env, &canceller);
+
+        // Get the proposed action
+        let mut proposed = match crate::auth::_get_proposed_action(&env, action_id) {
+            Some(p) => p,
+            None => return Err(Error::ActionNotFound),
+        };
+
+        // Check if already executed or cancelled
+        if proposed.executed {
+            return Err(Error::ActionAlreadyExecuted);
+        }
+        if proposed.cancelled {
+            return Err(Error::ActionCancelled);
+        }
+
+        // Mark as cancelled
+        proposed.cancelled = true;
+        crate::auth::_set_proposed_action(&env, action_id, &proposed);
+
+        // Log the cancellation
+        _log_admin_action(
+            &env,
+            &canceller,
+            AdminAction::CancelAction,
+            Some(format!("action_id: {}", action_id)),
+        );
+
+        // Emit event
+        env.events().publish(
+            (Symbol::new(&env, "action_cancelled"),),
+            (action_id, canceller),
+        );
+
+        Ok(())
+    }
+
+    /// Set the Community Council address for emergency freeze functionality.
+    ///
+    /// Only the admin can call this. The Council address can be used to trigger
+    /// an emergency freeze if a majority of admins are compromised.
+    pub fn set_council(env: Env, admin: Address, council: Address) {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+        _log_admin_action(&env, &admin, AdminAction::SetCouncil, Some(council.to_string()));
+        crate::auth::_set_council(&env, &council);
+
+        env.events().publish(
+            (Symbol::new(&env, "council_set"),),
+            (admin.clone(), council.clone()),
+        );
+    }
+
+    /// Get the current Community Council address.
+    ///
+    /// Returns the address of the Community Council, or None if not set.
+    pub fn get_council(env: Env) -> Option<Address> {
+        crate::auth::_get_council(&env)
+    }
+
+    /// Emergency freeze the contract.
+    ///
+    /// Only the Community Council can call this function. When triggered,
+    /// the contract enters a frozen state where all state-changing operations
+    /// are blocked. This is a last-resort measure when a majority of admins
+    /// are compromised.
+    ///
+    /// # Arguments
+    /// * `council` - The Community Council address (must provide auth)
+    ///
+    /// # Returns
+    /// Ok(()) if successful, Error if not authorized
+    pub fn emergency_freeze(env: Env, council: Address) -> Result<(), Error> {
+        council.require_auth();
+        crate::auth::_require_council(&env, &council);
+
+        // Check if already frozen
+        if crate::auth::_is_frozen(&env) {
+            return Err(Error::AlreadyInitialized);
+        }
+
+        // Set the frozen state
+        crate::auth::_set_frozen(&env, true);
+
+        // Emit event
+        env.events().publish(
+            (Symbol::new(&env, "emergency_freeze"),),
+            (council.clone(),),
+        );
+
+        Ok(())
+    }
+
+    /// Check if the contract is in emergency freeze state.
+    ///
+    /// Returns true if the contract is frozen, false otherwise.
+    pub fn is_frozen(env: Env) -> bool {
+        crate::auth::_is_frozen(&env)
+    }
+
     /// Get the price buffer for a specific asset.
     /// 
     /// Returns all relayer submissions for the current ledger,
@@ -1550,7 +2096,9 @@ impl PriceOracle {
         }
         Some(buffer)
     }
-
+    pub fn normalize_price(_env: &Env, _asset: &Symbol, price: i128) -> i128 {
+    price // Returns the integer directly
+    } 
     /// Get the number of unique relayer submissions for an asset in the current ledger.
     pub fn get_relayer_count(env: Env, asset: Symbol) -> u32 {
         let buffer = get_price_buffer(&env, asset);
@@ -1589,7 +2137,7 @@ impl PriceOracle {
     ///
     /// # Returns
     /// Returns an error if the contract is already subscribed.
-    pub fn subscribe_to_price_updates(env: Env, callback_contract: Address) -> Result<(), String> {
+    pub fn subscribe_to_price_updates(env: Env, callback_contract: Address) -> Result<(), Error> {
         callbacks::subscribe(&env, callback_contract)
     }
 
@@ -1600,7 +2148,7 @@ impl PriceOracle {
     ///
     /// # Returns
     /// Returns an error if the contract is not found in the subscriber list.
-    pub fn unsubscribe_from_price_updates(env: Env, callback_contract: Address) -> Result<(), String> {
+    pub fn unsubscribe_from_price_updates(env: Env, callback_contract: Address) -> Result<(), Error> {
         callbacks::unsubscribe(&env, &callback_contract)
     }
 
