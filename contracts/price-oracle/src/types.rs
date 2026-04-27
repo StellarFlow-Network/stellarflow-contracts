@@ -32,6 +32,8 @@ pub enum DataKey {
     AssetMeta(Symbol),
     /// List of contracts subscribed to price update callbacks.
     PriceUpdateSubscribers,
+    /// Tracked asset flag for O(1) existence check.
+    TrackedAsset(Symbol),
 }
 
 /// Decimal metadata for an asset pair.
