@@ -1046,6 +1046,8 @@ impl PriceOracle {
     /// Get all currently tracked asset symbols.
     ///
     /// Returns a vector of all assets that are currently being tracked by the oracle.
+    /// This function enables other contracts to discover which assets are supported
+    /// by this oracle for price feeds and trading.
     pub fn get_all_assets(env: Env) -> soroban_sdk::Vec<Symbol> {
         get_tracked_assets(&env)
     }
