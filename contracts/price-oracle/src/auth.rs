@@ -186,7 +186,6 @@ fn _remove_from_active_relayers(env: &Env, provider: &Address) {
 // ─────────────────────────────────────────────────────────────────────────────
 #[cfg(test)]
 mod auth_tests {
-    extern crate alloc;
     use super::*;
     use soroban_sdk::{contract, contractimpl};
 

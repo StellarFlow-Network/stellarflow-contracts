@@ -10,6 +10,7 @@ pub enum DataKey {
     PriceData,
     PriceBuffer,
     PriceBoundsData,
+    IsLocked,
     PriceFloorData,
     AssetDescription(Symbol),
     PendingAdmin,
@@ -34,6 +35,15 @@ pub enum DataKey {
     PriceUpdateSubscribers,
 }
 
+/// Represents an asset and its relative weight in an index basket.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssetWeight {
+    pub asset: Symbol,
+    /// Weight in relative units or basis points (e.g., 5000 = 50%)
+    pub weight: u32, 
+}
+
 /// Decimal metadata for an asset pair.
 ///
 /// Stores the native decimal precision of the base and quote assets so the
@@ -46,7 +56,6 @@ pub struct AssetMeta {
     /// Native decimal precision of the quote asset (e.g. 2 for NGN).
     pub quote_decimals: u32,
 }
-
 /// Canonical storage format for a price entry.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -1,3 +1,4 @@
+#![no_std]
 //! Helpers for reading Soroban ledger (blockchain) time.
 
 use soroban_sdk::Env;
