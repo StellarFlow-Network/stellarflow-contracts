@@ -192,6 +192,13 @@ pub trait StellarFlowTrait {
     ///
     /// Returns true if the contract is frozen, false otherwise.
     fn is_frozen(env: Env) -> bool;
+
+    /// Irreversibly destroy the contract, clearing all state and returning remaining funds.
+    ///
+    /// Requires 2-of-3 admin signatures for this final action.
+    /// This is the terminal migration kill-switch — after this call the contract
+    /// can never be used again. All storage is wiped and remaining funds are returned.
+    fn self_destruct(env: Env, admin1: Address, admin2: Address, recipient: Option<Address>) -> Result<(), Error>;
 }
 
 #[contractclient(name = "TokenContractClient")]
@@ -241,6 +248,8 @@ pub enum Error {
     CannotRemoveLastAdmin = 13,
     /// Reentrancy detected - function is already executing.
     ReentrancyDetected = 14,
+    /// Contract has been destroyed and is no longer usable.
+    ContractDestroyed = 15,
 }
 
 #[contract]
@@ -1525,12 +1534,21 @@ impl PriceOracle {
         Ok(())
     }
 
-    /// Irreversibly destroy the contract, clearing all state and rendering it unusable.
+    /// Irreversibly destroy the contract, clearing all state and returning remaining funds.
     ///
     /// Requires 2-of-3 admin signatures (same multisig threshold as other critical ops).
     /// This is the terminal migration kill-switch — after this call the contract
-    /// can never be used again. All storage is wiped and a destroyed flag is set.
-    pub fn self_destruct(env: Env, admin1: Address, admin2: Address) -> Result<(), Error> {
+    /// can never be used again. All storage is wiped, remaining funds are returned
+    /// to the admins, and a destroyed flag is set.
+    ///
+    /// # Arguments
+    /// * `admin1` - First admin address (must provide auth)
+    /// * `admin2` - Second admin address (must provide auth)
+    /// * `recipient` - Address to receive remaining contract funds (optional, defaults to admin1)
+    ///
+    /// # Returns
+    /// Ok(()) if successful, Error if validation fails
+    pub fn self_destruct(env: Env, admin1: Address, admin2: Address, recipient: Option<Address>) -> Result<(), Error> {
         _require_not_destroyed(&env);
         crate::auth::_require_not_frozen(&env);
         admin1.require_auth();
@@ -1551,7 +1569,23 @@ impl PriceOracle {
             return Err(Error::MultiSigValidationFailed);
         }
 
-        // Wipe all known instance storage
+        // Determine fund recipient
+        let final_recipient = recipient.unwrap_or_else(|| admin1.clone());
+
+        // Return any remaining native balance to recipient
+        let contract_balance = env.contract_account().get_balance();
+        if contract_balance > 0 {
+            env.contract_account().transfer(&final_recipient, &contract_balance);
+            
+            // Emit rescue event for transparency
+            env.events().publish_event(&RescueTokensEvent {
+                token: env.current_contract_address(),
+                recipient: final_recipient.clone(),
+                amount: contract_balance,
+            });
+        }
+
+        // Clear all known instance storage keys
         env.storage().instance().remove(&DataKey::Admin);
         env.storage().instance().remove(&DataKey::BaseCurrencyPairs);
         env.storage().instance().remove(&DataKey::PendingAdmin);
@@ -1559,20 +1593,68 @@ impl PriceOracle {
         env.storage().instance().remove(&DataKey::AdminUpdateTimestamp);
         env.storage().instance().remove(&DataKey::RecentEvents);
         env.storage().instance().remove(&DataKey::Initialized);
+        env.storage().instance().remove(&DataKey::IsLocked);
+        env.storage().instance().remove(&DataKey::QueryFee);
+        env.storage().instance().remove(&DataKey::PriceUpdateSubscribers);
+        env.storage().instance().remove(&DataKey::CommunityCouncil);
+        env.storage().instance().remove(&DataKey::EmergencyFrozen);
         crate::auth::_remove_paused(&env);
 
-        // Wipe temporary and persistent price/bounds data
+        // Clear all price-related storage (both temporary and persistent)
+        let assets = get_tracked_assets(&env);
+        for asset in assets.iter() {
+            // Clear verified and community price data
+            env.storage().temporary().remove(&DataKey::VerifiedPrice(asset.clone()));
+            env.storage().temporary().remove(&DataKey::CommunityPrice(asset.clone()));
+            
+            // Clear asset metadata
+            env.storage().persistent().remove(&DataKey::AssetMeta(asset.clone()));
+            env.storage().persistent().remove(&DataKey::Twap(asset.clone()));
+            
+            // Clear price bounds and floor data
+            let bounds_key = DataKey::PriceBoundsData;
+            if let Some(mut bounds_map) = env.storage().persistent().get::<DataKey, soroban_sdk::Map<Symbol, PriceBounds>>(&bounds_key) {
+                bounds_map.remove(asset.clone());
+                if bounds_map.len() > 0 {
+                    env.storage().persistent().set(&bounds_key, &bounds_map);
+                } else {
+                    env.storage().persistent().remove(&bounds_key);
+                }
+            }
+            
+            let floor_key = DataKey::PriceFloorData;
+            if let Some(mut floor_map) = env.storage().persistent().get::<DataKey, soroban_sdk::Map<Symbol, i128>>(&floor_key) {
+                floor_map.remove(asset.clone());
+                if floor_map.len() > 0 {
+                    env.storage().persistent().set(&floor_key, &floor_map);
+                } else {
+                    env.storage().persistent().remove(&floor_key);
+                }
+            }
+        }
+
+        // Clear remaining global price storage
         env.storage().temporary().remove(&DataKey::PriceData);
-        env.storage().temporary().remove(&DataKey::PriceBoundsData);
         env.storage().persistent().remove(&DataKey::PriceData);
+        env.storage().persistent().remove(&DataKey::PriceBuffer);
         env.storage().persistent().remove(&DataKey::PriceBoundsData);
+        env.storage().persistent().remove(&DataKey::PriceFloorData);
+
+        // Clear provider-related storage
+        let relayers = crate::auth::_get_active_relayers(&env);
+        for relayer in relayers.iter() {
+            env.storage().instance().remove(&DataKey::Provider(relayer.clone()));
+            env.storage().instance().remove(&DataKey::ProviderWeight(relayer.clone()));
+        }
+        env.storage().instance().remove(&DataKey::ActiveRelayers);
 
         // Set the destroyed flag so the contract is permanently unusable
         env.storage().instance().set(&DataKey::Destroyed, &true);
 
+        // Emit comprehensive destruction event
         env.events().publish(
             (Symbol::new(&env, "contract_destroyed"),),
-            (admin1.clone(), admin2.clone()),
+            (admin1.clone(), admin2.clone(), final_recipient.clone(), contract_balance),
         );
 
         Ok(())
