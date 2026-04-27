@@ -935,7 +935,7 @@ impl PriceOracle {
                 }
                 Ok(price_data)
             }
-            None => Err(Error::AssetNotFound),
+            None => Err(Error::NotFound),
         }
     }
 
