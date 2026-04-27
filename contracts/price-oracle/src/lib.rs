@@ -632,7 +632,7 @@ fn read_price_floor(env: &Env, asset: &Symbol) -> Option<i128> {
 fn enforce_price_floor(env: &Env, asset: &Symbol, price: i128) -> Result<(), Error> {
     if let Some(price_floor) = read_price_floor(env, asset) {
         if price < price_floor {
-            return Err(Error::PriceOutOfBounds);
+            return Err(Error::InvalidArgument);
         }
     }
 
@@ -1374,7 +1374,7 @@ impl PriceOracle {
         
         if let Some(bounds) = bounds_map.get(asset.clone()) {
             if normalized < bounds.min_price || normalized > bounds.max_price {
-                return Err(Error::PriceOutOfBounds);
+                return Err(Error::InvalidArgument);
             }
         }
 
