@@ -725,7 +725,7 @@ impl PriceOracle {
     pub fn init_admin(env: Env, admin: Address) {
         _require_not_destroyed(&env);
         if env.storage().instance().has(&DataKey::Initialized) {
-            panic_with_error!(&env, Error::AlreadyInitialized);
+            panic_with_error!(&env, Error::AlreadyExists);
         }
 
         #[allow(deprecated)]
@@ -1335,7 +1335,7 @@ impl PriceOracle {
 
         // Prevent duplicate submissions from the same provider in the same ledger
         if has_provider_submitted(&buffer, &source) {
-            return Err(Error::AlreadyInitialized);
+            return Err(Error::InvalidState);
         }
         let storage = env.storage().temporary();
         let key = DataKey::VerifiedPrice(asset.clone());
@@ -2155,7 +2155,7 @@ impl PriceOracle {
 
         // Check if already frozen
         if crate::auth::_is_frozen(&env) {
-            return Err(Error::AlreadyInitialized);
+            return Err(Error::InvalidState);
         }
 
         // Set the frozen state
