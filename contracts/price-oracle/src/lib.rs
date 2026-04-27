@@ -1013,6 +1013,14 @@ impl PriceOracle {
             // Normalize the raw price to 9 fixed-point decimals on entry.
             let normalized = Self::normalize_price(&env, &asset, val);
 
+            // INVARIANT: normalization must never produce a non-positive price.
+            // A positive raw input scaled by a positive power of 10 must remain
+            // positive. If this fires, the normalization logic has a bug.
+            assert!(
+                normalized > 0,
+                "invariant violated: normalized price must be > 0"
+            );
+
             if let Err(err) = enforce_price_floor(&env, &asset, normalized) {
                 return Err(err);
             }
@@ -1111,6 +1119,14 @@ impl PriceOracle {
 
         // Normalize the raw price to 9 fixed-point decimals on entry.
         let normalized = Self::normalize_price(&env, &asset, price);
+
+        // INVARIANT: normalization must never produce a non-positive price.
+        // A positive raw input scaled by a positive power of 10 must remain
+        // positive. If this fires, the normalization logic has a bug.
+        assert!(
+            normalized > 0,
+            "invariant violated: normalized price must be > 0"
+        );
 
         let now = env.ledger().timestamp();
         let price_data = PriceData {
@@ -1232,6 +1248,14 @@ impl PriceOracle {
         // Normalize the raw price to 9 fixed-point decimals on entry.
         let normalized = Self::normalize_price(&env, &asset, price);
 
+        // INVARIANT: normalization must never produce a non-positive price.
+        // A positive raw input scaled by a positive power of 10 must remain
+        // positive. If this fires, the normalization logic has a bug.
+        assert!(
+            normalized > 0,
+            "invariant violated: normalized price must be > 0"
+        );
+
         // Get the current buffer for this asset
         let mut buffer = get_price_buffer(&env, asset.clone());
         
@@ -1299,6 +1323,13 @@ impl PriceOracle {
 
         // Calculate the new median and store it as the canonical price
         let median_price = calculate_median_from_buffer(&env, &buffer).unwrap_or(normalized);
+
+        // INVARIANT: the median of a set of positive prices must itself be
+        // positive. If this fires, the median aggregation logic has a bug.
+        assert!(
+            median_price > 0,
+            "invariant violated: median_price must be > 0"
+        );
         
         // Also update the legacy PriceData for backward compatibility
         let mut prices: soroban_sdk::Map<Symbol, PriceData> = storage
