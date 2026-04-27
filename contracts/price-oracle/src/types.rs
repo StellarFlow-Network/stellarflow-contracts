@@ -10,6 +10,7 @@ pub enum DataKey {
     PriceData,
     PriceBuffer,
     PriceBoundsData,
+    IsLocked,
     PriceFloorData,
     AssetDescription(Symbol),
     PendingAdmin,
@@ -36,6 +37,21 @@ pub enum DataKey {
     CommunityCouncil,
     /// Emergency freeze state flag.
     EmergencyFrozen,
+    /// Proposed action for multi-signature voting (action_id -> ProposedAction).
+    ProposedAction(u64),
+    /// Votes for a proposed action (action_id -> Vec<Address>).
+    ActionVotes(u64),
+    /// Counter for generating unique action IDs.
+    ActionIdCounter,
+}
+
+/// Represents an asset and its relative weight in an index basket.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssetWeight {
+    pub asset: Symbol,
+    /// Weight in relative units or basis points (e.g., 5000 = 50%)
+    pub weight: u32, 
 }
 
 /// Decimal metadata for an asset pair.
@@ -50,7 +66,6 @@ pub struct AssetMeta {
     /// Native decimal precision of the quote asset (e.g. 2 for NGN).
     pub quote_decimals: u32,
 }
-
 /// Canonical storage format for a price entry.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -194,6 +209,12 @@ pub enum AdminAction {
     RemoveAdmin,
     SelfDestruct,
     SetCouncil,
+    /// Multi-sig: Propose a high-impact action
+    ProposeAction,
+    /// Multi-sig: Vote for a proposed action
+    VoteForAction,
+    /// Multi-sig: Cancel a proposed action
+    CancelAction,
 }
 
 /// Admin log entry for tracking admin actions.
@@ -204,4 +225,24 @@ pub struct AdminLogEntry {
     pub action: AdminAction,
     pub details: soroban_sdk::String,
     pub timestamp: u64,
+}
+
+/// Proposed action waiting for multi-signature approval.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProposedAction {
+    /// Unique identifier for this action.
+    pub action_id: u64,
+    /// The type of action being proposed.
+    pub action_type: AdminAction,
+    /// Target address (for admin registration/removal).
+    pub target: Option<Address>,
+    /// Additional data (e.g., asset symbol, wasm hash).
+    pub data: soroban_sdk::String,
+    /// Timestamp when the action was proposed.
+    pub proposed_at: u64,
+    /// Whether the action has been executed.
+    pub executed: bool,
+    /// Whether the action has been cancelled.
+    pub cancelled: bool,
 }
