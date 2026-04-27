@@ -192,6 +192,20 @@ pub trait StellarFlowTrait {
     ///
     /// Returns true if the contract is frozen, false otherwise.
     fn is_frozen(env: Env) -> bool;
+
+    /// Permanently destroy the contract and clear all storage (requires 2/3 admin signatures).
+    ///
+    /// This is the terminal migration kill-switch for migrating to a new contract version.
+    /// After this call, the contract can never be used again. All storage is wiped and
+    /// a destroyed flag is set. This action requires 2 out of 3 registered admin signatures.
+    fn self_destruct(env: Env, admin1: Address, admin2: Address) -> Result<(), Error>;
+
+    /// Emergency fund recovery before contract migration (requires 2/3 admin signatures).
+    ///
+    /// Rescues all remaining funds from the contract to a specified recipient address.
+    /// This should be called before self_destruct to ensure no funds are left behind.
+    /// Supports both native XLM balance and any ERC-20 like tokens.
+    fn emergency_fund_recovery(env: Env, admin1: Address, admin2: Address, recipient: Address, tokens_to_rescue: soroban_sdk::Vec<Address>) -> Result<(), Error>;
 }
 
 #[contractclient(name = "TokenContractClient")]
@@ -241,6 +255,8 @@ pub enum Error {
     CannotRemoveLastAdmin = 13,
     /// Reentrancy detected - function is already executing.
     ReentrancyDetected = 14,
+    /// Contract has been destroyed and is permanently unusable.
+    ContractDestroyed = 15,
 }
 
 #[contract]
@@ -1551,7 +1567,7 @@ impl PriceOracle {
             return Err(Error::MultiSigValidationFailed);
         }
 
-        // Wipe all known instance storage
+        // Wipe all instance storage
         env.storage().instance().remove(&DataKey::Admin);
         env.storage().instance().remove(&DataKey::BaseCurrencyPairs);
         env.storage().instance().remove(&DataKey::PendingAdmin);
@@ -1559,13 +1575,22 @@ impl PriceOracle {
         env.storage().instance().remove(&DataKey::AdminUpdateTimestamp);
         env.storage().instance().remove(&DataKey::RecentEvents);
         env.storage().instance().remove(&DataKey::Initialized);
+        env.storage().instance().remove(&DataKey::QueryFee);
+        env.storage().instance().remove(&DataKey::PriceUpdateSubscribers);
+        env.storage().instance().remove(&DataKey::CommunityCouncil);
+        env.storage().instance().remove(&DataKey::EmergencyFrozen);
+        env.storage().instance().remove(&DataKey::IsLocked);
         crate::auth::_remove_paused(&env);
 
-        // Wipe temporary and persistent price/bounds data
+        // Wipe all temporary storage
         env.storage().temporary().remove(&DataKey::PriceData);
         env.storage().temporary().remove(&DataKey::PriceBoundsData);
+
+        // Wipe all persistent storage
         env.storage().persistent().remove(&DataKey::PriceData);
         env.storage().persistent().remove(&DataKey::PriceBoundsData);
+        env.storage().persistent().remove(&DataKey::PriceBuffer);
+        env.storage().persistent().remove(&DataKey::PriceFloorData);
 
         // Set the destroyed flag so the contract is permanently unusable
         env.storage().instance().set(&DataKey::Destroyed, &true);
@@ -1573,6 +1598,63 @@ impl PriceOracle {
         env.events().publish(
             (Symbol::new(&env, "contract_destroyed"),),
             (admin1.clone(), admin2.clone()),
+        );
+
+        Ok(())
+    }
+
+    /// Emergency fund recovery before contract migration (requires 2/3 admin signatures).
+    ///
+    /// Rescues all remaining funds from the contract to a specified recipient address.
+    /// This should be called before self_destruct to ensure no funds are left behind.
+    /// Supports both native XLM balance and any ERC-20 like tokens.
+    pub fn emergency_fund_recovery(env: Env, admin1: Address, admin2: Address, recipient: Address, tokens_to_rescue: soroban_sdk::Vec<Address>) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin1.require_auth();
+        admin2.require_auth();
+
+        if admin1 == admin2 {
+            return Err(Error::MultiSigValidationFailed);
+        }
+
+        _log_admin_action(&env, &admin1, AdminAction::RescueTokens, Some(format!("Emergency recovery to: {}", recipient.to_string())));
+        crate::auth::_require_authorized(&env, &admin1);
+        crate::auth::_require_authorized(&env, &admin2);
+
+        let admins = crate::auth::_get_admin(&env);
+        let admin_count = admins.len();
+
+        if admin_count < 2 {
+            return Err(Error::MultiSigValidationFailed);
+        }
+
+        // Transfer native XLM balance if any
+        let native_balance = env.contract_account().get_balance();
+        if native_balance > 0 {
+            env.contract_account().transfer(&recipient, &native_balance);
+        }
+
+        // Transfer all specified token balances
+        for token_address in tokens_to_rescue.iter() {
+            let token_client = token::Client::new(&env, &token_address);
+            let token_balance = token_client.balance(&env.current_contract_address());
+            
+            if token_balance > 0 {
+                token_client.transfer(&env.current_contract_address(), &recipient, &token_balance);
+                
+                // Emit rescue event for each token
+                env.events().publish_event(&RescueTokensEvent {
+                    token: token_address,
+                    recipient: recipient.clone(),
+                    amount: token_balance,
+                });
+            }
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, "emergency_fund_recovery"),),
+            (admin1.clone(), admin2.clone(), recipient.clone()),
         );
 
         Ok(())

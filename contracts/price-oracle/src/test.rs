@@ -2254,6 +2254,93 @@ fn test_self_destruct_emits_event() {
 }
 
 #[test]
+fn test_emergency_fund_recovery_requires_two_admins() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let admin1 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin2 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let recipient = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let tokens = soroban_sdk::Vec::new(&env);
+
+    client.init_admin(&admin1);
+    env.as_contract(&contract_id, || {
+        crate::auth::_add_authorized(&env, &admin2);
+    });
+
+    // Should succeed with two admins
+    let result = client.try_emergency_fund_recovery(&admin1, &admin2, &recipient, &tokens);
+    assert_eq!(result, Ok(()));
+}
+
+#[test]
+#[should_panic]
+fn test_emergency_fund_recovery_fails_with_same_admin_twice() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let admin1 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let recipient = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let tokens = soroban_sdk::Vec::new(&env);
+
+    client.init_admin(&admin1);
+
+    // Should fail when using the same admin twice
+    client.emergency_fund_recovery(&admin1, &admin1, &recipient, &tokens);
+}
+
+#[test]
+#[should_panic]
+fn test_emergency_fund_recovery_fails_with_non_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let admin1 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let non_admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let recipient = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let tokens = soroban_sdk::Vec::new(&env);
+
+    client.init_admin(&admin1);
+
+    // Should fail when one signer is not an admin
+    client.emergency_fund_recovery(&admin1, &non_admin, &recipient, &tokens);
+}
+
+#[test]
+fn test_emergency_fund_recovery_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let admin1 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let admin2 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let recipient = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+    let tokens = soroban_sdk::Vec::new(&env);
+
+    client.init_admin(&admin1);
+    env.as_contract(&contract_id, || {
+        crate::auth::_add_authorized(&env, &admin2);
+    });
+
+    client.emergency_fund_recovery(&admin1, &admin2, &recipient, &tokens);
+
+    let events = env.events().all();
+    let debug_str = alloc::format!("{:?}", events);
+    assert!(debug_str.contains("emergency_fund_recovery"));
+}
+
+#[test]
 #[should_panic(expected = "Error(ContractDestroyed)")]
 fn test_self_destruct_prevents_double_destruct() {
     let env = Env::default();
