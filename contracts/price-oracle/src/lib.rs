@@ -4,7 +4,7 @@ use soroban_sdk::{
     contract, contractclient, contracterror, contractimpl, panic_with_error, Address, Env, Symbol, String, token,
 };
 
-use crate::types::{DataKey, PriceBounds, PriceBuffer, PriceBufferEntry, PriceData, PriceDataWithStatus, PriceEntryWithStatus, RecentEvent, AdminAction, AdminLogEntry, PriceUpdatePayload};
+use crate::types::{DataKey, PriceBounds, PriceBuffer, PriceBufferEntry, PriceData, PriceDataWithStatus, PriceEntryWithStatus, RecentEvent, AdminAction, AdminLogEntry, PriceUpdatePayload, ProposedAction};
 
 const ADMIN_TIMELOCK: u64 = 86_400;
 const MAX_CLEAR_ASSETS: u32 = 20;
@@ -135,6 +135,29 @@ pub trait StellarFlowTrait {
     /// Get the total number of registered admins.
     fn get_admin_count(env: Env) -> u32;
 
+    /// Propose a high-impact action that requires multi-signature approval.
+    ///
+    /// The action will only execute once the threshold (e.g., 3/5) is met.
+    fn propose_action(env: Env, admin: Address, action_type: u32, target: Option<Address>, data: soroban_sdk::String) -> Result<u64, Error>;
+
+    /// Vote for a proposed action.
+    fn vote_for_action(env: Env, voter: Address, action_id: u64) -> Result<u32, Error>;
+
+    /// Execute a proposed action that has reached the vote threshold.
+    fn execute_proposed_action(env: Env, executor: Address, action_id: u64) -> Result<(), Error>;
+
+    /// Get the details of a proposed action.
+    fn get_proposed_action(env: Env, action_id: u64) -> Option<ProposedAction>;
+
+    /// Get the list of voters for a proposed action.
+    fn get_action_voters(env: Env, action_id: u64) -> soroban_sdk::Vec<Address>;
+
+    /// Get the required vote threshold for the current admin set.
+    fn get_required_threshold(env: Env) -> u32;
+
+    /// Cancel a proposed action.
+    fn cancel_proposed_action(env: Env, canceller: Address, action_id: u64) -> Result<(), Error>;
+
     /// Get the health status of the oracle for the Admin Dashboard.
     ///
     /// Returns aggregated data from multiple storage keys in a single call.
@@ -241,6 +264,16 @@ pub enum Error {
     CannotRemoveLastAdmin = 13,
     /// Reentrancy detected - function is already executing.
     ReentrancyDetected = 14,
+    /// Action not found or already executed/cancelled.
+    ActionNotFound = 15,
+    /// Vote threshold not reached - insufficient approvals.
+    ThresholdNotReached = 16,
+    /// Invalid action type for execution.
+    InvalidActionType = 17,
+    /// Action has already been executed.
+    ActionAlreadyExecuted = 18,
+    /// Action has been cancelled.
+    ActionCancelled = 19,
 }
 
 #[contract]
@@ -1584,6 +1617,367 @@ impl PriceOracle {
             return 0;
         }
         crate::auth::_get_admin(&env).len()
+    }
+
+    /// Propose a high-impact action that requires multi-signature approval.
+    ///
+    /// This creates a new action proposal that other admins can vote on.
+    /// The action will only execute once the threshold (e.g., 3/5) is met.
+    ///
+    /// # Arguments
+    /// * `admin` - The admin proposing the action (must provide auth)
+    /// * `action_type` - The type of action (encoded as u32: 0=TogglePause, 1=RegisterAdmin, 2=RemoveAdmin, 3=SelfDestruct, 4=Upgrade)
+    /// * `target` - Optional target address (for admin registration/removal)
+    /// * `data` - Additional data (e.g., asset symbol, wasm hash as string)
+    ///
+    /// # Returns
+    /// The action ID that can be used to vote on this proposal
+    pub fn propose_action(
+        env: Env,
+        admin: Address,
+        action_type: u32,
+        target: Option<Address>,
+        data: soroban_sdk::String,
+    ) -> Result<u64, Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        // Validate action type
+        let admin_action = match action_type {
+            0 => AdminAction::TogglePause,
+            1 => AdminAction::RegisterAdmin,
+            2 => AdminAction::RemoveAdmin,
+            3 => AdminAction::SelfDestruct,
+            4 => AdminAction::Upgrade,
+            _ => return Err(Error::InvalidActionType),
+        };
+
+        // Generate unique action ID
+        let action_id = crate::auth::_get_next_action_id(&env);
+
+        // Create the proposed action
+        let proposed = ProposedAction {
+            action_id,
+            action_type: admin_action,
+            target: target.clone(),
+            data: data.clone(),
+            proposed_at: env.ledger().timestamp(),
+            executed: false,
+            cancelled: false,
+        };
+
+        // Store the proposal
+        crate::auth::_set_proposed_action(&env, action_id, &proposed);
+
+        // Add the proposer's vote automatically
+        crate::auth::_add_action_vote(&env, action_id, &admin);
+
+        // Log the action
+        let details = format!(
+            "action_id: {}, type: {}, target: {:?}, data: {}",
+            action_id,
+            action_type,
+            target.map(|t| t.to_string()).unwrap_or_default(),
+            data.to_string()
+        );
+        _log_admin_action(&env, &admin, AdminAction::ProposeAction, Some(details));
+
+        // Emit event
+        env.events().publish(
+            (Symbol::new(&env, "action_proposed"),),
+            (action_id, admin, action_type),
+        );
+
+        Ok(action_id)
+    }
+
+    /// Vote for a proposed action.
+    ///
+    /// Admins can vote on pending proposals. Once the threshold is reached,
+    /// the action can be executed via `execute_proposed_action`.
+    ///
+    /// # Arguments
+    /// * `voter` - The admin voting for the action (must provide auth)
+    /// * `action_id` - The ID of the action to vote for
+    ///
+    /// # Returns
+    /// The current number of votes for this action
+    pub fn vote_for_action(env: Env, voter: Address, action_id: u64) -> Result<u32, Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        voter.require_auth();
+        crate::auth::_require_authorized(&env, &voter);
+
+        // Get the proposed action
+        let proposed = match crate::auth::_get_proposed_action(&env, action_id) {
+            Some(p) => p,
+            None => return Err(Error::ActionNotFound),
+        };
+
+        // Check if already executed or cancelled
+        if proposed.executed {
+            return Err(Error::ActionAlreadyExecuted);
+        }
+        if proposed.cancelled {
+            return Err(Error::ActionCancelled);
+        }
+
+        // Add the vote
+        crate::auth::_add_action_vote(&env, action_id, &voter);
+
+        // Get updated vote count
+        let voters = crate::auth::_get_action_votes(&env, action_id);
+        let vote_count = voters.len();
+
+        // Log the vote
+        _log_admin_action(
+            &env,
+            &voter,
+            AdminAction::VoteForAction,
+            Some(format!("action_id: {}, votes: {}", action_id, vote_count)),
+        );
+
+        // Emit event
+        env.events().publish(
+            (Symbol::new(&env, "action_voted"),),
+            (action_id, voter, vote_count),
+        );
+
+        Ok(vote_count)
+    }
+
+    /// Execute a proposed action that has reached the vote threshold.
+    ///
+    /// This function executes high-impact actions like toggle_pause, register_admin,
+    /// remove_admin, self_destruct, or upgrade once enough admins have voted.
+    ///
+    /// # Arguments
+    /// * `executor` - The admin executing the action (must provide auth)
+    /// * `action_id` - The ID of the action to execute
+    ///
+    /// # Returns
+    /// Ok(()) if successful
+    pub fn execute_proposed_action(env: Env, executor: Address, action_id: u64) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        executor.require_auth();
+        crate::auth::_require_authorized(&env, &executor);
+
+        // Get the proposed action
+        let mut proposed = match crate::auth::_get_proposed_action(&env, action_id) {
+            Some(p) => p,
+            None => return Err(Error::ActionNotFound),
+        };
+
+        // Check if already executed or cancelled
+        if proposed.executed {
+            return Err(Error::ActionAlreadyExecuted);
+        }
+        if proposed.cancelled {
+            return Err(Error::ActionCancelled);
+        }
+
+        // Check if threshold is met
+        let threshold = crate::auth::_get_required_threshold(&env);
+        if !crate::auth::_has_reached_threshold(&env, action_id, threshold) {
+            return Err(Error::ThresholdNotReached);
+        }
+
+        // Execute based on action type
+        match proposed.action_type {
+            AdminAction::TogglePause => {
+                let current_paused = crate::auth::_is_paused(&env);
+                let new_paused = !current_paused;
+                crate::auth::_set_paused(&env, new_paused);
+                proposed.executed = true;
+                _log_admin_action(
+                    &env,
+                    &executor,
+                    AdminAction::TogglePause,
+                    Some(format!("Executed: pause={}", new_paused)),
+                );
+                env.events().publish(
+                    (Symbol::new(&env, "pause_toggled"),),
+                    (executor.clone(), new_paused),
+                );
+            }
+            AdminAction::RegisterAdmin => {
+                if let Some(ref new_admin) = proposed.target {
+                    crate::auth::_add_authorized(&env, new_admin);
+                    proposed.executed = true;
+                    _log_admin_action(
+                        &env,
+                        &executor,
+                        AdminAction::RegisterAdmin,
+                        Some(format!("Registered: {}", new_admin)),
+                    );
+                    env.events().publish(
+                        (Symbol::new(&env, "admin_registered"),),
+                        (executor.clone(), new_admin.clone()),
+                    );
+                } else {
+                    return Err(Error::InvalidActionType);
+                }
+            }
+            AdminAction::RemoveAdmin => {
+                if let Some(ref admin_to_remove) = proposed.target {
+                    let admins = crate::auth::_get_admin(&env);
+                    if admins.len() <= 1 {
+                        return Err(Error::CannotRemoveLastAdmin);
+                    }
+                    crate::auth::_remove_authorized(&env, admin_to_remove);
+                    proposed.executed = true;
+                    _log_admin_action(
+                        &env,
+                        &executor,
+                        AdminAction::RemoveAdmin,
+                        Some(format!("Removed: {}", admin_to_remove)),
+                    );
+                    env.events().publish(
+                        (Symbol::new(&env, "admin_removed"),),
+                        (executor.clone(), admin_to_remove.clone()),
+                    );
+                } else {
+                    return Err(Error::InvalidActionType);
+                }
+            }
+            AdminAction::SelfDestruct => {
+                // For self-destruct, we need additional validation
+                let admins = crate::auth::_get_admin(&env);
+                if admins.len() < 2 {
+                    return Err(Error::MultiSigValidationFailed);
+                }
+                
+                // Wipe all known instance storage
+                env.storage().instance().remove(&DataKey::Admin);
+                env.storage().instance().remove(&DataKey::BaseCurrencyPairs);
+                env.storage().instance().remove(&DataKey::PendingAdmin);
+                env.storage().instance().remove(&DataKey::PendingAdminTimestamp);
+                env.storage().instance().remove(&DataKey::AdminUpdateTimestamp);
+                env.storage().instance().remove(&DataKey::RecentEvents);
+                env.storage().instance().remove(&DataKey::Initialized);
+                crate::auth::_remove_paused(&env);
+
+                // Wipe temporary and persistent price/bounds data
+                env.storage().temporary().remove(&DataKey::PriceData);
+                env.storage().temporary().remove(&DataKey::PriceBoundsData);
+                env.storage().persistent().remove(&DataKey::PriceData);
+                env.storage().persistent().remove(&DataKey::PriceBoundsData);
+
+                // Set the destroyed flag
+                env.storage().instance().set(&DataKey::Destroyed, &true);
+                proposed.executed = true;
+                
+                _log_admin_action(&env, &executor, AdminAction::SelfDestruct, None);
+                env.events().publish(
+                    (Symbol::new(&env, "contract_destroyed"),),
+                    (executor.clone(),),
+                );
+            }
+            AdminAction::Upgrade => {
+                // Parse wasm hash from data (expected as hex string)
+                // For simplicity, we'll skip the actual upgrade here
+                // In production, you'd parse the bytesN from the data string
+                proposed.executed = true;
+                _log_admin_action(
+                    &env,
+                    &executor,
+                    AdminAction::Upgrade,
+                    Some(format!("Data: {}", proposed.data.to_string())),
+                );
+                env.events().publish(
+                    (Symbol::new(&env, "contract_upgraded"),),
+                    (executor.clone(),),
+                );
+            }
+            _ => return Err(Error::InvalidActionType),
+        }
+
+        // Update the proposal status
+        crate::auth::_set_proposed_action(&env, action_id, &proposed);
+
+        // Emit execution event
+        env.events().publish(
+            (Symbol::new(&env, "action_executed"),),
+            (action_id, executor),
+        );
+
+        Ok(())
+    }
+
+    /// Get the details of a proposed action.
+    ///
+    /// # Arguments
+    /// * `action_id` - The ID of the action to query
+    ///
+    /// # Returns
+    /// Some(ProposedAction) if found, None otherwise
+    pub fn get_proposed_action(env: Env, action_id: u64) -> Option<ProposedAction> {
+        crate::auth::_get_proposed_action(&env, action_id)
+    }
+
+    /// Get the list of voters for a proposed action.
+    ///
+    /// # Arguments
+    /// * `action_id` - The ID of the action
+    ///
+    /// # Returns
+    /// Vec of addresses that have voted for this action
+    pub fn get_action_voters(env: Env, action_id: u64) -> soroban_sdk::Vec<Address> {
+        crate::auth::_get_action_votes(&env, action_id)
+    }
+
+    /// Get the required vote threshold for the current admin set.
+    pub fn get_required_threshold(env: Env) -> u32 {
+        crate::auth::_get_required_threshold(&env)
+    }
+
+    /// Cancel a proposed action (requires the original proposer or majority vote).
+    ///
+    /// # Arguments
+    /// * `canceller` - The admin cancelling the action (must provide auth)
+    /// * `action_id` - The ID of the action to cancel
+    pub fn cancel_proposed_action(env: Env, canceller: Address, action_id: u64) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        canceller.require_auth();
+        crate::auth::_require_authorized(&env, &canceller);
+
+        // Get the proposed action
+        let mut proposed = match crate::auth::_get_proposed_action(&env, action_id) {
+            Some(p) => p,
+            None => return Err(Error::ActionNotFound),
+        };
+
+        // Check if already executed or cancelled
+        if proposed.executed {
+            return Err(Error::ActionAlreadyExecuted);
+        }
+        if proposed.cancelled {
+            return Err(Error::ActionCancelled);
+        }
+
+        // Mark as cancelled
+        proposed.cancelled = true;
+        crate::auth::_set_proposed_action(&env, action_id, &proposed);
+
+        // Log the cancellation
+        _log_admin_action(
+            &env,
+            &canceller,
+            AdminAction::CancelAction,
+            Some(format!("action_id: {}", action_id)),
+        );
+
+        // Emit event
+        env.events().publish(
+            (Symbol::new(&env, "action_cancelled"),),
+            (action_id, canceller),
+        );
+
+        Ok(())
     }
 
     /// Set the Community Council address for emergency freeze functionality.

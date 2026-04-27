@@ -230,6 +230,92 @@ pub fn _require_not_frozen(env: &Env) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Multi-Sig Action Proposal Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+use crate::types::ProposedAction;
+
+/// Get the next available action ID and increment the counter.
+pub fn _get_next_action_id(env: &Env) -> u64 {
+    let current: u64 = env
+        .storage()
+        .instance()
+        .get(&DataKey::ActionIdCounter)
+        .unwrap_or(0);
+    let next_id = current + 1;
+    env.storage()
+        .instance()
+        .set(&DataKey::ActionIdCounter, &next_id);
+    next_id
+}
+
+/// Store a proposed action.
+pub fn _set_proposed_action(env: &Env, action_id: u64, action: &ProposedAction) {
+    env.storage()
+        .instance()
+        .set(&DataKey::ProposedAction(action_id), action);
+}
+
+/// Get a proposed action by ID.
+pub fn _get_proposed_action(env: &Env, action_id: u64) -> Option<ProposedAction> {
+    env.storage()
+        .instance()
+        .get(&DataKey::ProposedAction(action_id))
+}
+
+/// Store votes for a proposed action.
+pub fn _set_action_votes(env: &Env, action_id: u64, voters: &Vec<Address>) {
+    env.storage()
+        .instance()
+        .set(&DataKey::ActionVotes(action_id), voters);
+}
+
+/// Get votes for a proposed action.
+pub fn _get_action_votes(env: &Env, action_id: u64) -> Vec<Address> {
+    env.storage()
+        .instance()
+        .get(&DataKey::ActionVotes(action_id))
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+/// Add a vote for a proposed action.
+pub fn _add_action_vote(env: &Env, action_id: u64, voter: &Address) {
+    let mut voters = _get_action_votes(env, action_id);
+    // Avoid duplicates
+    if !voters.iter().any(|v| v == voter) {
+        voters.push_back(voter.clone());
+        _set_action_votes(env, action_id, &voters);
+    }
+}
+
+/// Check if an action has reached the required threshold (3/5).
+pub fn _has_reached_threshold(env: &Env, action_id: u64, threshold: u32) -> bool {
+    let voters = _get_action_votes(env, action_id);
+    let admins = _get_admin(env);
+    let admin_count = admins.len() as u32;
+    
+    // Threshold is met if we have at least `threshold` votes
+    // Default: 3 out of 5 admins required
+    voters.len() >= threshold
+}
+
+/// Get the required threshold based on admin count (3/5 of admins).
+pub fn _get_required_threshold(env: &Env) -> u32 {
+    let admins = _get_admin(env);
+    let admin_count = admins.len() as u32;
+    
+    // Require 3/5 (or majority if fewer than 5 admins)
+    // For 3 admins: need 2 (majority)
+    // For 4 admins: need 3
+    // For 5 admins: need 3
+    if admin_count <= 3 {
+        2 // Simple majority for small groups
+    } else {
+        3 // 3/5 threshold for larger groups
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 #[cfg(test)]
