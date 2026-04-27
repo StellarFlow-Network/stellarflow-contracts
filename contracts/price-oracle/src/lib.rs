@@ -1332,6 +1332,11 @@ impl PriceOracle {
         };
         callbacks::notify_subscribers(&env, &payload);
 
+        // Automatically extend the storage lifetime of the relayer's profile
+        // after successful price update submission
+        env.storage().persistent().extend_ttl(&crate::auth::DataKey::Provider(source.clone()), 10000);
+        env.storage().persistent().extend_ttl(&crate::auth::DataKey::ProviderWeight(source.clone()), 10000);
+
         Ok(())
     }
 

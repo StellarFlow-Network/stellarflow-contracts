@@ -1,3 +1,5 @@
+use soroban_sdk::{Address, Env, Symbol, Vec};
+use alloc::string::ToString;
 use soroban_sdk::{Address, Env, Symbol, Vec, IntoVal};
 
 use crate::types::{DataKey, PriceUpdatePayload};
@@ -23,6 +25,7 @@ pub fn subscribe(env: &Env, callback_contract: Address) -> Result<(), crate::Err
 
     // Check if already subscribed
     if subscribers.iter().any(|sub| sub == callback_contract) {
+        return Err("Contract is already subscribed".to_string());
         return Err(crate::Error::AlreadyInitialized);
     }
 
@@ -109,6 +112,7 @@ fn try_invoke_callback(env: &Env, callback_contract: &Address, payload: &PriceUp
     env.invoke_contract::<()>(
         callback_contract,
         &Symbol::new(env, "on_price_update"),
+        soroban_sdk::vec![env, payload.clone()],
         soroban_sdk::vec![env, payload.into_val(env)],
     );
     Ok(())
@@ -139,6 +143,7 @@ mod tests {
         // Verify both are in the list
         let subscribers = get_subscribers(&env);
         assert!(subscribers.iter().any(|s| s == contract1));
+        assert!(subscribers.iter().any(|s| s == &contract2));
         assert!(subscribers.iter().any(|s| s == contract2));
     }
 
