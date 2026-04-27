@@ -5,6 +5,10 @@ const DATA_KEY: Symbol = Symbol::short("DATA");
 const PENDING_UPGRADE_KEY: Symbol = Symbol::short("PENDING");
 const UPGRADE_DELAY_SECONDS: u64 = 48 * 60 * 60; // 48 hours in seconds
 
+// TTL extension parameters (approximately 1 year in ledgers)
+const MIN_LEDGERS_TTL: u32 = 535_000;
+const MAX_LEDGERS_TTL: u32 = 1_000_000;
+
 #[contracttype]
 pub struct PendingUpgrade {
     pub new_wasm_hash: BytesN<32>,
@@ -26,7 +30,7 @@ pub struct TimeLockedUpgradeContract;
 impl TimeLockedUpgradeContract {
     /// Initialize the contract with an admin address
     pub fn initialize(env: Env, admin: Address) {
-        if env.storage().instance().has(&DATA_KEY) {
+        if env.storage().persistent().has(&DATA_KEY) {
             panic!("contract already initialized");
         }
         
@@ -37,15 +41,18 @@ impl TimeLockedUpgradeContract {
             value: 0,
         };
         
-        env.storage().instance().set(&DATA_KEY, &data);
+        env.storage().persistent().set(&DATA_KEY, &data);
+        env.storage().persistent().extend_ttl(MIN_LEDGERS_TTL, MAX_LEDGERS_TTL, &DATA_KEY);
     }
 
     /// Get the current contract data
     pub fn get_data(env: Env) -> ContractData {
-        env.storage()
-            .instance()
+        let data = env.storage()
+            .persistent()
             .get(&DATA_KEY)
-            .unwrap_or_else(|| panic!("contract not initialized"))
+            .unwrap_or_else(|| panic!("contract not initialized"));
+        env.storage().persistent().extend_ttl(MIN_LEDGERS_TTL, MAX_LEDGERS_TTL, &DATA_KEY);
+        data
     }
 
     /// Propose an upgrade with a new WASM hash
@@ -68,7 +75,8 @@ impl TimeLockedUpgradeContract {
             proposer: proposer.clone(),
         };
         
-        env.storage().instance().set(&PENDING_UPGRADE_KEY, &pending_upgrade);
+        env.storage().persistent().set(&PENDING_UPGRADE_KEY, &pending_upgrade);
+        env.storage().persistent().extend_ttl(MIN_LEDGERS_TTL, MAX_LEDGERS_TTL, &PENDING_UPGRADE_KEY);
     }
 
     /// Execute a pending upgrade if the timelock period has passed
@@ -84,7 +92,7 @@ impl TimeLockedUpgradeContract {
         
         let pending_upgrade: PendingUpgrade = env
             .storage()
-            .instance()
+            .persistent()
             .get(&PENDING_UPGRADE_KEY)
             .unwrap_or_else(|| panic!("no pending upgrade"));
         
@@ -104,7 +112,7 @@ impl TimeLockedUpgradeContract {
             .update_current_contract(pending_upgrade.new_wasm_hash);
         
         // Clear the pending upgrade
-        env.storage().instance().remove(&PENDING_UPGRADE_KEY);
+        env.storage().persistent().remove(&PENDING_UPGRADE_KEY);
     }
 
     /// Cancel a pending upgrade
@@ -118,16 +126,21 @@ impl TimeLockedUpgradeContract {
         
         canceller.require_auth();
         
-        if !env.storage().instance().has(&PENDING_UPGRADE_KEY) {
+        if !env.storage().persistent().has(&PENDING_UPGRADE_KEY) {
             panic!("no pending upgrade to cancel");
         }
         
-        env.storage().instance().remove(&PENDING_UPGRADE_KEY);
+        env.storage().persistent().remove(&PENDING_UPGRADE_KEY);
     }
 
     /// Get the current pending upgrade information
     pub fn get_pending_upgrade(env: Env) -> Option<PendingUpgrade> {
-        env.storage().instance().get(&PENDING_UPGRADE_KEY)
+        if let Some(pending) = env.storage().persistent().get(&PENDING_UPGRADE_KEY) {
+            env.storage().persistent().extend_ttl(MIN_LEDGERS_TTL, MAX_LEDGERS_TTL, &PENDING_UPGRADE_KEY);
+            Some(pending)
+        } else {
+            None
+        }
     }
 
     /// Get the remaining time before an upgrade can be executed
@@ -158,7 +171,8 @@ impl TimeLockedUpgradeContract {
         setter.require_auth();
         
         data.value = value;
-        env.storage().instance().set(&DATA_KEY, &data);
+        env.storage().persistent().set(&DATA_KEY, &data);
+        env.storage().persistent().extend_ttl(MIN_LEDGERS_TTL, MAX_LEDGERS_TTL, &DATA_KEY);
     }
 }
 

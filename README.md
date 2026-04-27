@@ -10,6 +10,19 @@ This repository contains smart contracts for the StellarFlow Network with a time
 - **Admin-Only Operations**: Only contract administrators can propose and execute upgrades
 - **Upgrade Cancellation**: Ability to cancel pending upgrades before execution
 - **Timelock Monitoring**: Functions to check remaining timelock time
+- **State Expiration Management**: Automatic TTL extension to prevent data deletion
+
+## State Expiration Management
+
+To ensure contract data is never deleted due to Soroban's state expiration mechanism, the contract uses persistent storage and automatically extends TTL (Time-To-Live) for all storage entries. TTL is extended to approximately 1 year (535,000 ledgers) whenever data is accessed or modified.
+
+### Implementation Details
+
+- **Persistent Storage**: All contract state is stored in persistent storage to survive contract upgrades
+- **Automatic TTL Extension**: `env.storage().persistent().extend_ttl()` is called in all update functions
+- **TTL Parameters**: 
+  - Minimum ledgers: 535,000 (≈1 year)
+  - Maximum ledgers: 1,000,000 (≈2 years)
 
 ## Architecture
 
@@ -90,6 +103,7 @@ cargo test
 ✅ **Pending State Storage**: New WASM hash stored in pending state before commitment  
 ✅ **48-Hour Delay**: Enforced delay between proposal and execution  
 ✅ **Flash Upgrade Prevention**: Complete protection against immediate upgrades  
+✅ **State Expiration Management**: Uses `env.storage().persistent().extend_ttl()` to keep data alive  
 
 ## Build and Deploy
 
