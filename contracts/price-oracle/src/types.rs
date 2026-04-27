@@ -27,6 +27,20 @@ pub enum DataKey {
     CommunityPrice(Symbol),
     /// Query fee amount for get_price calls (in stroops).
     QueryFee,
+    /// Token address used for fee payments.
+    FeeToken,
+    /// Accumulated fees collected from queries.
+    CollectedFees,
+    /// Insurance Fund address for fee distribution.
+    InsuranceFund,
+    /// Admin Treasury address for fee distribution.
+    AdminTreasury,
+    /// Relayer Rewards address for fee distribution.
+    RelayerRewards,
+    /// Transaction counter for triggering fee distribution.
+    TransactionCounter,
+    /// Distribution interval (number of transactions before auto-distribution).
+    DistributionInterval,
     /// Destroyed flag to mark contract as permanently unusable.
     Destroyed,
     /// Asset decimal metadata (base_decimals, quote_decimals).
@@ -245,4 +259,20 @@ pub struct ProposedAction {
     pub executed: bool,
     /// Whether the action has been cancelled.
     pub cancelled: bool,
+}
+
+/// Fee distribution configuration and amounts.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FeeDistribution {
+    /// Total fees collected since last distribution.
+    pub collected_fees: i128,
+    /// Insurance Fund allocation (percentage in basis points, e.g., 5000 = 50%).
+    pub insurance_fund_bps: u32,
+    /// Admin Treasury allocation (percentage in basis points).
+    pub admin_treasury_bps: u32,
+    /// Relayer Rewards allocation (percentage in basis points).
+    pub relayer_rewards_bps: u32,
+    /// Last distribution timestamp.
+    pub last_distribution: u64,
 }

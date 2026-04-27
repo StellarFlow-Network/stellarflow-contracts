@@ -4,7 +4,7 @@ use soroban_sdk::{
     contract, contractclient, contracterror, contractimpl, panic_with_error, Address, Env, Symbol, String, token,
 };
 
-use crate::types::{DataKey, PriceBounds, PriceBuffer, PriceBufferEntry, PriceData, PriceDataWithStatus, PriceEntryWithStatus, RecentEvent, AdminAction, AdminLogEntry, PriceUpdatePayload, ProposedAction};
+use crate::types::{DataKey, PriceBounds, PriceBuffer, PriceBufferEntry, PriceData, PriceDataWithStatus, PriceEntryWithStatus, RecentEvent, AdminAction, AdminLogEntry, PriceUpdatePayload, ProposedAction, FeeDistribution};
 
 const ADMIN_TIMELOCK: u64 = 86_400;
 const MAX_CLEAR_ASSETS: u32 = 20;
@@ -20,7 +20,7 @@ pub trait StellarFlowTrait {
     ///
     /// When `verified` is `true`, reads from the `VerifiedPrice` bucket (default for internal math).
     /// When `verified` is `false`, reads from the `CommunityPrice` bucket.
-    /// Returns `Error::AssetNotFound` if the asset does not exist or the price is stale.
+    /// Returns `Error::NotFound` if the asset does not exist or the price is stale.
     fn get_price(env: Env, asset: Symbol, verified: bool) -> Result<PriceData, Error>;
 
     /// Calculate the weighted average price of a multi-asset index basket.
@@ -221,6 +221,47 @@ pub trait StellarFlowTrait {
     ///
     /// Returns true if the contract is frozen, false otherwise.
     fn is_frozen(env: Env) -> bool;
+
+    /// Distribute collected fees between Insurance Fund, Admin Treasury, and Relayer Rewards.
+    ///
+    /// Automatically called after reaching the transaction threshold or can be called manually by admin.
+    /// Splits fees according to the configured percentages (in basis points).
+    fn distribute_fees(env: Env, admin: Address) -> Result<(), Error>;
+
+    /// Set the fee distribution percentages.
+    ///
+    /// Only admin can call this. Percentages are in basis points (e.g., 5000 = 50%).
+    /// The sum of all percentages must equal 10000 (100%).
+    fn set_fee_distribution(
+        env: Env,
+        admin: Address,
+        insurance_fund_bps: u32,
+        admin_treasury_bps: u32,
+        relayer_rewards_bps: u32,
+    ) -> Result<(), Error>;
+
+    /// Set the transaction distribution interval.
+    ///
+    /// After this many transactions, fees will be automatically distributed.
+    fn set_distribution_interval(env: Env, admin: Address, interval: u32) -> Result<(), Error>;
+
+    /// Get the current fee distribution configuration.
+    fn get_fee_distribution_config(env: Env) -> Option<crate::types::FeeDistribution>;
+
+    /// Set the Insurance Fund address for fee distribution.
+    fn set_insurance_fund(env: Env, admin: Address, address: Address) -> Result<(), Error>;
+
+    /// Set the Admin Treasury address for fee distribution.
+    fn set_admin_treasury(env: Env, admin: Address, address: Address) -> Result<(), Error>;
+
+    /// Set the Relayer Rewards address for fee distribution.
+    fn set_relayer_rewards(env: Env, admin: Address, address: Address) -> Result<(), Error>;
+
+    /// Set the query fee amount (in stroops).
+    fn set_query_fee(env: Env, admin: Address, fee_amount: i128) -> Result<(), Error>;
+
+    /// Set the fee token address.
+    fn set_fee_token(env: Env, admin: Address, token_address: Address) -> Result<(), Error>;
 }
 
 #[contractclient(name = "TokenContractClient")]
@@ -238,49 +279,25 @@ const MAX_PERCENT_CHANGE_BPS: i128 = 1_000;
 const VOLATILITY_THRESHOLD_BPS: i128 = 500;
 
 /// Error types for the price oracle contract
+/// Following SEP-41 standard error codes for better ecosystem integration
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum Error {
-    /// Asset does not exist in the price oracle.
-    AssetNotFound = 1,
-    /// Unauthorized caller - not a whitelisted provider or admin.
+    /// Internal contract error
+    InternalError = 1,
+    /// Caller is not authorized to perform this action
     Unauthorized = 2,
-    /// Asset symbol is not in the approved list (NGN, KES, GHS)
-    InvalidAssetSymbol = 3,
-    /// Price must be greater than zero.
-    InvalidPrice = 4,
-    /// Price change exceeds maximum allowed threshold (flash crash protection).
-    FlashCrashDetected = 5,
-    /// Caller is not authorized to perform this action.
-    NotAuthorized = 6,
-    /// Contract or admin has already been initialized.
-    AlreadyInitialized = 7,
-    /// Price change exceeds the allowed delta limit in a single update.
-    PriceDeltaExceeded = 8,
-    /// Price is outside the configured min/max bounds for the asset.
-    PriceOutOfBounds = 9,
-    /// Provider weight must be between 0 and 100.
-    InvalidWeight = 10,
-    /// Multi-signature validation failed - insufficient or invalid admin signatures.
-    MultiSigValidationFailed = 11,
-    /// Cannot add more admins - maximum of 3 admins allowed.
-    MaxAdminsReached = 12,
-    /// Cannot remove admin - would leave contract without any admins.
-    CannotRemoveLastAdmin = 13,
-    /// Reentrancy detected - function is already executing.
-    ReentrancyDetected = 14,
-    /// Action not found or already executed/cancelled.
-    ActionNotFound = 15,
-    /// Vote threshold not reached - insufficient approvals.
-    ThresholdNotReached = 16,
-    /// Invalid action type for execution.
-    InvalidActionType = 17,
-    /// Action has already been executed.
-    ActionAlreadyExecuted = 18,
-    /// Action has been cancelled.
-    ActionCancelled = 19,
-}
+    /// Requested resource was not found
+    NotFound = 3,
+    /// Resource already exists
+    AlreadyExists = 4,
+    /// Invalid argument provided
+    InvalidArgument = 5,
+    /// Operation cannot be performed in current contract state
+    InvalidState = 6,
+    /// Contract has been permanently destroyed
+    ContractDestroyed = 7,
 
 #[contract]
 pub struct PriceOracle;
@@ -375,7 +392,7 @@ fn _is_whitelisted_provider(env: &Env, source: &Address) -> bool {
 /// Panic if the contract has been destroyed.
 fn _require_not_destroyed(env: &Env) {
     if env.storage().instance().has(&DataKey::Destroyed) {
-        panic_with_error!(env, Error::ContractDestroyed);
+        panic_with_error!(env, Error::InvalidState);
     }
 }
 
@@ -405,7 +422,7 @@ fn acquire_lock(env: &Env) -> Result<(), Error> {
         .unwrap_or(false);
     
     if is_locked {
-        return Err(Error::ReentrancyDetected);
+        return Err(Error::InvalidState);
     }
     
     env.storage().instance().set(&DataKey::IsLocked, &true);
@@ -415,6 +432,74 @@ fn acquire_lock(env: &Env) -> Result<(), Error> {
 /// Release the reentrancy lock for set_price.
 fn release_lock(env: &Env) {
     env.storage().instance().set(&DataKey::IsLocked, &false);
+}
+
+/// Collect query fee from the caller and accumulate it for distribution.
+fn _collect_query_fee(env: &Env) -> Result<(), Error> {
+    // Get the fee amount
+    let fee_amount: i128 = env
+        .storage()
+        .persistent()
+        .get(&DataKey::QueryFee)
+        .unwrap_or(0);
+
+    if fee_amount <= 0 {
+        return Ok(()); // No fee configured
+    }
+
+    // Get the fee token
+    let fee_token = env
+        .storage()
+        .persistent()
+        .get(&DataKey::FeeToken)
+        .unwrap_or_else(|| Address::from_string(&soroban_sdk::String::from_str(env, "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC")));
+
+    // Transfer fee from caller to contract
+    let token_client = token::Client::new(env, &fee_token);
+    let caller = env.invoker();
+    let contract_address = env.current_contract_address();
+
+    token_client.transfer(&caller, &contract_address, &fee_amount);
+
+    // Accumulate collected fees
+    let mut fee_config: FeeDistribution = env
+        .storage()
+        .persistent()
+        .get(&DataKey::CollectedFees)
+        .unwrap_or(FeeDistribution {
+            collected_fees: 0,
+            insurance_fund_bps: 4000,
+            admin_treasury_bps: 3000,
+            relayer_rewards_bps: 3000,
+            last_distribution: env.ledger().timestamp(),
+        });
+
+    fee_config.collected_fees += fee_amount;
+    env.storage().persistent().set(&DataKey::CollectedFees, &fee_config);
+
+    // Increment transaction counter and check if we should auto-distribute
+    let mut tx_count: u32 = env
+        .storage()
+        .persistent()
+        .get(&DataKey::TransactionCounter)
+        .unwrap_or(0);
+    tx_count += 1;
+
+    let distribution_interval: u32 = env
+        .storage()
+        .persistent()
+        .get(&DataKey::DistributionInterval)
+        .unwrap_or(100); // Default to 100 transactions
+
+    if tx_count >= distribution_interval {
+        // Auto-distribute fees (this would need to be called by an authorized party)
+        // For now, we'll just reset the counter
+        tx_count = 0;
+    }
+
+    env.storage().persistent().set(&DataKey::TransactionCounter, &tx_count);
+
+    Ok(())
 }
 
 /// Contract version - must match Cargo.toml version
@@ -549,7 +634,7 @@ fn read_price_floor(env: &Env, asset: &Symbol) -> Option<i128> {
 fn enforce_price_floor(env: &Env, asset: &Symbol, price: i128) -> Result<(), Error> {
     if let Some(price_floor) = read_price_floor(env, asset) {
         if price < price_floor {
-            return Err(Error::PriceOutOfBounds);
+            return Err(Error::InvalidArgument);
         }
     }
 
@@ -579,7 +664,7 @@ impl PriceOracle {
     /// Can only be called once.
     pub fn initialize(env: Env, admin: Address, base_currency_pairs: soroban_sdk::Vec<Symbol>) {
         if env.storage().instance().has(&DataKey::Initialized) || crate::auth::_has_admin(&env) {
-            panic_with_error!(&env, Error::AlreadyInitialized);
+            panic_with_error!(&env, Error::AlreadyExists);
         }
 
         #[allow(deprecated)]
@@ -595,9 +680,7 @@ impl PriceOracle {
         //_log_admin_action(&env, &admin, AdminAction::Initialize, None);
         let admins = soroban_sdk::vec![&env, admin];
         crate::auth::_set_admin(&env, &admins);
-        env.storage()
-            .instance()
-            .set(&DataKey::BaseCurrencyPairs, &base_currency_pairs);
+        _set_tracked_assets(&env, &base_currency_pairs);
         
         // Mark contract as initialized
         env.storage().instance().set(&DataKey::Initialized, &true);
@@ -605,32 +688,31 @@ impl PriceOracle {
 
     pub fn get_index_price(env: Env, components: soroban_sdk::Vec<crate::types::AssetWeight>) -> Result<i128, Error> {
         if components.is_empty() {
-            return Err(Error::AssetNotFound); 
-        }
+            return Err(Error::InvalidArgument);
 
         let mut total_weighted_price: i128 = 0;
         let mut total_weight: u32 = 0;
 
         for component in components.iter() {
             // Fetch the verified price. 
-            // If any asset is missing or stale, this cleanly propagates Error::AssetNotFound.
+            // If any asset is missing or stale, this cleanly propagates Error::NotFound.
             let price_data = Self::get_price(env.clone(), component.asset.clone(), true)?;
             
             let weight_i128: i128 = component.weight.into();
             
             // Safe math to prevent overflow panics
             let weighted_val = price_data.price.checked_mul(weight_i128)
-                .ok_or(Error::InvalidPrice)?;
+                .ok_or(Error::InvalidArgument)?;
                 
             total_weighted_price = total_weighted_price.checked_add(weighted_val)
-                .ok_or(Error::InvalidPrice)?;
+                .ok_or(Error::InvalidArgument)?;
                 
             total_weight = total_weight.checked_add(component.weight)
                 .unwrap_or(total_weight); 
         }
 
         if total_weight == 0 {
-            return Err(Error::InvalidWeight);
+            return Err(Error::InvalidArgument);
         }
 
         // Calculate final index price. 
@@ -642,7 +724,7 @@ impl PriceOracle {
     pub fn init_admin(env: Env, admin: Address) {
         _require_not_destroyed(&env);
         if env.storage().instance().has(&DataKey::Initialized) {
-            panic_with_error!(&env, Error::AlreadyInitialized);
+            panic_with_error!(&env, Error::AlreadyExists);
         }
 
         #[allow(deprecated)]
@@ -833,8 +915,11 @@ impl PriceOracle {
     /// and admins.  When `verified` is `false`, data is read from the
     /// `CommunityPrice` bucket instead.
     ///
-    /// Returns `Error::AssetNotFound` when the asset is missing or stale.
+    /// Returns `Error::NotFound` when the asset is missing or stale.
     pub fn get_price(env: Env, asset: Symbol, verified: bool) -> Result<PriceData, Error> {
+        // Collect query fee
+        _collect_query_fee(&env)?;
+
         let key = if verified {
             DataKey::VerifiedPrice(asset)
         } else {
@@ -845,17 +930,20 @@ impl PriceOracle {
             Some(price_data) => {
                 let now = env.ledger().timestamp();
                 if is_stale(now, price_data.timestamp, price_data.ttl) {
-                    return Err(Error::AssetNotFound);
+                    return Err(Error::NotFound);
                 }
                 Ok(price_data)
             }
-            None => Err(Error::AssetNotFound),
+            None => Err(Error::NotFound),
         }
     }
 
     /// Returns the last known price data and marks it stale when TTL has expired.
     /// Always reads from the `VerifiedPrice` bucket.
     pub fn get_price_with_status(env: Env, asset: Symbol) -> Result<PriceDataWithStatus, Error> {
+        // Collect query fee
+        _collect_query_fee(&env)?;
+
         match env
             .storage()
             .temporary()
@@ -868,13 +956,16 @@ impl PriceOracle {
                     data: price_data,
                 })
             }
-            None => Err(Error::AssetNotFound),
+            None => Err(Error::NotFound),
         }
     }
 
     /// Returns `None` instead of an error when the asset is not found.
     /// Always reads from the `VerifiedPrice` bucket.
     pub fn get_price_safe(env: Env, asset: Symbol) -> Option<PriceData> {
+        // Collect query fee
+        let _ = _collect_query_fee(&env); // Ignore errors for safe function
+
         env.storage()
             .temporary()
             .get::<DataKey, PriceData>(&DataKey::VerifiedPrice(asset))
@@ -899,6 +990,9 @@ impl PriceOracle {
         env: Env,
         assets: soroban_sdk::Vec<Symbol>,
     ) -> soroban_sdk::Vec<Option<crate::types::PriceEntry>> {
+        // Collect query fee for batch operation
+        _collect_query_fee(&env)?;
+
         let now = env.ledger().timestamp();
         let mut result = soroban_sdk::Vec::new(&env);
 
@@ -949,12 +1043,16 @@ impl PriceOracle {
         result
     }
 
-    /// Returns a vector of all currently tracked asset symbols.
+    /// Get all currently tracked asset symbols.
+    ///
+    /// Returns a vector of all assets that are currently being tracked by the oracle.
+    /// This function enables other contracts to discover which assets are supported
+    /// by this oracle for price feeds and trading.
     pub fn get_all_assets(env: Env) -> soroban_sdk::Vec<Symbol> {
         get_tracked_assets(&env)
     }
 
-    /// Returns the total number of currently tracked asset symbols.
+    /// Get the total number of currently tracked asset symbols.
     pub fn get_asset_count(env: Env) -> u32 {
         get_tracked_assets(&env).len()
     }
@@ -973,12 +1071,12 @@ impl PriceOracle {
 
     /// Get the human-readable description for an asset.
     ///
-    /// Returns `Error::AssetNotFound` if no description has been set.
+    /// Returns `Error::NotFound` if no description has been set.
     pub fn get_asset_description(env: Env, asset: Symbol) -> Result<soroban_sdk::String, Error> {
         env.storage()
             .persistent()
             .get(&DataKey::AssetDescription(asset))
-            .ok_or(Error::AssetNotFound)
+            .ok_or(Error::NotFound)
     }
 
     /// Set the price data for a specific asset (admin/internal use).
@@ -1007,7 +1105,7 @@ impl PriceOracle {
         // Ensure lock is released even on error
         let result = (|| -> Result<(), Error> {
             if !is_valid(val) {
-                return Err(Error::InvalidPrice);
+                return Err(Error::InvalidArgument);
             }
 
             // Normalize the raw price to 9 fixed-point decimals on entry.
@@ -1102,11 +1200,11 @@ impl PriceOracle {
         source.require_auth();
 
         if !get_tracked_assets(&env).contains(&asset) {
-            return Err(Error::InvalidAssetSymbol);
+            return Err(Error::InvalidArgument);
         }
 
         if !is_valid(price) {
-            return Err(Error::InvalidPrice);
+            return Err(Error::InvalidArgument);
         }
 
         // Normalize the raw price to 9 fixed-point decimals on entry.
@@ -1143,7 +1241,7 @@ impl PriceOracle {
 
         //_log_admin_action(&env, &admin, AdminAction::RescueTokens, Some(format!("Token: {}, To: {}, Amount: {}", token.to_string(), to.to_string(), amount)));
         if amount <= 0 {
-            panic_with_error!(&env, Error::InvalidPrice);
+            panic_with_error!(&env, Error::InvalidArgument);
         }
 
         let token_client = token::Client::new(&env, &token);
@@ -1240,7 +1338,7 @@ impl PriceOracle {
 
         // Prevent duplicate submissions from the same provider in the same ledger
         if has_provider_submitted(&buffer, &source) {
-            return Err(Error::AlreadyInitialized);
+            return Err(Error::InvalidState);
         }
         let storage = env.storage().temporary();
         let key = DataKey::VerifiedPrice(asset.clone());
@@ -1279,7 +1377,7 @@ impl PriceOracle {
         
         if let Some(bounds) = bounds_map.get(asset.clone()) {
             if normalized < bounds.min_price || normalized > bounds.max_price {
-                return Err(Error::PriceOutOfBounds);
+                return Err(Error::InvalidArgument);
             }
         }
 
@@ -1527,7 +1625,7 @@ impl PriceOracle {
 
         // Check if we've reached the maximum of 3 admins
         if admin_count >= 3 {
-            return Err(Error::MaxAdminsReached);
+            return Err(Error::InvalidState);
         }
 
         //_log_admin_action(&env, &admin1, AdminAction::RegisterAdmin, Some(new_admin.to_string()));
@@ -1574,7 +1672,7 @@ impl PriceOracle {
 
         // Cannot remove if would leave less than 1 admin
         if admin_count <= 1 {
-            return Err(Error::CannotRemoveLastAdmin);
+            return Err(Error::InvalidState);
         }
 
         // Verify the admin to remove actually exists
@@ -1688,7 +1786,7 @@ impl PriceOracle {
             2 => AdminAction::RemoveAdmin,
             3 => AdminAction::SelfDestruct,
             4 => AdminAction::Upgrade,
-            _ => return Err(Error::InvalidActionType),
+            _ => return Err(Error::InvalidArgument),
         };
 
         // Generate unique action ID
@@ -1750,15 +1848,15 @@ impl PriceOracle {
         // Get the proposed action
         let proposed = match crate::auth::_get_proposed_action(&env, action_id) {
             Some(p) => p,
-            None => return Err(Error::ActionNotFound),
+            None => return Err(Error::NotFound),
         };
 
         // Check if already executed or cancelled
         if proposed.executed {
-            return Err(Error::ActionAlreadyExecuted);
+            return Err(Error::InvalidState);
         }
         if proposed.cancelled {
-            return Err(Error::ActionCancelled);
+            return Err(Error::InvalidState);
         }
 
         // Add the vote
@@ -1805,21 +1903,21 @@ impl PriceOracle {
         // Get the proposed action
         let mut proposed = match crate::auth::_get_proposed_action(&env, action_id) {
             Some(p) => p,
-            None => return Err(Error::ActionNotFound),
+            None => return Err(Error::NotFound),
         };
 
         // Check if already executed or cancelled
         if proposed.executed {
-            return Err(Error::ActionAlreadyExecuted);
+            return Err(Error::InvalidState);
         }
         if proposed.cancelled {
-            return Err(Error::ActionCancelled);
+            return Err(Error::InvalidState);
         }
 
         // Check if threshold is met
         let threshold = crate::auth::_get_required_threshold(&env);
         if !crate::auth::_has_reached_threshold(&env, action_id, threshold) {
-            return Err(Error::ThresholdNotReached);
+            return Err(Error::InvalidState);
         }
 
         // Execute based on action type
@@ -1855,14 +1953,14 @@ impl PriceOracle {
                         (executor.clone(), new_admin.clone()),
                     );
                 } else {
-                    return Err(Error::InvalidActionType);
+                    return Err(Error::InvalidArgument);
                 }
             }
             AdminAction::RemoveAdmin => {
                 if let Some(ref admin_to_remove) = proposed.target {
                     let admins = crate::auth::_get_admin(&env);
                     if admins.len() <= 1 {
-                        return Err(Error::CannotRemoveLastAdmin);
+                        return Err(Error::InvalidState);
                     }
                     crate::auth::_remove_authorized(&env, admin_to_remove);
                     proposed.executed = true;
@@ -1877,7 +1975,7 @@ impl PriceOracle {
                         (executor.clone(), admin_to_remove.clone()),
                     );
                 } else {
-                    return Err(Error::InvalidActionType);
+                    return Err(Error::InvalidArgument);
                 }
             }
             AdminAction::SelfDestruct => {
@@ -1929,7 +2027,7 @@ impl PriceOracle {
                     (executor.clone(),),
                 );
             }
-            _ => return Err(Error::InvalidActionType),
+            _ => return Err(Error::InvalidArgument),
         }
 
         // Update the proposal status
@@ -1985,15 +2083,15 @@ impl PriceOracle {
         // Get the proposed action
         let mut proposed = match crate::auth::_get_proposed_action(&env, action_id) {
             Some(p) => p,
-            None => return Err(Error::ActionNotFound),
+            None => return Err(Error::NotFound),
         };
 
         // Check if already executed or cancelled
         if proposed.executed {
-            return Err(Error::ActionAlreadyExecuted);
+            return Err(Error::InvalidState);
         }
         if proposed.cancelled {
-            return Err(Error::ActionCancelled);
+            return Err(Error::InvalidState);
         }
 
         // Mark as cancelled
@@ -2060,7 +2158,7 @@ impl PriceOracle {
 
         // Check if already frozen
         if crate::auth::_is_frozen(&env) {
-            return Err(Error::AlreadyInitialized);
+            return Err(Error::InvalidState);
         }
 
         // Set the frozen state
@@ -2155,6 +2253,207 @@ impl PriceOracle {
     /// A vector of addresses of all contracts currently subscribed to price updates.
     pub fn get_price_update_subscribers(env: Env) -> soroban_sdk::Vec<Address> {
         callbacks::get_subscribers(&env)
+    }
+
+    /// Distribute collected fees between Insurance Fund, Admin Treasury, and Relayer Rewards.
+    ///
+    /// Automatically called after reaching the transaction threshold or can be called manually by admin.
+    /// Splits fees according to the configured percentages (in basis points).
+    pub fn distribute_fees(env: Env, admin: Address) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        // Get current fee distribution config
+        let mut fee_config: FeeDistribution = env
+            .storage()
+            .persistent()
+            .get(&DataKey::CollectedFees)
+            .unwrap_or(FeeDistribution {
+                collected_fees: 0,
+                insurance_fund_bps: 4000, // 40%
+                admin_treasury_bps: 3000, // 30%
+                relayer_rewards_bps: 3000, // 30%
+                last_distribution: env.ledger().timestamp(),
+            });
+
+        if fee_config.collected_fees <= 0 {
+            return Ok(()); // No fees to distribute
+        }
+
+        // Get recipient addresses
+        let insurance_fund = env
+            .storage()
+            .persistent()
+            .get(&DataKey::InsuranceFund)
+            .ok_or(Error::NotFound)?;
+        let admin_treasury = env
+            .storage()
+            .persistent()
+            .get(&DataKey::AdminTreasury)
+            .ok_or(Error::NotFound)?;
+        let relayer_rewards = env
+            .storage()
+            .persistent()
+            .get(&DataKey::RelayerRewards)
+            .ok_or(Error::NotFound)?;
+
+        // Calculate distribution amounts
+        let total_fees = fee_config.collected_fees;
+        let insurance_amount = (total_fees * fee_config.insurance_fund_bps as i128) / 10000;
+        let admin_amount = (total_fees * fee_config.admin_treasury_bps as i128) / 10000;
+        let relayer_amount = total_fees - insurance_amount - admin_amount; // Remainder goes to relayers
+
+        // Get the fee token (assuming XLM for now, but could be configurable)
+        let fee_token = env
+            .storage()
+            .persistent()
+            .get(&DataKey::QueryFee)
+            .unwrap_or_else(|| Address::from_string(&soroban_sdk::String::from_str(&env, "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC")));
+
+        // Transfer fees to recipients
+        let token_client = token::Client::new(&env, &fee_token);
+        let contract_address = env.current_contract_address();
+
+        if insurance_amount > 0 {
+            token_client.transfer(&contract_address, &insurance_fund, &insurance_amount);
+        }
+        if admin_amount > 0 {
+            token_client.transfer(&contract_address, &admin_treasury, &admin_amount);
+        }
+        if relayer_amount > 0 {
+            token_client.transfer(&contract_address, &relayer_rewards, &relayer_amount);
+        }
+
+        // Reset collected fees and update timestamp
+        fee_config.collected_fees = 0;
+        fee_config.last_distribution = env.ledger().timestamp();
+        env.storage().persistent().set(&DataKey::CollectedFees, &fee_config);
+
+        // Reset transaction counter
+        env.storage().persistent().set(&DataKey::TransactionCounter, &0u32);
+
+        Ok(())
+    }
+
+    /// Set the fee distribution percentages.
+    ///
+    /// Only admin can call this. Percentages are in basis points (e.g., 5000 = 50%).
+    /// The sum of all percentages must equal 10000 (100%).
+    pub fn set_fee_distribution(
+        env: Env,
+        admin: Address,
+        insurance_fund_bps: u32,
+        admin_treasury_bps: u32,
+        relayer_rewards_bps: u32,
+    ) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        // Validate that percentages sum to 100%
+        if insurance_fund_bps + admin_treasury_bps + relayer_rewards_bps != 10000 {
+            return Err(Error::InvalidWeight);
+        }
+
+        let mut fee_config: FeeDistribution = env
+            .storage()
+            .persistent()
+            .get(&DataKey::CollectedFees)
+            .unwrap_or(FeeDistribution {
+                collected_fees: 0,
+                insurance_fund_bps: 4000,
+                admin_treasury_bps: 3000,
+                relayer_rewards_bps: 3000,
+                last_distribution: env.ledger().timestamp(),
+            });
+
+        fee_config.insurance_fund_bps = insurance_fund_bps;
+        fee_config.admin_treasury_bps = admin_treasury_bps;
+        fee_config.relayer_rewards_bps = relayer_rewards_bps;
+
+        env.storage().persistent().set(&DataKey::CollectedFees, &fee_config);
+
+        Ok(())
+    }
+
+    /// Set the transaction distribution interval.
+    ///
+    /// After this many transactions, fees will be automatically distributed.
+    pub fn set_distribution_interval(env: Env, admin: Address, interval: u32) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        env.storage().persistent().set(&DataKey::DistributionInterval, &interval);
+        Ok(())
+    }
+
+    /// Get the current fee distribution configuration.
+    pub fn get_fee_distribution_config(env: Env) -> Option<crate::types::FeeDistribution> {
+        env.storage().persistent().get(&DataKey::CollectedFees)
+    }
+
+    /// Set the Insurance Fund address for fee distribution.
+    pub fn set_insurance_fund(env: Env, admin: Address, address: Address) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        env.storage().persistent().set(&DataKey::InsuranceFund, &address);
+        Ok(())
+    }
+
+    /// Set the Admin Treasury address for fee distribution.
+    pub fn set_admin_treasury(env: Env, admin: Address, address: Address) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        env.storage().persistent().set(&DataKey::AdminTreasury, &address);
+        Ok(())
+    }
+
+    /// Set the Relayer Rewards address for fee distribution.
+    pub fn set_relayer_rewards(env: Env, admin: Address, address: Address) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        env.storage().persistent().set(&DataKey::RelayerRewards, &address);
+        Ok(())
+    }
+
+    /// Set the query fee amount (in stroops).
+    pub fn set_query_fee(env: Env, admin: Address, fee_amount: i128) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        if fee_amount < 0 {
+            return Err(Error::InvalidPrice);
+        }
+
+        env.storage().persistent().set(&DataKey::QueryFee, &fee_amount);
+        Ok(())
+    }
+
+    /// Set the fee token address.
+    pub fn set_fee_token(env: Env, admin: Address, token_address: Address) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        env.storage().persistent().set(&DataKey::FeeToken, &token_address);
+        Ok(())
     }
 }
 

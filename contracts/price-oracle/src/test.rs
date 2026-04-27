@@ -95,7 +95,7 @@ fn test_init_admin_panics_when_called_twice() {
     let second_admin = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
 
     client.init_admin(&first_admin);
-    // Second call should panic with Error::AlreadyInitialized
+    // Second call should panic with Error::AlreadyExists
     client.init_admin(&second_admin);
 }
 
@@ -187,7 +187,7 @@ fn test_update_price_rejects_untracked_asset() {
         &3_600u64,
     );
     match result {
-        Err(Ok(err)) => assert_eq!(err, Error::InvalidAssetSymbol),
+        Err(Ok(err)) => assert_eq!(err, Error::InvalidArgument),
         other => panic!("expected InvalidAssetSymbol, got {:?}", other),
     }
 }
@@ -210,7 +210,7 @@ fn test_update_price_rejects_non_provider() {
         &3_600u64,
     );
     match result {
-        Err(Ok(err)) => assert_eq!(err, Error::NotAuthorized),
+        Err(Ok(err)) => assert_eq!(err, Error::Unauthorized),
         other => panic!("expected NotAuthorized, got {:?}", other),
     }
 }
@@ -229,7 +229,7 @@ fn test_update_price_rejects_flash_crash() {
 
     let result = client.try_update_price(&provider, &asset, &1_200_i128, &2u32, &100u32, &3_600u64);
     match result {
-        Err(Ok(err)) => assert_eq!(err, Error::FlashCrashDetected),
+        Err(Ok(err)) => assert_eq!(err, Error::InvalidArgument),
         other => panic!("expected FlashCrashDetected, got {:?}", other),
     }
 }
@@ -275,7 +275,7 @@ fn test_set_price_rejects_zero_price() {
 
     let result = client.try_update_price(&provider, &asset, &250_i128, &2u32, &100u32, &3_600u64);
     match result {
-        Err(Ok(err)) => assert_eq!(err, Error::PriceOutOfBounds),
+        Err(Ok(err)) => assert_eq!(err, Error::InvalidArgument),
         other => panic!("expected PriceOutOfBounds, got {:?}", other),
     }
 }
@@ -410,7 +410,7 @@ fn try_try_subscribe_to_price_updates() {
     let asset = symbol_short!("ETH");
     let price: i128 = 1_000_000;
     match client.try_update_price(&provider, &asset, &price, &6u32, &100u32, &3600u64) {
-        Err(Ok(e)) => assert_eq!(e, Error::InvalidAssetSymbol),
+        Err(Ok(e)) => assert_eq!(e, Error::InvalidArgument),
         other => panic!("expected InvalidAssetSymbol, got {:?}", other),
     }
 }
@@ -602,8 +602,8 @@ fn test_flash_crash_protection_rejects_large_increase() {
 
     // Should reject 20% increase (exceeds 10% MAX_PERCENT_CHANGE)
     match client.try_update_price(&provider, &asset, &new_price, &6u32, &100u32, &3600u64) {
-        Err(Ok(e)) => assert_eq!(e, Error::FlashCrashDetected),
-        other => panic!("expected FlashCrashDetected, got {:?}", other),
+        Err(Ok(e)) => assert_eq!(e, Error::InvalidArgument),
+        other => panic!("expected InvalidArgument, got {:?}", other),
     }
 }
 
@@ -776,7 +776,7 @@ fn test_remove_asset_nonexistent_returns_error() {
 
     let result = client.try_remove_asset(&admin, &symbol_short!("NGN"));
     match result {
-        Err(Ok(e)) => assert_eq!(e, Error::AssetNotFound),
+        Err(Ok(e)) => assert_eq!(e, Error::NotFound),
         other => panic!("expected AssetNotFound, got {:?}", other),
     }
 }
@@ -902,8 +902,8 @@ fn test_clear_assets_rejects_batches_above_limit_atomically() {
 
     let result = client.try_clear_assets(&assets);
     match result {
-        Err(Ok(e)) => assert_eq!(e, Error::TooManyAssets),
-        other => panic!("expected TooManyAssets, got {:?}", other),
+        Err(Ok(e)) => assert_eq!(e, Error::InvalidArgument),
+        other => panic!("expected InvalidArgument, got {:?}", other),
     }
 
     env.as_contract(&contract_id, || {
@@ -1350,8 +1350,8 @@ fn test_update_price_below_min_bound_rejected() {
 
     let result = client.try_update_price(&provider, &asset, &100_i128, &6u32, &100u32, &3600u64);
     match result {
-        Err(Ok(e)) => assert_eq!(e, Error::PriceOutOfBounds),
-        other => panic!("expected PriceOutOfBounds, got {:?}", other),
+        Err(Ok(e)) => assert_eq!(e, Error::InvalidArgument),
+        other => panic!("expected InvalidArgument, got {:?}", other),
     }
 }
 
@@ -1405,8 +1405,8 @@ fn test_update_price_above_max_bound_rejected() {
     // Price above max should be rejected
     let result = client.try_update_price(&provider, &asset, &5_000_i128, &6u32, &100u32, &3600u64);
     match result {
-        Err(Ok(e)) => assert_eq!(e, Error::PriceOutOfBounds),
-        other => panic!("expected PriceOutOfBounds, got {:?}", other),
+        Err(Ok(e)) => assert_eq!(e, Error::InvalidArgument),
+        other => panic!("expected InvalidArgument, got {:?}", other),
     }
 }
 
@@ -1458,8 +1458,8 @@ fn test_flash_crash_protection_rejects_just_over_threshold() {
     client.set_price(&asset, &old_price, &6u32, &3600u64);
 
     match client.try_update_price(&provider, &asset, &new_price, &6u32, &100u32, &3600u64) {
-        Err(Ok(e)) => assert_eq!(e, Error::FlashCrashDetected),
-        other => panic!("expected FlashCrashDetected, got {:?}", other),
+        Err(Ok(e)) => assert_eq!(e, Error::InvalidArgument),
+        other => panic!("expected InvalidArgument, got {:?}", other),
     }
 }
 
@@ -2129,8 +2129,8 @@ fn test_self_destruct_fails_with_same_admin_twice() {
 
     let result = client.try_self_destruct(&admin1, &admin1);
     match result {
-        Err(Ok(e)) => assert_eq!(e, Error::MultiSigValidationFailed),
-        other => panic!("expected MultiSigValidationFailed, got {:?}", other),
+        Err(Ok(e)) => assert_eq!(e, Error::Unauthorized),
+        other => panic!("expected Unauthorized, got {:?}", other),
     }
 }
 
@@ -2153,8 +2153,8 @@ fn test_self_destruct_fails_with_non_admin() {
 
     let result = client.try_self_destruct(&admin1, &non_admin);
     match result {
-        Err(Ok(e)) => assert_eq!(e, Error::MultiSigValidationFailed),
-        other => panic!("expected MultiSigValidationFailed, got {:?}", other),
+        Err(Ok(e)) => assert_eq!(e, Error::Unauthorized),
+        other => panic!("expected Unauthorized, got {:?}", other),
     }
 }
 
@@ -2173,8 +2173,8 @@ fn test_self_destruct_fails_with_only_one_admin() {
 
     let result = client.try_self_destruct(&admin1, &fake_admin);
     match result {
-        Err(Ok(e)) => assert_eq!(e, Error::MultiSigValidationFailed),
-        other => panic!("expected MultiSigValidationFailed, got {:?}", other),
+        Err(Ok(e)) => assert_eq!(e, Error::Unauthorized),
+        other => panic!("expected Unauthorized, got {:?}", other),
     }
 }
 
