@@ -57,14 +57,12 @@ pub trait StellarFlowTrait {
 
     /// Get all currently tracked asset symbols.
     ///
-    /// Returns a vector of all assets that are currently being tracked by the oracle
-    /// and have valid (non-stale) price data available.
+    /// Returns a vector of all assets that are currently being tracked by the oracle.
     fn get_all_assets(env: Env) -> soroban_sdk::Vec<Symbol>;
 
     /// Get the total number of currently tracked asset symbols.
     ///
-    /// Returns the number of unique assets that are currently being tracked by the oracle
-    /// and have valid (non-stale) price data available.
+    /// Returns the number of unique assets that are currently being tracked by the oracle.
     fn get_asset_count(env: Env) -> u32;
 
     /// Get the Time-Weighted Average Price (TWAP) for a specific asset.
@@ -682,9 +680,7 @@ impl PriceOracle {
         //_log_admin_action(&env, &admin, AdminAction::Initialize, None);
         let admins = soroban_sdk::vec![&env, admin];
         crate::auth::_set_admin(&env, &admins);
-        env.storage()
-            .instance()
-            .set(&DataKey::BaseCurrencyPairs, &base_currency_pairs);
+        _set_tracked_assets(&env, &base_currency_pairs);
         
         // Mark contract as initialized
         env.storage().instance().set(&DataKey::Initialized, &true);
@@ -1049,31 +1045,14 @@ impl PriceOracle {
 
     /// Get all currently tracked asset symbols.
     ///
-    /// Returns a vector of all assets that are currently being tracked by the oracle
-    /// and have valid (non-stale) price data.
+    /// Returns a vector of all assets that are currently being tracked by the oracle.
     pub fn get_all_assets(env: Env) -> soroban_sdk::Vec<Symbol> {
-        let tracked_assets = get_tracked_assets(&env);
-        let mut active_assets = soroban_sdk::Vec::new(&env);
-        let now = env.ledger().timestamp();
-
-        for asset in tracked_assets.iter() {
-            // Check if the asset has a valid price in the verified bucket
-            if let Some(price_data) = env.storage().temporary().get::<DataKey, PriceData>(&DataKey::VerifiedPrice(asset.clone())) {
-                if !is_stale(now, price_data.timestamp, price_data.ttl) {
-                    active_assets.push_back(asset);
-                }
-            }
-        }
-
-        active_assets
+        get_tracked_assets(&env)
     }
 
     /// Get the total number of currently tracked asset symbols.
-    ///
-    /// Returns the number of unique assets that are currently being tracked by the oracle
-    /// and have valid (non-stale) price data.
     pub fn get_asset_count(env: Env) -> u32 {
-        Self::get_all_assets(env).len()
+        get_tracked_assets(&env).len()
     }
 
     /// Store a human-readable description for an asset (e.g. "Nigerian Naira").
