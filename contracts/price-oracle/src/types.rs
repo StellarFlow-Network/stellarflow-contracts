@@ -258,3 +258,19 @@ pub struct ProposedAction {
     /// Whether the action has been cancelled.
     pub cancelled: bool,
 }
+
+/// Fee distribution configuration and amounts.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FeeDistribution {
+    /// Total fees collected since last distribution.
+    pub collected_fees: i128,
+    /// Insurance Fund allocation (percentage in basis points, e.g., 5000 = 50%).
+    pub insurance_fund_bps: u32,
+    /// Admin Treasury allocation (percentage in basis points).
+    pub admin_treasury_bps: u32,
+    /// Relayer Rewards allocation (percentage in basis points).
+    pub relayer_rewards_bps: u32,
+    /// Last distribution timestamp.
+    pub last_distribution: u64,
+}
