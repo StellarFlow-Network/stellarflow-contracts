@@ -662,7 +662,7 @@ impl PriceOracle {
     /// Can only be called once.
     pub fn initialize(env: Env, admin: Address, base_currency_pairs: soroban_sdk::Vec<Symbol>) {
         if env.storage().instance().has(&DataKey::Initialized) || crate::auth::_has_admin(&env) {
-            panic_with_error!(&env, Error::AlreadyInitialized);
+            panic_with_error!(&env, Error::AlreadyExists);
         }
 
         #[allow(deprecated)]
@@ -1197,11 +1197,11 @@ impl PriceOracle {
         source.require_auth();
 
         if !get_tracked_assets(&env).contains(&asset) {
-            return Err(Error::InvalidAssetSymbol);
+            return Err(Error::InvalidArgument);
         }
 
         if !is_valid(price) {
-            return Err(Error::InvalidPrice);
+            return Err(Error::InvalidArgument);
         }
 
         // Normalize the raw price to 9 fixed-point decimals on entry.
