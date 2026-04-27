@@ -36,6 +36,8 @@ pub enum DataKey {
     CommunityCouncil,
     /// Emergency freeze state flag.
     EmergencyFrozen,
+    /// Relayer state tracking consecutive errors and penalties.
+    RelayerState(Address),
 }
 
 /// Decimal metadata for an asset pair.
@@ -204,4 +206,18 @@ pub struct AdminLogEntry {
     pub action: AdminAction,
     pub details: soroban_sdk::String,
     pub timestamp: u64,
+}
+
+/// Relayer state tracking consecutive errors and penalties.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RelayerState {
+    /// Number of consecutive missed heartbeats or errors.
+    pub consecutive_errors: u32,
+    /// Current penalty multiplier (100 = no penalty, 150 = 50% penalty, etc.).
+    pub penalty_multiplier: u32,
+    /// Timestamp of last successful submission.
+    pub last_success_timestamp: u64,
+    /// Timestamp of last error/miss.
+    pub last_error_timestamp: u64,
 }

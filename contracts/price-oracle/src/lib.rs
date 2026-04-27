@@ -192,6 +192,21 @@ pub trait StellarFlowTrait {
     ///
     /// Returns true if the contract is frozen, false otherwise.
     fn is_frozen(env: Env) -> bool;
+
+    /// Get the current penalty multiplier for a relayer.
+    ///
+    /// Returns the penalty multiplier (100 = no penalty, 150 = 50% penalty, etc.).
+    fn get_relayer_penalty_multiplier(env: Env, relayer: Address) -> u32;
+
+    /// Get the number of consecutive errors for a relayer.
+    ///
+    /// Returns the count of consecutive missed heartbeats or errors.
+    fn get_relayer_consecutive_errors(env: Env, relayer: Address) -> u32;
+
+    /// Check if a relayer is suspended due to penalties.
+    ///
+    /// Returns true if the relayer has a 100% penalty (effectively suspended).
+    fn is_relayer_suspended(env: Env, relayer: Address) -> bool;
 }
 
 #[contractclient(name = "TokenContractClient")]
@@ -1143,6 +1158,34 @@ impl PriceOracle {
         confidence_score: u32,
         ttl: u64,
     ) -> Result<(), Error> {
+        let result = Self::update_price_internal(
+            env.clone(),
+            source.clone(),
+            asset.clone(),
+            price,
+            decimals,
+            confidence_score,
+            ttl,
+        );
+        
+        // Record error if submission failed
+        if let Err(_) = result {
+            crate::auth::_record_relayer_error(&env, &source);
+        }
+        
+        result
+    }
+
+    /// Internal price update function with penalty tracking.
+    fn update_price_internal(
+        env: Env,
+        source: Address,
+        asset: Symbol,
+        price: i128,
+        decimals: u32,
+        confidence_score: u32,
+        ttl: u64,
+    ) -> Result<(), Error> {
         _require_not_destroyed(&env);
         crate::auth::_require_not_frozen(&env);
         source.require_auth();
@@ -1156,6 +1199,11 @@ impl PriceOracle {
         }
 
         if !_is_whitelisted_provider(&env, &source) {
+            return Err(Error::NotAuthorized);
+        }
+
+        // Check if relayer is suspended due to penalties
+        if crate::auth::_is_relayer_suspended(&env, &source) {
             return Err(Error::NotAuthorized);
         }
 
@@ -1261,6 +1309,9 @@ impl PriceOracle {
             confidence_score,
         };
         callbacks::notify_subscribers(&env, &payload);
+
+        // Record successful submission for penalty tracking
+        crate::auth::_record_relayer_success(&env, &source);
 
         Ok(())
     }
@@ -1649,6 +1700,27 @@ impl PriceOracle {
     /// Returns true if the contract is frozen, false otherwise.
     pub fn is_frozen(env: Env) -> bool {
         crate::auth::_is_frozen(&env)
+    }
+
+    /// Get the current penalty multiplier for a relayer.
+    ///
+    /// Returns the penalty multiplier (100 = no penalty, 150 = 50% penalty, etc.).
+    pub fn get_relayer_penalty_multiplier(env: Env, relayer: Address) -> u32 {
+        crate::auth::_get_relayer_penalty_multiplier(&env, &relayer)
+    }
+
+    /// Get the number of consecutive errors for a relayer.
+    ///
+    /// Returns the count of consecutive missed heartbeats or errors.
+    pub fn get_relayer_consecutive_errors(env: Env, relayer: Address) -> u32 {
+        crate::auth::_get_consecutive_errors(&env, &relayer)
+    }
+
+    /// Check if a relayer is suspended due to penalties.
+    ///
+    /// Returns true if the relayer has a 100% penalty (effectively suspended).
+    pub fn is_relayer_suspended(env: Env, relayer: Address) -> bool {
+        crate::auth::_is_relayer_suspended(&env, &relayer)
     }
 
     /// Get the price buffer for a specific asset.
