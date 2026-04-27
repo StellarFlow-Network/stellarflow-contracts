@@ -198,6 +198,51 @@ pub trait StellarFlowTrait {
     /// A vector of addresses of all contracts currently subscribed to price updates.
     fn get_price_update_subscribers(env: Env) -> soroban_sdk::Vec<Address>;
 
+    /// Delegate voting power for a specific asset group to a Sector Specialist.
+    ///
+    /// High-level admins can delegate their voting power for specific assets to
+    /// "Sector Specialists" (e.g., a specialist for West African currencies).
+    ///
+    /// # Arguments
+    /// * `delegator` - The admin address delegating their voting power
+    /// * `delegate` - The address of the Sector Specialist receiving voting power
+    /// * `asset_group` - The asset group/sector (e.g., "NGN", "GHS", "XOF") for which voting power is delegated
+    ///
+    /// # Returns
+    /// Returns an error if the delegator is not an admin or delegation already exists.
+    fn delegate_vote(env: Env, delegator: Address, delegate: Address, asset_group: Symbol) -> Result<(), Error>;
+
+    /// Revoke a previously delegated voting power.
+    ///
+    /// Only the original delegator can revoke their delegation.
+    ///
+    /// # Arguments
+    /// * `delegator` - The admin address revoking the delegation
+    /// * `asset_group` - The asset group for which to revoke delegation
+    ///
+    /// # Returns
+    /// Returns an error if no active delegation exists for this asset group.
+    fn revoke_delegation(env: Env, delegator: Address, asset_group: Symbol) -> Result<(), Error>;
+
+    /// Get delegation info for a specific delegator and asset group.
+    ///
+    /// # Arguments
+    /// * `delegator` - The admin address that granted delegation
+    /// * `asset_group` - The asset group to check
+    ///
+    /// # Returns
+    /// Returns the DelegateInfo if a delegation exists, None otherwise.
+    fn get_delegation(env: Env, delegator: Address, asset_group: Symbol) -> Option<crate::types::DelegateInfo>;
+
+    /// Get all active delegations for a specific delegate.
+    ///
+    /// # Arguments
+    /// * `delegate` - The Sector Specialist address to query
+    ///
+    /// # Returns
+    /// A vector of all active delegations granted to this delegate.
+    fn get_delegate_votes(env: Env, delegate: Address) -> soroban_sdk::Vec<crate::types::DelegatedVote>;
+
     /// Set the Community Council address for emergency freeze functionality.
     ///
     /// Only the admin can call this. The Council address can be used to trigger
@@ -2155,6 +2200,134 @@ impl PriceOracle {
     /// A vector of addresses of all contracts currently subscribed to price updates.
     pub fn get_price_update_subscribers(env: Env) -> soroban_sdk::Vec<Address> {
         callbacks::get_subscribers(&env)
+    }
+
+    /// Delegate voting power for a specific asset group to a Sector Specialist.
+    ///
+    /// High-level admins can delegate their voting power for specific assets to
+    /// "Sector Specialists" (e.g., a specialist for West African currencies).
+    pub fn delegate_vote(env: Env, delegator: Address, delegate: Address, asset_group: Symbol) -> Result<(), Error> {
+        // Verify the delegator is an admin
+        crate::auth::_require_authorized(&env, &delegator);
+        
+        // Cannot delegate to self
+        if delegator == delegate {
+            return Err(Error::Unauthorized);
+        }
+
+        let timestamp = env.ledger().timestamp();
+        
+        // Create delegation info
+        let delegate_info = crate::types::DelegateInfo {
+            delegator: delegator.clone(),
+            delegate: delegate.clone(),
+            asset_group: asset_group.clone(),
+            delegated_at: timestamp,
+            is_active: true,
+        };
+
+        // Store delegation info keyed by (delegator, asset_group)
+        let storage_key = crate::types::DataKey::DelegateInfo(delegator.clone());
+        env.storage().instance().set(&storage_key, &delegate_info);
+
+        // Also track the delegation in the delegate's vote list
+        let delegated_vote = crate::types::DelegatedVote {
+            delegator: delegator.clone(),
+            asset_group: asset_group.clone(),
+            delegated_at: timestamp,
+        };
+        
+        let votes_key = crate::types::DataKey::DelegatedVotes(delegate.clone());
+        let mut existing_votes: soroban_sdk::Vec<crate::types::DelegatedVote> = 
+            env.storage().instance().get(&votes_key).unwrap_or_else(|| soroban_sdk::vec![&env]);
+        
+        // Check if this delegation already exists for this asset_group
+        for existing in existing_votes.iter() {
+            if existing.delegator == delegator && existing.asset_group == asset_group {
+                // Update existing delegation
+                let mut updated = soroban_sdk::vec![&env];
+                for v in existing_votes.iter() {
+                    if v.delegator == delegator && v.asset_group == asset_group {
+                        updated.push_back(delegated_vote.clone());
+                    } else {
+                        updated.push_back(v);
+                    }
+                }
+                env.storage().instance().set(&votes_key, &updated);
+                return Ok(());
+            }
+        }
+        
+        // Add new delegation
+        existing_votes.push_back(delegated_vote);
+        env.storage().instance().set(&votes_key, &existing_votes);
+
+        // Emit event for delegation
+        env.events().publish(
+            (Symbol::new(&env, "VoteDelegated"),),
+            (delegator, delegate, asset_group),
+        );
+
+        Ok(())
+    }
+
+    /// Revoke a previously delegated voting power.
+    ///
+    /// Only the original delegator can revoke their delegation.
+    pub fn revoke_delegation(env: Env, delegator: Address, asset_group: Symbol) -> Result<(), Error> {
+        // Verify the delegator is an admin
+        crate::auth::_require_authorized(&env, &delegator);
+
+        let storage_key = crate::types::DataKey::DelegateInfo(delegator.clone());
+        let delegate_info: crate::types::DelegateInfo = env.storage()
+            .instance()
+            .get(&storage_key)
+            .ok_or(Error::Unauthorized)?;
+
+        // Verify the asset group matches
+        if delegate_info.asset_group != asset_group {
+            return Err(Error::Unauthorized);
+        }
+
+        // Mark as inactive
+        let mut updated_info = delegate_info;
+        updated_info.is_active = false;
+        env.storage().instance().set(&storage_key, &updated_info);
+
+        // Remove from delegate's vote list
+        let votes_key = crate::types::DataKey::DelegatedVotes(delegate_info.delegate);
+        if let Some(mut existing_votes) = env.storage().instance().get::<_, soroban_sdk::Vec<crate::types::DelegatedVote>>(&votes_key) {
+            let mut updated = soroban_sdk::vec![&env];
+            for v in existing_votes.iter() {
+                if !(v.delegator == delegator && v.asset_group == asset_group) {
+                    updated.push_back(v);
+                }
+            }
+            env.storage().instance().set(&votes_key, &updated);
+        }
+
+        // Emit event for revocation
+        env.events().publish(
+            (Symbol::new(&env, "DelegationRevoked"),),
+            (delegator, asset_group),
+        );
+
+        Ok(())
+    }
+
+    /// Get delegation info for a specific delegator and asset group.
+    pub fn get_delegation(env: Env, delegator: Address, asset_group: Symbol) -> Option<crate::types::DelegateInfo> {
+        let storage_key = crate::types::DataKey::DelegateInfo(delegator);
+        env.storage().instance().get(&storage_key)
+    }
+
+    /// Get all active delegations for a specific delegate.
+    pub fn get_delegate_votes(env: Env, delegate: Address) -> soroban_sdk::Vec<crate::types::DelegatedVote> {
+        let votes_key = crate::types::DataKey::DelegatedVotes(delegate);
+        env.storage()
+            .instance()
+            .get(&votes_key)
+            .unwrap_or_else(|| soroban_sdk::vec![&env])
     }
 }
 

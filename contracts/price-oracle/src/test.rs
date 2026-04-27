@@ -2432,3 +2432,160 @@ fn test_set_price_with_subscribers() {
     let price = client.get_price(&asset, &true);
     assert_eq!(price.price, 2_000_000_i128);
 }
+
+// ============================================================
+// Delegate Vote Tests
+// ============================================================
+
+#[test]
+fn test_delegate_vote_success() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let delegate = Address::generate(&env);
+    let asset_group = symbol_short!("NGN");
+
+    // Set admin
+    set_admin(&env, &contract_id, &admin);
+
+    // Delegate voting power
+    let result = client.try_delegate_vote(&admin, &delegate, &asset_group);
+    assert_eq!(result, Ok(()));
+
+    // Verify delegation was stored
+    let delegation = client.get_delegation(&admin, &asset_group);
+    assert!(delegation.is_some());
+    let del = delegation.unwrap();
+    assert_eq!(del.delegate, delegate);
+    assert_eq!(del.asset_group, asset_group);
+    assert!(del.is_active);
+}
+
+#[test]
+fn test_delegate_vote_unauthorized_non_admin() {
+    let (env, contract_id, client) = setup();
+    let non_admin = Address::generate(&env);
+    let delegate = Address::generate(&env);
+    let asset_group = symbol_short!("GHS");
+
+    // Try to delegate without being an admin - should fail
+    let result = client.try_delegate_vote(&non_admin, &delegate, &asset_group);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, Error::Unauthorized),
+        other => panic!("expected Unauthorized error, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_delegate_vote_cannot_delegate_to_self() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let asset_group = symbol_short!("KES");
+
+    // Set admin
+    set_admin(&env, &contract_id, &admin);
+
+    // Try to delegate to self - should fail
+    let result = client.try_delegate_vote(&admin, &admin, &asset_group);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, Error::Unauthorized),
+        other => panic!("expected Unauthorized error, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_revoke_delegation_success() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let delegate = Address::generate(&env);
+    let asset_group = symbol_short!("XOF");
+
+    // Set admin and delegate
+    set_admin(&env, &contract_id, &admin);
+    client.delegate_vote(&admin, &delegate, &asset_group);
+
+    // Verify delegation exists
+    let before = client.get_delegation(&admin, &asset_group);
+    assert!(before.is_some());
+
+    // Revoke delegation
+    let result = client.try_revoke_delegation(&admin, &asset_group);
+    assert_eq!(result, Ok(()));
+
+    // Verify delegation is marked inactive
+    let after = client.get_delegation(&admin, &asset_group);
+    assert!(after.is_some());
+    assert!(!after.unwrap().is_active);
+}
+
+#[test]
+fn test_revoke_delegation_unauthorized() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let other_admin = Address::generate(&env);
+    let delegate = Address::generate(&env);
+    let asset_group = symbol_short!("ZAR");
+
+    // Set both admins
+    set_admin(&env, &contract_id, &admin);
+    env.as_contract(&contract_id, || {
+        crate::auth::_add_authorized(&env, &other_admin);
+    });
+
+    // Admin delegates to delegate
+    client.delegate_vote(&admin, &delegate, &asset_group);
+
+    // Other admin tries to revoke - should fail
+    let result = client.try_revoke_delegation(&other_admin, &asset_group);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, Error::Unauthorized),
+        other => panic!("expected Unauthorized error, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_get_delegate_votes_returns_delegations() {
+    let (env, contract_id, client) = setup();
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+    let delegate = Address::generate(&env);
+
+    // Set admins
+    set_admin(&env, &contract_id, &admin1);
+    env.as_contract(&contract_id, || {
+        crate::auth::_add_authorized(&env, &admin2);
+    });
+
+    // Admin1 delegates for NGN
+    client.delegate_vote(&admin1, &delegate, &symbol_short!("NGN"));
+    
+    // Admin2 delegates for GHS
+    client.delegate_vote(&admin2, &delegate, &symbol_short!("GHS"));
+
+    // Get delegate's votes
+    let votes = client.get_delegate_votes(&delegate);
+    assert_eq!(votes.len(), 2);
+}
+
+#[test]
+fn test_delegate_vote_multiple_assets_same_delegate() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let delegate = Address::generate(&env);
+
+    // Set admin
+    set_admin(&env, &contract_id, &admin);
+
+    // Delegate for multiple asset groups
+    client.delegate_vote(&admin, &delegate, &symbol_short!("NGN"));
+    client.delegate_vote(&admin, &delegate, &symbol_short!("GHS"));
+    client.delegate_vote(&admin, &delegate, &symbol_short!("KES"));
+
+    // Verify all delegations exist
+    assert!(client.get_delegation(&admin, &symbol_short!("NGN")).is_some());
+    assert!(client.get_delegation(&admin, &symbol_short!("GHS")).is_some());
+    assert!(client.get_delegation(&admin, &symbol_short!("KES")).is_some());
+
+    // Verify delegate has all votes
+    let votes = client.get_delegate_votes(&delegate);
+    assert_eq!(votes.len(), 3);
+}
