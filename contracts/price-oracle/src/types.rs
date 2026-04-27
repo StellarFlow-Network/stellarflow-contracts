@@ -43,6 +43,8 @@ pub enum DataKey {
     ActionVotes(u64),
     /// Counter for generating unique action IDs.
     ActionIdCounter,
+    /// Trusted external oracle contracts for secondary validation.
+    ExternalOracles,
 }
 
 /// Represents an asset and its relative weight in an index basket.
@@ -245,4 +247,34 @@ pub struct ProposedAction {
     pub executed: bool,
     /// Whether the action has been cancelled.
     pub cancelled: bool,
+}
+
+/// Configuration for an external oracle used for secondary validation.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExternalOracle {
+    /// Address of the external oracle contract.
+    pub address: Address,
+    /// Name/identifier of the oracle (e.g., "Band", "Pyth").
+    pub name: Symbol,
+    /// Maximum allowed delta between internal and external prices (in basis points).
+    pub max_delta_bps: u32,
+}
+
+/// Result of comparing internal price with external oracle price.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PriceComparison {
+    /// The asset being compared.
+    pub asset: Symbol,
+    /// Internal price from this oracle.
+    pub internal_price: i128,
+    /// External price from the trusted oracle.
+    pub external_price: i128,
+    /// Absolute difference between prices.
+    pub price_delta: i128,
+    /// Percentage difference in basis points.
+    pub delta_bps: i128,
+    /// Whether the delta exceeds the configured threshold.
+    pub exceeds_threshold: bool,
 }

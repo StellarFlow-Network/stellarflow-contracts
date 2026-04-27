@@ -221,6 +221,24 @@ pub trait StellarFlowTrait {
     ///
     /// Returns true if the contract is frozen, false otherwise.
     fn is_frozen(env: Env) -> bool;
+
+    /// Add a trusted external oracle for secondary validation.
+    ///
+    /// Only admins can add external oracles. The oracle will be used for price comparison.
+    fn add_external_oracle(env: Env, admin: Address, oracle: crate::types::ExternalOracle) -> Result<(), Error>;
+
+    /// Remove a trusted external oracle.
+    ///
+    /// Only admins can remove external oracles.
+    fn remove_external_oracle(env: Env, admin: Address, oracle_name: Symbol) -> Result<(), Error>;
+
+    /// Get all configured external oracles.
+    fn get_external_oracles(env: Env) -> soroban_sdk::Vec<crate::types::ExternalOracle>;
+
+    /// Compare internal price with external oracle price.
+    ///
+    /// Returns the price comparison data including delta and whether it exceeds threshold.
+    fn compare_with_external(env: Env, asset: Symbol, oracle_name: Symbol) -> Result<crate::types::PriceComparison, Error>;
 }
 
 #[contractclient(name = "TokenContractClient")]
@@ -2155,6 +2173,128 @@ impl PriceOracle {
     /// A vector of addresses of all contracts currently subscribed to price updates.
     pub fn get_price_update_subscribers(env: Env) -> soroban_sdk::Vec<Address> {
         callbacks::get_subscribers(&env)
+    }
+
+    /// Add a trusted external oracle for secondary validation.
+    ///
+    /// Only admins can add external oracles. The oracle will be used for price comparison.
+    pub fn add_external_oracle(env: Env, admin: Address, oracle: crate::types::ExternalOracle) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        let mut oracles: soroban_sdk::Vec<crate::types::ExternalOracle> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ExternalOracles)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+
+        // Check if oracle with this name already exists
+        for existing in oracles.iter() {
+            if existing.name == oracle.name {
+                return Err(Error::AlreadyInitialized);
+            }
+        }
+
+        oracles.push_back(oracle);
+        env.storage().persistent().set(&DataKey::ExternalOracles, &oracles);
+
+        Ok(())
+    }
+
+    /// Remove a trusted external oracle.
+    ///
+    /// Only admins can remove external oracles.
+    pub fn remove_external_oracle(env: Env, admin: Address, oracle_name: Symbol) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        let mut oracles: soroban_sdk::Vec<crate::types::ExternalOracle> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ExternalOracles)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+
+        let mut found = false;
+        let mut i = 0;
+        while i < oracles.len() {
+            if oracles.get(i).unwrap().name == oracle_name {
+                found = true;
+                // Remove by swapping with the last element and popping
+                let last_idx = oracles.len() - 1;
+                if i != last_idx {
+                    oracles.set(i, oracles.get(last_idx).unwrap());
+                }
+                oracles.pop_back();
+                break;
+            }
+            i += 1;
+        }
+
+        if !found {
+            return Err(Error::AssetNotFound);
+        }
+
+        env.storage().persistent().set(&DataKey::ExternalOracles, &oracles);
+
+        Ok(())
+    }
+
+    /// Get all configured external oracles.
+    pub fn get_external_oracles(env: Env) -> soroban_sdk::Vec<crate::types::ExternalOracle> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::ExternalOracles)
+            .unwrap_or_else(|| soroban_sdk::Vec::new(&env))
+    }
+
+    /// Compare internal price with external oracle price.
+    ///
+    /// Returns the price comparison data including delta and whether it exceeds threshold.
+    pub fn compare_with_external(env: Env, asset: Symbol, oracle_name: Symbol) -> Result<crate::types::PriceComparison, Error> {
+        // Get internal price
+        let internal_price_data = Self::get_price(env.clone(), asset.clone(), true)?;
+        let internal_price = internal_price_data.price;
+
+        // Find the external oracle
+        let oracles = Self::get_external_oracles(env.clone());
+        let mut external_oracle: Option<crate::types::ExternalOracle> = None;
+        for oracle in oracles.iter() {
+            if oracle.name == oracle_name {
+                external_oracle = Some(oracle);
+                break;
+            }
+        }
+
+        let oracle = external_oracle.ok_or(Error::AssetNotFound)?;
+
+        // Query external oracle for price
+        // Assuming external oracle has a similar interface: get_price(asset) -> i128
+        // This is a cross-contract call
+        let external_price: i128 = env.invoke_contract::<i128>(
+            &oracle.address,
+            &Symbol::new(&env, "get_last_price"),
+            soroban_sdk::vec![&env, asset.clone().into_val(&env)],
+        );
+
+        // Calculate delta
+        let price_delta = (internal_price - external_price).abs();
+        let delta_bps = calculate_percentage_difference_bps(internal_price, external_price)
+            .unwrap_or(0);
+
+        let exceeds_threshold = delta_bps > oracle.max_delta_bps as i128;
+
+        Ok(crate::types::PriceComparison {
+            asset,
+            internal_price,
+            external_price,
+            price_delta,
+            delta_bps,
+            exceeds_threshold,
+        })
     }
 }
 
