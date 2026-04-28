@@ -1,5 +1,5 @@
-use soroban_sdk::{Address, BytesN, Env, Symbol};
-use crate::{TimeLockedUpgradeContract, PendingUpgrade, UPGRADE_DELAY_SECONDS};
+use soroban_sdk::{Address, BytesN, Env, Symbol, Vec, Map};
+use crate::{TimeLockedUpgradeContract, PendingUpgrade, UPGRADE_DELAY_SECONDS, AssetPrice, PriceUpdate};
 
 pub struct TimeLockedUpgradeClient<'a> {
     env: &'a Env,
@@ -73,6 +73,30 @@ impl<'a> TimeLockedUpgradeClient<'a> {
             &Symbol::short("set_value"),
             (value, setter),
         );
+    }
+
+    pub fn update_prices_batch(&self, price_updates: &Vec<PriceUpdate>, relayer: &Address) {
+        self.env.invoke_contract(
+            self.contract_id,
+            &Symbol::short("update_prices_batch"),
+            (price_updates, relayer),
+        );
+    }
+
+    pub fn get_price(&self, asset_code: &Symbol) -> Option<AssetPrice> {
+        self.env.invoke_contract(
+            self.contract_id,
+            &Symbol::short("get_price"),
+            (asset_code,),
+        )
+    }
+
+    pub fn get_all_prices(&self) -> Map<Symbol, AssetPrice> {
+        self.env.invoke_contract(
+            self.contract_id,
+            &Symbol::short("get_all_prices"),
+            (),
+        )
     }
 }
 
@@ -252,4 +276,191 @@ fn test_timelock_countdown() {
     // Timelock should be satisfied
     let remaining = client.get_upgrade_timelock_remaining().unwrap();
     assert_eq!(remaining, 0);
+}
+
+#[test]
+fn test_batch_price_update_success() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeClient::new(&env, &contract_id);
+    
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    
+    // Create price updates for 5+ assets
+    let mut price_updates = Vec::new(&env);
+    
+    // Add 5 different assets with their prices
+    price_updates.push_back(PriceUpdate {
+        asset_code: Symbol::short("BTC"),
+        price: 50000,
+    });
+    price_updates.push_back(PriceUpdate {
+        asset_code: Symbol::short("ETH"),
+        price: 3000,
+    });
+    price_updates.push_back(PriceUpdate {
+        asset_code: Symbol::short("USDC"),
+        price: 1000,
+    });
+    price_updates.push_back(PriceUpdate {
+        asset_code: Symbol::short("USDT"),
+        price: 1000,
+    });
+    price_updates.push_back(PriceUpdate {
+        asset_code: Symbol::short("XLM"),
+        price: 100,
+    });
+    
+    // Update prices in batch
+    client.update_prices_batch(&price_updates, &admin);
+    
+    // Verify all prices were updated
+    let btc_price = client.get_price(&Symbol::short("BTC"));
+    assert!(btc_price.is_some());
+    assert_eq!(btc_price.unwrap().price, 50000);
+    
+    let eth_price = client.get_price(&Symbol::short("ETH"));
+    assert!(eth_price.is_some());
+    assert_eq!(eth_price.unwrap().price, 3000);
+    
+    let all_prices = client.get_all_prices();
+    assert_eq!(all_prices.len(), 5);
+}
+
+#[test]
+fn test_batch_price_update_minimum_assets() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeClient::new(&env, &contract_id);
+    
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    
+    // Try with only 4 assets (should fail)
+    let mut price_updates = Vec::new(&env);
+    price_updates.push_back(PriceUpdate {
+        asset_code: Symbol::short("BTC"),
+        price: 50000,
+    });
+    price_updates.push_back(PriceUpdate {
+        asset_code: Symbol::short("ETH"),
+        price: 3000,
+    });
+    price_updates.push_back(PriceUpdate {
+        asset_code: Symbol::short("USDC"),
+        price: 1000,
+    });
+    price_updates.push_back(PriceUpdate {
+        asset_code: Symbol::short("USDT"),
+        price: 1000,
+    });
+    
+    // Should fail with less than 5 assets
+    let result = env.try_invoke_contract::<(), (
+        soroban_sdk::xdr::ScVal,
+        soroban_sdk::xdr::ScVal,
+    )>(
+        &contract_id,
+        &Symbol::short("update_prices_batch"),
+        (&price_updates, &admin).into_val(&env),
+    );
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_batch_price_update_unauthorized() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeClient::new(&env, &contract_id);
+    
+    let admin = Address::generate(&env);
+    let unauthorized_user = Address::generate(&env);
+    client.initialize(&admin);
+    
+    // Create price updates
+    let mut price_updates = Vec::new(&env);
+    for i in 0..5 {
+        price_updates.push_back(PriceUpdate {
+            asset_code: Symbol::short(&format!("Asset{}", i)),
+            price: 1000 + i,
+        });
+    }
+    
+    // Try to update as unauthorized user (should fail)
+    let result = env.try_invoke_contract::<(), (
+        soroban_sdk::xdr::ScVal,
+        soroban_sdk::xdr::ScVal,
+    )>(
+        &contract_id,
+        &Symbol::short("update_prices_batch"),
+        (&price_updates, &unauthorized_user).into_val(&env),
+    );
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_batch_price_update_timestamps() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeClient::new(&env, &contract_id);
+    
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    
+    // Set initial timestamp
+    let initial_time = 1000000;
+    env.ledger().set_timestamp(initial_time);
+    
+    // Create price updates
+    let mut price_updates = Vec::new(&env);
+    for i in 0..5 {
+        price_updates.push_back(PriceUpdate {
+            asset_code: Symbol::short(&format!("Asset{}", i)),
+            price: 1000 + i,
+        });
+    }
+    
+    // Update prices
+    client.update_prices_batch(&price_updates, &admin);
+    
+    // Check that timestamps are set correctly
+    let btc_price = client.get_price(&Symbol::short("Asset0"));
+    assert!(btc_price.is_some());
+    assert_eq!(btc_price.unwrap().timestamp, initial_time);
+    
+    // Advance time and update again
+    let new_time = initial_time + 3600; // 1 hour later
+    env.ledger().set_timestamp(new_time);
+    
+    // Update with new prices
+    let mut new_price_updates = Vec::new(&env);
+    new_price_updates.push_back(PriceUpdate {
+        asset_code: Symbol::short("Asset0"),
+        price: 2000,
+    });
+    new_price_updates.push_back(PriceUpdate {
+        asset_code: Symbol::short("Asset1"),
+        price: 3000,
+    });
+    new_price_updates.push_back(PriceUpdate {
+        asset_code: Symbol::short("Asset2"),
+        price: 4000,
+    });
+    new_price_updates.push_back(PriceUpdate {
+        asset_code: Symbol::short("Asset3"),
+        price: 5000,
+    });
+    new_price_updates.push_back(PriceUpdate {
+        asset_code: Symbol::short("Asset4"),
+        price: 6000,
+    });
+    
+    client.update_prices_batch(&new_price_updates, &admin);
+    
+    // Verify timestamps were updated
+    let updated_price = client.get_price(&Symbol::short("Asset0"));
+    assert!(updated_price.is_some());
+    assert_eq!(updated_price.unwrap().timestamp, new_time);
+    assert_eq!(updated_price.unwrap().price, 2000);
 }

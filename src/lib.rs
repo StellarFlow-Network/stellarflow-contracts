@@ -1,8 +1,9 @@
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Bytes, BytesN, Symbol, Vec};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Bytes, BytesN, Symbol, Vec, Map};
 
 // Contract state keys
 const DATA_KEY: Symbol = Symbol::short("DATA");
 const PENDING_UPGRADE_KEY: Symbol = Symbol::short("PENDING");
+const PRICE_DATA_KEY: Symbol = Symbol::short("PRICES");
 const UPGRADE_DELAY_SECONDS: u64 = 48 * 60 * 60; // 48 hours in seconds
 
 #[contracttype]
@@ -17,6 +18,21 @@ pub struct PendingUpgrade {
 pub struct ContractData {
     pub admin: Address,
     pub value: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssetPrice {
+    pub asset_code: Symbol,
+    pub price: u64,
+    pub timestamp: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PriceUpdate {
+    pub asset_code: Symbol,
+    pub price: u64,
 }
 
 #[contract]
@@ -159,6 +175,64 @@ impl TimeLockedUpgradeContract {
         
         data.value = value;
         env.storage().instance().set(&DATA_KEY, &data);
+    }
+
+    /// Update prices for multiple assets in a single transaction
+    /// This allows relayers to update 5+ assets efficiently, saving on submission fees
+    pub fn update_prices_batch(env: Env, price_updates: Vec<PriceUpdate>, relayer: Address) {
+        let data = Self::get_data(env.clone());
+        
+        // Only admin can update prices
+        if data.admin != relayer {
+            panic!("only admin can update prices");
+        }
+        
+        relayer.require_auth();
+        
+        // Validate that we have at least 5 assets for batch efficiency
+        if price_updates.len() < 5 {
+            panic!("batch update requires at least 5 assets for efficiency");
+        }
+        
+        // Get current price data or create new map
+        let mut price_map: Map<Symbol, AssetPrice> = env.storage()
+            .instance()
+            .get(&PRICE_DATA_KEY)
+            .unwrap_or_else(|| Map::new(&env));
+        
+        let current_time = env.ledger().timestamp();
+        
+        // Update each price in the batch
+        for price_update in price_updates.iter() {
+            let asset_price = AssetPrice {
+                asset_code: price_update.asset_code.clone(),
+                price: price_update.price,
+                timestamp: current_time,
+            };
+            
+            price_map.set(price_update.asset_code.clone(), asset_price);
+        }
+        
+        // Store the updated price map
+        env.storage().instance().set(&PRICE_DATA_KEY, &price_map);
+    }
+
+    /// Get the price for a specific asset
+    pub fn get_price(env: Env, asset_code: Symbol) -> Option<AssetPrice> {
+        let price_map: Map<Symbol, AssetPrice> = env.storage()
+            .instance()
+            .get(&PRICE_DATA_KEY)
+            .unwrap_or_else(|| Map::new(&env));
+        
+        price_map.get(asset_code)
+    }
+
+    /// Get all current prices
+    pub fn get_all_prices(env: Env) -> Map<Symbol, AssetPrice> {
+        env.storage()
+            .instance()
+            .get(&PRICE_DATA_KEY)
+            .unwrap_or_else(|| Map::new(&env))
     }
 }
 
