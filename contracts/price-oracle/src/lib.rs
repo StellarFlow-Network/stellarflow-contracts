@@ -221,7 +221,67 @@ pub trait StellarFlowTrait {
     ///
     /// Returns true if the contract is frozen, false otherwise.
     fn is_frozen(env: Env) -> bool;
-}
+
+    // ── RBAC Management Functions ───────────────────────────────────────────────
+
+    /// Grant a role to an address.
+    ///
+    /// Only Super Admin can grant roles. This function provides granular access control.
+    fn grant_role(env: Env, admin: Address, target: Address, role: u32) -> Result<(), Error>;
+
+    /// Revoke a role from an address.
+    ///
+    /// Only Super Admin can revoke roles.
+    fn revoke_role(env: Env, admin: Address, target: Address, role: u32) -> Result<(), Error>;
+
+    /// Set multiple roles for an address (replaces all existing roles).
+    ///
+    /// Only Super Admin can set multiple roles at once.
+    fn set_roles(env: Env, admin: Address, target: Address, roles_mask: u32) -> Result<(), Error>;
+    /// Check if an address has a specific role.
+    fn has_role(env: Env, address: Address, role: u32) -> bool;
+
+    /// Get the roles assigned to an address.
+    fn get_roles(env: Env, address: Address) -> u32;
+
+    /// Get the role audit log.
+    fn get_role_audit_log(env: Env) -> soroban_sdk::Vec<crate::types::RoleChangeEvent>;
+
+    /// Initialize RBAC system by granting Super Admin role to first admin.
+    ///
+    /// This should be called once during contract initialization to migrate from legacy admin system.
+    fn initialize_rbac(env: Env, admin: Address) -> Result<(), Error>;
+
+// ── Provider Management Functions (Security Manager) ───────────────────────
+
+/// Add a provider to the whitelist (Security Manager only).
+fn add_provider(env: Env, security_manager: Address, provider: Address) -> Result<(), Error>;
+
+/// Remove a provider from the whitelist (Security Manager only).
+fn remove_provider(env: Env, security_manager: Address, provider: Address) -> Result<(), Error>;
+
+/// Set provider weight (Security Manager only).
+fn set_provider_weight(env: Env, security_manager: Address, provider: Address, weight: u32) -> Result<(), Error>;
+
+/// Check if an address is a whitelisted provider.
+fn is_provider(env: Env, address: Address) -> bool;
+
+/// Get provider weight.
+fn get_provider_weight(env: Env, provider: Address) -> u32;
+
+/// Get all active relayers (whitelisted providers).
+fn get_active_relayers(env: Env) -> soroban_sdk::Vec<Address>;
+
+// ── Fee Management Functions (Fee Collector) ──────────────────────────
+
+/// Set query fee for price oracle calls (Fee Collector only).
+fn set_query_fee(env: Env, fee_collector: Address, fee_amount: i128) -> Result<(), Error>;
+
+/// Get current query fee amount.
+fn get_query_fee(env: Env) -> i128;
+
+/// Collect accumulated query fees (Fee Collector only).
+fn collect_fees(env: Env, fee_collector: Address, recipient: Address) -> Result<(), Error>;
 
 #[contractclient(name = "TokenContractClient")]
 pub trait TokenContractTrait {
@@ -280,6 +340,16 @@ pub enum Error {
     ActionAlreadyExecuted = 18,
     /// Action has been cancelled.
     ActionCancelled = 19,
+    /// RBAC system already initialized.
+    RbacAlreadyInitialized = 20,
+    /// Invalid role value provided.
+    InvalidRole = 21,
+    /// Cannot revoke last Super Admin.
+    CannotRemoveLastSuperAdmin = 22,
+    /// RBAC system not initialized.
+    RbacNotInitialized = 23,
+    /// Caller lacks required role permissions.
+    InsufficientRolePermissions = 24,
 }
 
 #[contract]
@@ -668,12 +738,12 @@ impl PriceOracle {
     /// Add a new asset to the tracked asset list.
     ///
     /// The new asset is added to the internal asset list and initialized with a zero-price placeholder
-    /// in the `VerifiedPrice` bucket.
+    /// in the `VerifiedPrice` bucket. Requires Price Manager role.
     pub fn add_asset(env: Env, admin: Address, asset: Symbol) -> Result<(), Error> {
         _require_not_destroyed(&env);
         crate::auth::_require_not_frozen(&env);
         admin.require_auth();
-        crate::auth::_require_authorized(&env, &admin);
+        crate::auth::_require_price_manager(&env, &admin);
 
         _track_asset(&env, asset.clone());
 
@@ -2218,6 +2288,254 @@ impl PriceOracle {
     /// A vector of addresses of all contracts currently subscribed to price updates.
     pub fn get_price_update_subscribers(env: Env) -> soroban_sdk::Vec<Address> {
         callbacks::get_subscribers(&env)
+    }
+
+    // ── RBAC Management Functions ───────────────────────────────────────────────────
+
+    /// Initialize RBAC system by granting Super Admin role to first admin.
+    ///
+    /// This should be called once during contract initialization to migrate from legacy admin system.
+    pub fn initialize_rbac(env: Env, admin: Address) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        admin.require_auth();
+        
+        // Check if RBAC is already initialized
+        if env.storage().instance().has(&crate::types::DataKey::RoleAuditLog) {
+            return Err(Error::RbacAlreadyInitialized);
+        }
+
+        // Verify caller is a legacy admin
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(Error::NotAuthorized);
+        }
+
+        // Grant Super Admin role to the initializing admin
+        crate::auth::_grant_role(&env, &admin, crate::types::Role::SuperAdmin, &admin);
+
+        // Initialize audit log
+        let audit_log: soroban_sdk::Vec<crate::types::RoleChangeEvent> = soroban_sdk::Vec::new(&env);
+        env.storage().instance().set(&crate::types::DataKey::RoleAuditLog, &audit_log);
+
+        Ok(())
+    }
+
+    /// Grant a role to an address.
+    ///
+    /// Only Super Admin can grant roles. This function provides granular access control.
+    pub fn grant_role(env: Env, admin: Address, target: Address, role: u32) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        admin.require_auth();
+        crate::auth::_require_super_admin(&env, &admin);
+
+        // Validate role
+        let role_enum = match role {
+            1 => crate::types::Role::SecurityManager,
+            2 => crate::types::Role::FeeCollector,
+            4 => crate::types::Role::PriceManager,
+            7 => crate::types::Role::SuperAdmin,
+            _ => return Err(Error::InvalidRole),
+        };
+
+        crate::auth::_grant_role(&env, &target, role_enum, &admin);
+        Ok(())
+    }
+
+    /// Revoke a role from an address.
+    ///
+    /// Only Super Admin can revoke roles.
+    pub fn revoke_role(env: Env, admin: Address, target: Address, role: u32) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        admin.require_auth();
+        crate::auth::_require_super_admin(&env, &admin);
+
+        // Validate role
+        let role_enum = match role {
+            1 => crate::types::Role::SecurityManager,
+            2 => crate::types::Role::FeeCollector,
+            4 => crate::types::Role::PriceManager,
+            7 => crate::types::Role::SuperAdmin,
+            _ => return Err(Error::InvalidRole),
+        };
+
+        // Check if this would remove the last Super Admin
+        if role == 7 && crate::auth::_has_role(&env, &target, crate::types::Role::SuperAdmin) {
+            // Count remaining Super Admins after revocation
+            let current_admins = crate::auth::_get_admin(&env);
+            let mut super_admin_count = 0;
+            for admin_addr in current_admins.iter() {
+                if admin_addr != target && crate::auth::_has_role(&env, &admin_addr, crate::types::Role::SuperAdmin) {
+                    super_admin_count += 1;
+                }
+            }
+            if super_admin_count == 0 {
+                return Err(Error::CannotRemoveLastSuperAdmin);
+            }
+        }
+
+        crate::auth::_revoke_role(&env, &target, role_enum, &admin);
+        Ok(())
+    }
+
+    /// Set multiple roles for an address (replaces all existing roles).
+    ///
+    /// Only Super Admin can set multiple roles at once.
+    pub fn set_roles(env: Env, admin: Address, target: Address, roles_mask: u32) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        admin.require_auth();
+        crate::auth::_require_super_admin(&env, &admin);
+
+        // Validate role mask (only allow valid role bits)
+        if roles_mask & !7 != 0 { // 7 = 0b111 (all three roles)
+            return Err(Error::InvalidRole);
+        }
+
+        // Check if this would remove the last Super Admin
+        if (roles_mask & 7) == 0 && crate::auth::_has_role(&env, &target, crate::types::Role::SuperAdmin) {
+            // Count remaining Super Admins after removal
+            let current_admins = crate::auth::_get_admin(&env);
+            let mut super_admin_count = 0;
+            for admin_addr in current_admins.iter() {
+                if admin_addr != target && crate::auth::_has_role(&env, &admin_addr, crate::types::Role::SuperAdmin) {
+                    super_admin_count += 1;
+                }
+            }
+            if super_admin_count == 0 {
+                return Err(Error::CannotRemoveLastSuperAdmin);
+            }
+        }
+
+        crate::auth::_set_roles(&env, &target, roles_mask, &admin);
+        Ok(())
+    }
+
+    /// Check if an address has a specific role.
+    pub fn has_role(env: Env, address: Address, role: u32) -> bool {
+        let role_enum = match role {
+            1 => crate::types::Role::SecurityManager,
+            2 => crate::types::Role::FeeCollector,
+            4 => crate::types::Role::PriceManager,
+            7 => crate::types::Role::SuperAdmin,
+            _ => return false,
+        };
+        crate::auth::_has_role(&env, &address, role_enum)
+    }
+
+    /// Get roles assigned to an address.
+    pub fn get_roles(env: Env, address: Address) -> u32 {
+        if let Some(assignment) = crate::auth::_get_role_assignment(&env, &address) {
+            assignment.roles
+        } else {
+            0
+        }
+    }
+
+    /// Get the role audit log.
+    pub fn get_role_audit_log(env: Env) -> soroban_sdk::Vec<crate::types::RoleChangeEvent> {
+        crate::auth::_get_role_audit_log(&env)
+    }
+
+    // ── Provider Management Functions (Security Manager) ───────────────────────
+
+    /// Add a provider to the whitelist (Security Manager only).
+    pub fn add_provider(env: Env, security_manager: Address, provider: Address) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        security_manager.require_auth();
+        crate::auth::_require_security_manager(&env, &security_manager);
+
+        crate::auth::_add_provider(&env, &provider);
+        Ok(())
+    }
+
+    /// Remove a provider from the whitelist (Security Manager only).
+    pub fn remove_provider(env: Env, security_manager: Address, provider: Address) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        security_manager.require_auth();
+        crate::auth::_require_security_manager(&env, &security_manager);
+
+        crate::auth::_remove_provider(&env, &provider);
+        Ok(())
+    }
+
+    /// Set provider weight (Security Manager only).
+    pub fn set_provider_weight(env: Env, security_manager: Address, provider: Address, weight: u32) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        security_manager.require_auth();
+        crate::auth::_require_security_manager(&env, &security_manager);
+
+        if weight > 100 {
+            return Err(Error::InvalidWeight);
+        }
+
+        crate::auth::_set_provider_weight(&env, &provider, weight);
+        Ok(())
+    }
+
+    /// Check if an address is a whitelisted provider.
+    pub fn is_provider(env: Env, address: Address) -> bool {
+        crate::auth::_is_provider(&env, &address)
+    }
+
+    /// Get provider weight.
+    pub fn get_provider_weight(env: Env, provider: Address) -> u32 {
+        crate::auth::_get_provider_weight(&env, &provider)
+    }
+
+    /// Get all active relayers (whitelisted providers).
+    pub fn get_active_relayers(env: Env) -> soroban_sdk::Vec<Address> {
+        crate::auth::_get_active_relayers(&env)
+    }
+
+    // ── Fee Management Functions (Fee Collector) ──────────────────────────
+
+    /// Set query fee for price oracle calls (Fee Collector only).
+    pub fn set_query_fee(env: Env, fee_collector: Address, fee_amount: i128) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        fee_collector.require_auth();
+        crate::auth::_require_fee_collector(&env, &fee_collector);
+
+        if fee_amount < 0 {
+            return Err(Error::InvalidPrice);
+        }
+
+        env.storage().instance().set(&DataKey::QueryFee, &fee_amount);
+        Ok(())
+    }
+
+    /// Get current query fee amount.
+    pub fn get_query_fee(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::QueryFee)
+            .unwrap_or(0)
+    }
+
+    /// Collect accumulated query fees (Fee Collector only).
+    pub fn collect_fees(env: Env, fee_collector: Address, recipient: Address) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        fee_collector.require_auth();
+        crate::auth::_require_fee_collector(&env, &fee_collector);
+
+        // Get current accumulated fees (this would be tracked separately in a real implementation)
+        let accumulated_fees = env.storage()
+            .instance()
+            .get(&DataKey::QueryFee)
+            .unwrap_or(0);
+
+        if accumulated_fees <= 0 {
+            return Err(Error::InvalidPrice); // No fees to collect
+        }
+
+        // Transfer fees to recipient (using TokenContractClient)
+        // Note: This is a simplified implementation - in production, you'd have proper fee tracking
+        recipient.require_auth();
+        
+        // Reset accumulated fees to zero
+        env.storage().instance().set(&DataKey::QueryFee, &0);
+
+        Ok(())
     }
 }
 

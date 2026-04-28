@@ -4,7 +4,12 @@ use soroban_sdk::{contracttype, Address, Symbol};
 #[allow(clippy::enum_variant_names)] // Soroban SDK generates these names
 #[contracttype]
 pub enum DataKey {
+    /// Legacy admin storage - kept for migration compatibility
     Admin,
+    /// RBAC role assignments mapping: Address -> RoleAssignment
+    RoleAssignment(Address),
+    /// Role audit log for tracking changes
+    RoleAuditLog,
     BaseCurrencyPairs,
     /// Legacy flat price map — kept for migration compatibility only.
     PriceData,
@@ -230,4 +235,53 @@ pub struct ProposedAction {
     pub executed: bool,
     /// Whether the action has been cancelled.
     pub cancelled: bool,
+}
+
+/// Role types for granular access control using bitmask.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum Role {
+    /// No permissions (0)
+    None = 0,
+    /// Security Manager - Can manage providers, pause/unpause, emergency operations (1 << 0)
+    SecurityManager = 1,
+    /// Fee Collector - Can set and collect query fees (1 << 1)
+    FeeCollector = 2,
+    /// Price Manager - Can add/remove assets, set price bounds, manage price settings (1 << 2)
+    PriceManager = 4,
+    /// Super Admin - Has all permissions (bitwise OR of all roles)
+    SuperAdmin = 7, // 1 | 2 | 4
+}
+
+/// Role assignment entry for tracking user permissions.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RoleAssignment {
+    /// The address of the user
+    pub address: Address,
+    /// The roles assigned to this user (bitmask)
+    pub roles: u32,
+    /// Timestamp when this role was assigned
+    pub assigned_at: u64,
+    /// Address that assigned this role (for audit)
+    pub assigned_by: Address,
+}
+
+/// Role change event for audit logging.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RoleChangeEvent {
+    /// The target address whose roles changed
+    pub target_address: Address,
+    /// The address that initiated the role change
+    pub changed_by: Address,
+    /// Previous roles (bitmask)
+    pub previous_roles: u32,
+    /// New roles (bitmask)
+    pub new_roles: u32,
+    /// Timestamp of the change
+    pub timestamp: u64,
+    /// Description of the change
+    pub description: soroban_sdk::String,
 }
