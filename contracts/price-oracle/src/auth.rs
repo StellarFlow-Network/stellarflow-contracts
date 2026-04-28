@@ -1,4 +1,5 @@
-use soroban_sdk::{contracttype, Address, Env, Vec};
+use soroban_sdk::{contracttype, Address, Env, Vec, Map, Symbol};
+use crate::types::{Role, RoleAssignment, RoleChangeEvent};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Storage Key
@@ -34,8 +35,214 @@ pub fn _has_admin(env: &Env) -> bool {
     env.storage().instance().has(&DataKey::Admin)
 }
 
-/// Check if a caller is in the authorized admin list.
+// ─────────────────────────────────────────────────────────────────────────────
+// Role-Based Access Control (RBAC) Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Check if an address has a specific role.
+pub fn _has_role(env: &Env, address: &Address, role: Role) -> bool {
+    if let Some(assignment) = _get_role_assignment(env, address) {
+        (assignment.roles & role as u32) != 0
+    } else {
+        false
+    }
+}
+
+/// Check if an address has any of the specified roles (bitmask OR).
+pub fn _has_any_role(env: &Env, address: &Address, roles_mask: u32) -> bool {
+    if let Some(assignment) = _get_role_assignment(env, address) {
+        (assignment.roles & roles_mask) != 0
+    } else {
+        false
+    }
+}
+
+/// Check if an address has all of the specified roles (bitmask AND).
+pub fn _has_all_roles(env: &Env, address: &Address, roles_mask: u32) -> bool {
+    if let Some(assignment) = _get_role_assignment(env, address) {
+        (assignment.roles & roles_mask) == roles_mask
+    } else {
+        false
+    }
+}
+
+/// Get the role assignment for an address.
+pub fn _get_role_assignment(env: &Env, address: &Address) -> Option<RoleAssignment> {
+    env.storage()
+        .instance()
+        .get(&crate::types::DataKey::RoleAssignment(address.clone()))
+}
+
+/// Set a role assignment for an address.
+pub fn _set_role_assignment(env: &Env, assignment: &RoleAssignment) {
+    env.storage()
+        .instance()
+        .set(&crate::types::DataKey::RoleAssignment(assignment.address.clone()), assignment);
+}
+
+/// Remove a role assignment for an address.
+pub fn _remove_role_assignment(env: &Env, address: &Address) {
+    env.storage()
+        .instance()
+        .remove(&crate::types::DataKey::RoleAssignment(address.clone()));
+}
+
+/// Grant a role to an address.
+pub fn _grant_role(env: &Env, address: &Address, role: Role, granted_by: &Address) {
+    let current_time = env.ledger().timestamp();
+    let mut assignment = _get_role_assignment(env, address).unwrap_or_else(|| RoleAssignment {
+        address: address.clone(),
+        roles: Role::None as u32,
+        assigned_at: current_time,
+        assigned_by: granted_by.clone(),
+    });
+    
+    let previous_roles = assignment.roles;
+    assignment.roles |= role as u32;
+    assignment.assigned_at = current_time;
+    assignment.assigned_by = granted_by.clone();
+    
+    _set_role_assignment(env, &assignment);
+    _log_role_change(env, address, granted_by, previous_roles, assignment.roles, 
+                     "Granted role");
+}
+
+/// Revoke a role from an address.
+pub fn _revoke_role(env: &Env, address: &Address, role: Role, revoked_by: &Address) {
+    if let Some(mut assignment) = _get_role_assignment(env, address) {
+        let previous_roles = assignment.roles;
+        assignment.roles &= !(role as u32);
+        assignment.assigned_at = env.ledger().timestamp();
+        assignment.assigned_by = revoked_by.clone();
+        
+        if assignment.roles == Role::None as u32 {
+            _remove_role_assignment(env, address);
+        } else {
+            _set_role_assignment(env, &assignment);
+        }
+        
+        _log_role_change(env, address, revoked_by, previous_roles, assignment.roles, 
+                         "Revoked role");
+    }
+}
+
+/// Set multiple roles for an address (replaces all existing roles).
+pub fn _set_roles(env: &Env, address: &Address, roles_mask: u32, set_by: &Address) {
+    let current_time = env.ledger().timestamp();
+    let previous_roles = _get_role_assignment(env, address)
+        .map(|a| a.roles)
+        .unwrap_or(Role::None as u32);
+    
+    if roles_mask == Role::None as u32 {
+        _remove_role_assignment(env, address);
+    } else {
+        let assignment = RoleAssignment {
+            address: address.clone(),
+            roles: roles_mask,
+            assigned_at: current_time,
+            assigned_by: set_by.clone(),
+        };
+        _set_role_assignment(env, &assignment);
+    }
+    
+    _log_role_change(env, address, set_by, previous_roles, roles_mask, 
+                     "Set multiple roles");
+}
+
+/// Log a role change event for audit purposes.
+fn _log_role_change(env: &Env, target: &Address, changed_by: &Address, 
+                   previous_roles: u32, new_roles: u32, description: &str) {
+    let mut audit_log: Vec<RoleChangeEvent> = env
+        .storage()
+        .instance()
+        .get(&crate::types::DataKey::RoleAuditLog)
+        .unwrap_or_else(|| Vec::new(env));
+    
+    let event = RoleChangeEvent {
+        target_address: target.clone(),
+        changed_by: changed_by.clone(),
+        previous_roles,
+        new_roles,
+        timestamp: env.ledger().timestamp(),
+        description: Symbol::new(env, description),
+    };
+    
+    audit_log.push_front(event);
+    
+    // Keep only last 100 role change events
+    if audit_log.len() > 100 {
+        audit_log.pop_back();
+    }
+    
+    env.storage().instance().set(&crate::types::DataKey::RoleAuditLog, &audit_log);
+}
+
+/// Get the role audit log.
+pub fn _get_role_audit_log(env: &Env) -> Vec<RoleChangeEvent> {
+    env.storage()
+        .instance()
+        .get(&crate::types::DataKey::RoleAuditLog)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Role-Specific Authorization Checks
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Require Security Manager role.
+pub fn _require_security_manager(env: &Env, caller: &Address) {
+    if !_has_role(env, caller, Role::SecurityManager) {
+        panic!("Unauthorized: caller is not a Security Manager");
+    }
+}
+
+/// Require Fee Collector role.
+pub fn _require_fee_collector(env: &Env, caller: &Address) {
+    if !_has_role(env, caller, Role::FeeCollector) {
+        panic!("Unauthorized: caller is not a Fee Collector");
+    }
+}
+
+/// Require Price Manager role.
+pub fn _require_price_manager(env: &Env, caller: &Address) {
+    if !_has_role(env, caller, Role::PriceManager) {
+        panic!("Unauthorized: caller is not a Price Manager");
+    }
+}
+
+/// Require Super Admin role (has all permissions).
+pub fn _require_super_admin(env: &Env, caller: &Address) {
+    if !_has_role(env, caller, Role::SuperAdmin) {
+        panic!("Unauthorized: caller is not a Super Admin");
+    }
+}
+
+/// Require any of the specified roles.
+pub fn _require_any_role(env: &Env, caller: &Address, roles_mask: u32, error_msg: &str) {
+    if !_has_any_role(env, caller, roles_mask) {
+        panic!("Unauthorized: insufficient permissions");
+    }
+}
+
+/// Require all of the specified roles.
+pub fn _require_all_roles(env: &Env, caller: &Address, roles_mask: u32, error_msg: &str) {
+    if !_has_all_roles(env, caller, roles_mask) {
+        panic!("Unauthorized: insufficient permissions");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Legacy Admin Functions (for backward compatibility)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Check if a caller is in the authorized admin list (legacy).
 pub fn _is_authorized(env: &Env, caller: &Address) -> bool {
+    // First check new RBAC system
+    if _has_any_role(env, caller, Role::SuperAdmin as u32) {
+        return true;
+    }
+    
+    // Fallback to legacy admin system for migration
     env.storage()
         .instance()
         .get::<DataKey, Vec<Address>>(&DataKey::Admin)
@@ -43,6 +250,7 @@ pub fn _is_authorized(env: &Env, caller: &Address) -> bool {
         .unwrap_or(false)
 }
 
+/// Require authorized caller (legacy admin or new RBAC).
 pub fn _require_authorized(env: &Env, caller: &Address) {
     if !_is_authorized(env, caller) {
         panic!("Unauthorised: caller is not in the authorized admin list");
@@ -628,6 +836,232 @@ mod auth_tests {
             _renounce_ownership(&env);
 
             assert!(!_is_authorized(&env, &admin));
+        });
+    }
+
+    // ── RBAC Tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn test_grant_role_adds_security_manager() {
+        let (env, contract_id, super_admin) = setup();
+        let target = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+        env.as_contract(&contract_id, || {
+            // Setup super admin
+            crate::auth::_grant_role(&env, &super_admin, crate::types::Role::SuperAdmin, &super_admin);
+
+            // Grant security manager role
+            crate::auth::_grant_role(&env, &target, crate::types::Role::SecurityManager, &super_admin);
+
+            assert!(_has_role(&env, &target, crate::types::Role::SecurityManager));
+            assert!(!_has_role(&env, &target, crate::types::Role::FeeCollector));
+            assert!(!_has_role(&env, &target, crate::types::Role::PriceManager));
+        });
+    }
+
+    #[test]
+    fn test_grant_multiple_roles() {
+        let (env, contract_id, super_admin) = setup();
+        let target = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+        env.as_contract(&contract_id, || {
+            // Setup super admin
+            crate::auth::_grant_role(&env, &super_admin, crate::types::Role::SuperAdmin, &super_admin);
+
+            // Grant multiple roles using set_roles
+            crate::auth::_set_roles(&env, &target, 7, &super_admin); // All roles
+
+            assert!(_has_role(&env, &target, crate::types::Role::SecurityManager));
+            assert!(_has_role(&env, &target, crate::types::Role::FeeCollector));
+            assert!(_has_role(&env, &target, crate::types::Role::PriceManager));
+            assert!(_has_role(&env, &target, crate::types::Role::SuperAdmin));
+        });
+    }
+
+    #[test]
+    fn test_revoke_role_removes_permission() {
+        let (env, contract_id, super_admin) = setup();
+        let target = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+        env.as_contract(&contract_id, || {
+            // Setup super admin and grant security manager
+            crate::auth::_grant_role(&env, &super_admin, crate::types::Role::SuperAdmin, &super_admin);
+            crate::auth::_grant_role(&env, &target, crate::types::Role::SecurityManager, &super_admin);
+
+            assert!(_has_role(&env, &target, crate::types::Role::SecurityManager));
+
+            // Revoke security manager role
+            crate::auth::_revoke_role(&env, &target, crate::types::Role::SecurityManager, &super_admin);
+
+            assert!(!_has_role(&env, &target, crate::types::Role::SecurityManager));
+        });
+    }
+
+    #[test]
+    fn test_has_any_role() {
+        let (env, contract_id, super_admin) = setup();
+        let target = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+        env.as_contract(&contract_id, || {
+            // Setup super admin and grant security manager + fee collector
+            crate::auth::_grant_role(&env, &super_admin, crate::types::Role::SuperAdmin, &super_admin);
+            crate::auth::_grant_role(&env, &target, crate::types::Role::SecurityManager, &super_admin);
+            crate::auth::_grant_role(&env, &target, crate::types::Role::FeeCollector, &super_admin);
+
+            // Test has_any_role with security manager mask (1)
+            assert!(_has_any_role(&env, &target, 1));
+            // Test has_any_role with fee collector mask (2)
+            assert!(_has_any_role(&env, &target, 2));
+            // Test has_any_role with combined mask (3)
+            assert!(_has_any_role(&env, &target, 3));
+            // Test has_any_role with non-matching mask (4)
+            assert!(!_has_any_role(&env, &target, 4));
+        });
+    }
+
+    #[test]
+    fn test_has_all_roles() {
+        let (env, contract_id, super_admin) = setup();
+        let target = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+        env.as_contract(&contract_id, || {
+            // Setup super admin and grant security manager + fee collector
+            crate::auth::_grant_role(&env, &super_admin, crate::types::Role::SuperAdmin, &super_admin);
+            crate::auth::_grant_role(&env, &target, crate::types::Role::SecurityManager, &super_admin);
+            crate::auth::_grant_role(&env, &target, crate::types::Role::FeeCollector, &super_admin);
+
+            // Test has_all_roles with security manager + fee collector mask (3)
+            assert!(_has_all_roles(&env, &target, 3));
+            // Test has_all_roles with security manager only mask (1)
+            assert!(_has_all_roles(&env, &target, 1));
+            // Test has_all_roles with non-matching mask (4)
+            assert!(!_has_all_roles(&env, &target, 4));
+        });
+    }
+
+    #[test]
+    fn test_role_audit_log() {
+        let (env, contract_id, super_admin) = setup();
+        let target = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+        env.as_contract(&contract_id, || {
+            // Setup super admin
+            crate::auth::_grant_role(&env, &super_admin, crate::types::Role::SuperAdmin, &super_admin);
+
+            // Grant a role and check audit log
+            crate::auth::_grant_role(&env, &target, crate::types::Role::SecurityManager, &super_admin);
+            
+            let audit_log = _get_role_audit_log(&env);
+            assert_eq!(audit_log.len(), 1);
+            
+            let event = &audit_log.get(0).unwrap();
+            assert_eq!(event.target_address, target);
+            assert_eq!(event.changed_by, super_admin);
+            assert_eq!(event.new_roles, 1); // SecurityManager role
+        });
+    }
+
+    #[test]
+    fn test_require_security_manager_passes() {
+        let (env, contract_id, super_admin) = setup();
+        let security_manager = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+        env.as_contract(&contract_id, || {
+            // Setup super admin and grant security manager
+            crate::auth::_grant_role(&env, &super_admin, crate::types::Role::SuperAdmin, &super_admin);
+            crate::auth::_grant_role(&env, &security_manager, crate::types::Role::SecurityManager, &super_admin);
+
+            // Should not panic
+            crate::auth::_require_security_manager(&env, &security_manager);
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Unauthorized: caller is not a Security Manager")]
+    fn test_require_security_manager_panics_for_unauthorized() {
+        let (env, contract_id, super_admin) = setup();
+        let unauthorized = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+        env.as_contract(&contract_id, || {
+            // Setup super admin but don't grant security manager
+            crate::auth::_grant_role(&env, &super_admin, crate::types::Role::SuperAdmin, &super_admin);
+
+            // Should panic
+            crate::auth::_require_security_manager(&env, &unauthorized);
+        });
+    }
+
+    #[test]
+    fn test_require_fee_collector_passes() {
+        let (env, contract_id, super_admin) = setup();
+        let fee_collector = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+        env.as_contract(&contract_id, || {
+            // Setup super admin and grant fee collector
+            crate::auth::_grant_role(&env, &super_admin, crate::types::Role::SuperAdmin, &super_admin);
+            crate::auth::_grant_role(&env, &fee_collector, crate::types::Role::FeeCollector, &super_admin);
+
+            // Should not panic
+            crate::auth::_require_fee_collector(&env, &fee_collector);
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Unauthorized: caller is not a Fee Collector")]
+    fn test_require_fee_collector_panics_for_unauthorized() {
+        let (env, contract_id, super_admin) = setup();
+        let unauthorized = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+        env.as_contract(&contract_id, || {
+            // Setup super admin but don't grant fee collector
+            crate::auth::_grant_role(&env, &super_admin, crate::types::Role::SuperAdmin, &super_admin);
+
+            // Should panic
+            crate::auth::_require_fee_collector(&env, &unauthorized);
+        });
+    }
+
+    #[test]
+    fn test_require_price_manager_passes() {
+        let (env, contract_id, super_admin) = setup();
+        let price_manager = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+        env.as_contract(&contract_id, || {
+            // Setup super admin and grant price manager
+            crate::auth::_grant_role(&env, &super_admin, crate::types::Role::SuperAdmin, &super_admin);
+            crate::auth::_grant_role(&env, &price_manager, crate::types::Role::PriceManager, &super_admin);
+
+            // Should not panic
+            crate::auth::_require_price_manager(&env, &price_manager);
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Unauthorized: caller is not a Price Manager")]
+    fn test_require_price_manager_panics_for_unauthorized() {
+        let (env, contract_id, super_admin) = setup();
+        let unauthorized = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+        env.as_contract(&contract_id, || {
+            // Setup super admin but don't grant price manager
+            crate::auth::_grant_role(&env, &super_admin, crate::types::Role::SuperAdmin, &super_admin);
+
+            // Should panic
+            crate::auth::_require_price_manager(&env, &unauthorized);
+        });
+    }
+
+    #[test]
+    fn test_require_super_admin_passes() {
+        let (env, contract_id, super_admin) = setup();
+        env.as_contract(&contract_id, || {
+            // Setup super admin
+            crate::auth::_grant_role(&env, &super_admin, crate::types::Role::SuperAdmin, &super_admin);
+
+            // Should not panic
+            crate::auth::_require_super_admin(&env, &super_admin);
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "Unauthorized: caller is not a Super Admin")]
+    fn test_require_super_admin_panics_for_unauthorized() {
+        let (env, contract_id, super_admin) = setup();
+        let unauthorized = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
+        env.as_contract(&contract_id, || {
+            // Don't grant super admin
+            crate::auth::_grant_role(&env, &super_admin, crate::types::Role::SecurityManager, &super_admin);
+
+            // Should panic
+            crate::auth::_require_super_admin(&env, &unauthorized);
         });
     }
 }
