@@ -221,6 +221,19 @@ pub trait StellarFlowTrait {
     ///
     /// Returns true if the contract is frozen, false otherwise.
     fn is_frozen(env: Env) -> bool;
+
+    /// Prune inactive relayers from the whitelist.
+    ///
+    /// This is a "Pull" mechanism (not automated) that allows admins to remove
+    /// providers that have not submitted a price update within `max_inactive_ledgers`.
+    ///
+    /// # Arguments
+    /// * `admin` - The admin address authorizing this action
+    /// * `max_inactive_ledgers` - The maximum number of ledgers a provider can be inactive
+    ///
+    /// # Returns
+    /// The number of providers that were pruned.
+    fn prune_inactive_relayers(env: Env, admin: Address, max_inactive_ledgers: u32) -> u32;
 }
 
 #[contractclient(name = "TokenContractClient")]
@@ -1311,6 +1324,10 @@ impl PriceOracle {
             }
         }
 
+        // Track this provider's activity
+        let current_ledger = env.ledger().sequence();
+        crate::auth::_set_provider_last_ledger(&env, &source, current_ledger);
+
         // Add the normalized price entry to the buffer
         let entry = PriceBufferEntry {
             price: normalized,
@@ -2218,6 +2235,25 @@ impl PriceOracle {
     /// A vector of addresses of all contracts currently subscribed to price updates.
     pub fn get_price_update_subscribers(env: Env) -> soroban_sdk::Vec<Address> {
         callbacks::get_subscribers(&env)
+    }
+
+    /// Prune inactive relayers from the whitelist.
+    ///
+    /// This is a "Pull" mechanism (not automated) that allows admins to remove
+    /// providers that have not submitted a price update within `max_inactive_ledgers`.
+    ///
+    /// # Arguments
+    /// * `admin` - The admin address authorizing this action
+    /// * `max_inactive_ledgers` - The maximum number of ledgers a provider can be inactive
+    ///
+    /// # Returns
+    /// The number of providers that were pruned.
+    pub fn prune_inactive_relayers(env: Env, admin: Address, max_inactive_ledgers: u32) -> u32 {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        
+        crate::auth::_prune_inactive_relayers(&env, &admin, max_inactive_ledgers)
     }
 }
 
