@@ -129,6 +129,80 @@ The Oracle returns the following errors:
 - `Error::Unauthorized` - Caller is not authorized (for admin functions)
 - `Error::InvalidAssetSymbol` - Asset symbol is not in the approved list
 
+## Oracle Snapshot Events (For Indexers/Subgraphs)
+
+The StellarFlow Oracle emits special `OracleSnapshot` events every 100 ledgers to help subgraphs and indexers track price history efficiently.
+
+### What is an OracleSnapshot Event?
+
+Every 100 ledgers (approximately every 8-10 minutes on Stellar), the oracle emits a checkpointed snapshot containing:
+- **Ledger Sequence**: The ledger number where the snapshot was taken
+- **Timestamp**: When the snapshot was emitted
+- **All Current Prices**: A complete list of current verified prices for all tracked assets
+
+### Why Use Snapshots?
+
+**Checkpointed State**: Snapshots provide periodic "known-good" states that indexers can use as synchronization points instead of replaying every single price update.
+
+**Efficient History Tracking**: Off-chain databases can use snapshots to verify their state is consistent with the oracle, filling in any gaps that may have occurred.
+
+**Reduced Data Load**: Rather than processing every price update, indexers can sync against snapshots for faster, more reliable state management.
+
+### Listening to OracleSnapshot Events
+
+You can listen to these events using any Stellar event indexer:
+
+```rust
+// Example: listening for OracleSnapshot events
+// In your indexer code:
+
+#[soroban_sdk::contractevent]
+pub struct OracleSnapshotEvent {
+    pub ledger_sequence: u32,
+    pub timestamp: u64,
+    pub prices: Vec<PriceEntry>,
+}
+
+// Process the snapshot event
+fn handle_snapshot(event: OracleSnapshotEvent) {
+    println!("Snapshot at ledger {}: {} prices", 
+             event.ledger_sequence, 
+             event.prices.len());
+    
+    // Store or validate all current prices against your database
+    for price_entry in event.prices {
+        validate_and_store_price(&price_entry);
+    }
+}
+```
+
+### Snapshot Frequency
+
+- **Every 100 ledgers**: Snapshots are emitted at ledger boundaries divisible by 100
+- **Ledger 100, 200, 300**, etc.
+- **On Stellar**: Approximately every 8-10 minutes (depends on network speed)
+
+### Example: Using Snapshots for Sync Points
+
+```sql
+-- In your off-chain database
+CREATE TABLE price_snapshots (
+    ledger_sequence INTEGER PRIMARY KEY,
+    timestamp BIGINT,
+    data JSONB  -- All prices at this snapshot
+);
+
+-- When receiving a snapshot event:
+INSERT INTO price_snapshots (ledger_sequence, timestamp, data)
+VALUES ($1, $2, $3);
+
+-- To verify current state:
+SELECT * FROM price_snapshots 
+WHERE ledger_sequence <= current_ledger 
+ORDER BY ledger_sequence DESC 
+LIMIT 1;  -- Get most recent snapshot
+```
+
 ## Supported Assets
 
 The Oracle currently supports the following African fiat currencies:

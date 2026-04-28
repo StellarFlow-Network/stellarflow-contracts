@@ -4,7 +4,7 @@ use soroban_sdk::{
     contract, contractclient, contracterror, contractimpl, panic_with_error, Address, Env, Symbol, String, token,
 };
 
-use crate::types::{DataKey, PriceBounds, PriceBuffer, PriceBufferEntry, PriceData, PriceDataWithStatus, PriceEntryWithStatus, RecentEvent, AdminAction, AdminLogEntry, PriceUpdatePayload, ProposedAction};
+use crate::types::{DataKey, PriceBounds, PriceBuffer, PriceBufferEntry, PriceData, PriceDataWithStatus, PriceEntry, PriceEntryWithStatus, RecentEvent, AdminAction, AdminLogEntry, PriceUpdatePayload, ProposedAction};
 
 const ADMIN_TIMELOCK: u64 = 86_400;
 const MAX_CLEAR_ASSETS: u32 = 20;
@@ -322,6 +322,16 @@ pub struct RescueTokensEvent {
     pub amount: i128,
 }
 
+#[soroban_sdk::contractevent]
+pub struct OracleSnapshotEvent {
+    /// The ledger sequence number at which this snapshot was taken.
+    pub ledger_sequence: u32,
+    /// Timestamp when the snapshot was emitted.
+    pub timestamp: u64,
+    /// All currently tracked asset prices at this checkpoint.
+    pub prices: soroban_sdk::Vec<PriceEntry>,
+}
+
 /// Returns the signed percentage change in basis points.
 ///
 /// Example: 1_000_000 -> 1_200_000 returns 2_000 (20.00%).
@@ -525,6 +535,59 @@ fn log_event(env: &Env, event_type: Symbol, asset: Symbol, price: i128) {
     }
 
     env.storage().instance().set(&DataKey::RecentEvents, &events);
+}
+
+/// Emit an OracleSnapshot event every 100 ledgers.
+/// 
+/// This provides a checkpointed state for off-chain databases (subgraphs/indexers)
+/// to sync against, containing all currently tracked asset prices.
+fn emit_snapshot_if_needed(env: &Env) {
+    let current_ledger = env.ledger().sequence();
+    
+    // Only emit snapshots at 100-ledger boundaries
+    if current_ledger % 100 != 0 {
+        return;
+    }
+    
+    // Check if we've already emitted a snapshot at this ledger
+    let last_snapshot: Option<u32> = env
+        .storage()
+        .instance()
+        .get(&DataKey::LastSnapshotLedger);
+    
+    if let Some(last) = last_snapshot {
+        if last >= current_ledger {
+            return;
+        }
+    }
+    
+    // Collect all current asset prices
+    let assets = get_tracked_assets(env);
+    let storage = env.storage().persistent();
+    let mut prices = soroban_sdk::Vec::new(env);
+    
+    for asset in assets.iter() {
+        if let Some(price_data) = storage.get::<DataKey, PriceData>(&DataKey::VerifiedPrice(asset.clone())) {
+            let entry = PriceEntry {
+                price: price_data.price,
+                timestamp: price_data.timestamp,
+                decimals: price_data.decimals,
+            };
+            prices.push_back(entry);
+        }
+    }
+    
+    // Emit the snapshot event
+    env.events().publish_event(&OracleSnapshotEvent {
+        ledger_sequence: current_ledger,
+        timestamp: env.ledger().timestamp(),
+        prices,
+    });
+    
+    // Update the last snapshot ledger
+    env.storage()
+        .instance()
+        .set(&DataKey::LastSnapshotLedger, &current_ledger);
 }
 
 fn _log_admin_action(env: &Env, admin: &Address, action: AdminAction, details: Option<String>) {
@@ -1044,6 +1107,10 @@ impl PriceOracle {
                     update_twap(&env, asset.clone(), val, now);
                     env.events().publish_event(&PriceUpdatedEvent { asset: asset.clone(), price: val });
                     log_event(&env, Symbol::new(&env, "price_updated"), asset, val);
+                    
+                    // Emit snapshot if we're at a 100-ledger boundary
+                    emit_snapshot_if_needed(&env);
+                    
                     return Ok(());
                 }
             }
@@ -1082,6 +1149,9 @@ impl PriceOracle {
                 confidence_score: 100,
             };
             callbacks::notify_subscribers(&env, &payload);
+            
+            // Emit snapshot if we're at a 100-ledger boundary
+            emit_snapshot_if_needed(&env);
             
             Ok(())
         })();
@@ -1366,6 +1436,9 @@ impl PriceOracle {
             confidence_score,
         };
         callbacks::notify_subscribers(&env, &payload);
+
+        // Emit snapshot if we're at a 100-ledger boundary
+        emit_snapshot_if_needed(&env);
 
         Ok(())
     }

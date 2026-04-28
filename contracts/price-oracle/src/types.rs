@@ -37,6 +37,8 @@ pub enum DataKey {
     PriceUpdateSubscribers,
     /// Tracked asset flag for O(1) existence check.
     TrackedAsset(Symbol),
+    /// Last ledger sequence where a snapshot was emitted (for checkpoint events).
+    LastSnapshotLedger,
 }
 
 /// Decimal metadata for an asset pair.
@@ -230,4 +232,19 @@ pub struct ProposedAction {
     pub executed: bool,
     /// Whether the action has been cancelled.
     pub cancelled: bool,
+}
+
+/// A single asset price snapshot entry.
+///
+/// Used in OracleSnapshot events to include all current asset prices
+/// at a checkpoint ledger boundary (every 100 ledgers).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SnapshotPrice {
+    /// The asset symbol (e.g., NGN, KES, GHS).
+    pub asset: Symbol,
+    /// The current price value (normalized to 9 decimal places).
+    pub price: i128,
+    /// Timestamp when this price was last updated.
+    pub timestamp: u64,
 }
