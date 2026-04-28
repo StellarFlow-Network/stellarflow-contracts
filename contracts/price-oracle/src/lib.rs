@@ -289,6 +289,8 @@ pub struct PriceOracle;
 pub struct PriceUpdatedEvent {
     pub asset: Symbol,
     pub price: i128,
+    pub timestamp: u64,
+    pub relayer: Address,
 }
 
 #[soroban_sdk::contractevent]
@@ -1042,7 +1044,15 @@ impl PriceOracle {
                     current.timestamp = now;
                     storage.set(&key, &current);
                     update_twap(&env, asset.clone(), val, now);
-                    env.events().publish_event(&PriceUpdatedEvent { asset: asset.clone(), price: val });
+                    env.events().publish(
+                        (Symbol::new(&env, "price_updated"), asset.clone()),
+                        PriceUpdatedEvent {
+                            asset: asset.clone(),
+                            price: val,
+                            timestamp: now,
+                            relayer: env.current_contract_address(),
+                        },
+                    );
                     log_event(&env, Symbol::new(&env, "price_updated"), asset, val);
                     return Ok(());
                 }
@@ -1066,10 +1076,15 @@ impl PriceOracle {
                 log_event(&env, Symbol::new(&env, "asset_added"), asset.clone(), normalized);
             } else {
                 log_event(&env, Symbol::new(&env, "price_updated"), asset.clone(), normalized);
-                env.events().publish_event(&PriceUpdatedEvent {
-                    asset: asset.clone(),
-                    price: normalized,
-                });
+                env.events().publish(
+                    (Symbol::new(&env, "price_updated"), asset.clone()),
+                    PriceUpdatedEvent {
+                        asset: asset.clone(),
+                        price: normalized,
+                        timestamp: now,
+                        relayer: env.current_contract_address(),
+                    },
+                );
             }
 
             // Notify subscribers of the price update
@@ -1353,7 +1368,16 @@ impl PriceOracle {
         storage.set(&key, &price_data);
         update_twap(&env, asset.clone(), median_price, env.ledger().timestamp());
 
-        env.events().publish_event(&PriceUpdatedEvent { asset: asset.clone(), price: normalized });
+        let now = env.ledger().timestamp();
+        env.events().publish(
+            (Symbol::new(&env, "price_updated"), asset.clone()),
+            PriceUpdatedEvent {
+                asset: asset.clone(),
+                price: median_price,
+                timestamp: now,
+                relayer: source.clone(),
+            },
+        );
         log_event(&env, Symbol::new(&env, "price_updated"), asset.clone(), normalized);
 
         // Notify all subscribed contracts of the price update
