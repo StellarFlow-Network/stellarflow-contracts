@@ -200,6 +200,10 @@ pub enum AdminAction {
     VoteForAction,
     /// Multi-sig: Cancel a proposed action
     CancelAction,
+    /// Admin enabled the safety-checks grace-period bypass
+    EnableBypassSafetyChecks,
+    /// Admin disabled the safety-checks grace-period bypass
+    DisableBypassSafetyChecks,
 }
 
 /// Admin log entry for tracking admin actions.

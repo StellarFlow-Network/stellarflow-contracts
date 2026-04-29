@@ -2464,3 +2464,137 @@ fn test_set_price_with_subscribers() {
     let price = client.get_price(&asset, &true);
     assert_eq!(price.price, 2_000_000_i128);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// bypass_safety_checks tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_enable_bypass_returns_expiry_one_hour_ahead() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    set_admin(&env, &contract_id, &admin);
+
+    env.ledger().set_timestamp(1_000_000);
+    let expiry = client.enable_bypass_safety_checks(&admin);
+
+    assert_eq!(expiry, 1_000_000 + 3_600);
+}
+
+#[test]
+fn test_get_bypass_expiry_returns_stored_value() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    set_admin(&env, &contract_id, &admin);
+
+    assert!(client.get_bypass_safety_checks_expiry().is_none());
+
+    env.ledger().set_timestamp(2_000_000);
+    client.enable_bypass_safety_checks(&admin);
+
+    assert_eq!(client.get_bypass_safety_checks_expiry(), Some(2_000_000 + 3_600));
+}
+
+#[test]
+fn test_disable_bypass_clears_expiry() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    set_admin(&env, &contract_id, &admin);
+
+    env.ledger().set_timestamp(1_000_000);
+    client.enable_bypass_safety_checks(&admin);
+    assert!(client.get_bypass_safety_checks_expiry().is_some());
+
+    client.disable_bypass_safety_checks(&admin);
+    assert!(client.get_bypass_safety_checks_expiry().is_none());
+}
+
+#[test]
+fn test_bypass_allows_flash_crash_price() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let asset = symbol_short!("NGN");
+
+    set_admin(&env, &contract_id, &admin);
+    add_provider(&env, &contract_id, &provider);
+    client.add_asset(&admin, &asset);
+
+    // Seed an initial price, then set a tight deviation limit.
+    client.set_price(&asset, &1_000_i128, &2u32, &3_600u64);
+    client.set_max_deviation_percentage(&admin, &100_i128); // 1%
+
+    // Without bypass, a 20% jump should be rejected.
+    let rejected = client.try_update_price(&provider, &asset, &1_200_i128, &2u32, &100u32, &3_600u64);
+    match rejected {
+        Err(Ok(err)) => assert_eq!(err, Error::FlashCrashDetected),
+        other => panic!("expected FlashCrashDetected, got {:?}", other),
+    }
+
+    // Enable bypass and retry — should succeed.
+    env.ledger().set_timestamp(1_000_000);
+    client.enable_bypass_safety_checks(&admin);
+    assert!(client.try_update_price(&provider, &asset, &1_200_i128, &2u32, &100u32, &3_600u64).is_ok());
+}
+
+#[test]
+fn test_bypass_allows_price_outside_bounds() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let asset = symbol_short!("NGN");
+
+    set_admin(&env, &contract_id, &admin);
+    add_provider(&env, &contract_id, &provider);
+    client.add_asset(&admin, &asset);
+    client.set_price_bounds(&admin, &asset, &500_i128, &1_500_i128);
+
+    // Seed a price within bounds so deviation check passes.
+    client.set_price(&asset, &1_000_i128, &2u32, &3_600u64);
+
+    // Enable bypass and submit a price above max_price.
+    env.ledger().set_timestamp(1_000_000);
+    client.enable_bypass_safety_checks(&admin);
+    assert!(client.try_update_price(&provider, &asset, &2_000_i128, &2u32, &100u32, &3_600u64).is_ok());
+}
+
+#[test]
+fn test_bypass_expires_and_circuit_breaker_resumes() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let asset = symbol_short!("NGN");
+
+    set_admin(&env, &contract_id, &admin);
+    add_provider(&env, &contract_id, &provider);
+    client.add_asset(&admin, &asset);
+    client.set_price(&asset, &1_000_i128, &2u32, &3_600u64);
+    client.set_max_deviation_percentage(&admin, &100_i128); // 1%
+
+    // Enable bypass at t=1000.
+    env.ledger().set_timestamp(1_000);
+    client.enable_bypass_safety_checks(&admin);
+
+    // Advance clock past the 1-hour expiry.
+    env.ledger().set_timestamp(1_000 + 3_601);
+
+    // Circuit breaker should be active again.
+    let result = client.try_update_price(&provider, &asset, &1_200_i128, &2u32, &100u32, &3_600u64);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, Error::FlashCrashDetected),
+        other => panic!("expected FlashCrashDetected after bypass expiry, got {:?}", other),
+    }
+}
+
+#[test]
+#[should_panic]
+fn test_enable_bypass_requires_admin() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    set_admin(&env, &contract_id, &admin);
+
+    env.ledger().set_timestamp(1_000_000);
+    // non_admin is not in the admin list — should panic.
+    client.enable_bypass_safety_checks(&non_admin);
+}

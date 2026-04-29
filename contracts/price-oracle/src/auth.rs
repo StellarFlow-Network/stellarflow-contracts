@@ -13,6 +13,14 @@ pub enum DataKey {
     ActiveRelayers,
     CommunityCouncil,
     EmergencyFrozen,
+    /// Expiry timestamp (seconds) until which safety checks are bypassed.
+    BypassSafetyChecks,
+    /// Auto-incrementing counter for multi-sig action proposals.
+    ActionIdCounter,
+    /// Stores a proposed multi-sig action by its ID.
+    ProposedAction(u64),
+    /// Stores the list of voters for a proposed multi-sig action.
+    ActionVotes(u64),
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -227,6 +235,32 @@ pub fn _require_not_frozen(env: &Env) {
     if _is_frozen(env) {
         panic!("Contract is in emergency freeze state");
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Bypass Safety Checks Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Store the expiry timestamp for the safety-checks bypass.
+pub fn _set_bypass_safety_checks(env: &Env, expiry: u64) {
+    env.storage().instance().set(&DataKey::BypassSafetyChecks, &expiry);
+}
+
+/// Remove the safety-checks bypass (disables it immediately).
+pub fn _remove_bypass_safety_checks(env: &Env) {
+    env.storage().instance().remove(&DataKey::BypassSafetyChecks);
+}
+
+/// Return the expiry timestamp of the safety-checks bypass, or None if not set.
+pub fn _get_bypass_expiry(env: &Env) -> Option<u64> {
+    env.storage().instance().get(&DataKey::BypassSafetyChecks)
+}
+
+/// Return true if a bypass is set and has not yet expired.
+pub fn _is_bypass_active(env: &Env) -> bool {
+    _get_bypass_expiry(env)
+        .map(|expiry| env.ledger().timestamp() < expiry)
+        .unwrap_or(false)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
