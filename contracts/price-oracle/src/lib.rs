@@ -221,6 +221,20 @@ pub trait StellarFlowTrait {
     ///
     /// Returns true if the contract is frozen, false otherwise.
     fn is_frozen(env: Env) -> bool;
+
+    /// Enable a 1-hour grace period during which the circuit-breaker safety
+    /// checks (flash-crash, price floor, and price bounds) are bypassed.
+    ///
+    /// Only an authorized admin may call this. Returns the absolute expiry
+    /// timestamp (seconds) at which the bypass will automatically lapse.
+    fn enable_bypass_safety_checks(env: Env, admin: Address) -> Result<u64, Error>;
+
+    /// Immediately revoke the safety-checks bypass before it expires naturally.
+    fn disable_bypass_safety_checks(env: Env, admin: Address) -> Result<(), Error>;
+
+    /// Return the expiry timestamp of the safety-checks bypass, or `None` if
+    /// no bypass is currently set (regardless of whether it has expired).
+    fn get_bypass_safety_checks_expiry(env: Env) -> Option<u64>;
 }
 
 #[contractclient(name = "TokenContractClient")]
@@ -297,6 +311,17 @@ pub struct PriceAnomalyEvent {
     pub previous_price: i128,
     pub attempted_price: i128,
     pub delta: u128,
+}
+
+#[soroban_sdk::contractevent]
+pub struct BypassEnabledEvent {
+    pub admin: Address,
+    pub expiry: u64,
+}
+
+#[soroban_sdk::contractevent]
+pub struct BypassDisabledEvent {
+    pub admin: Address,
 }
 
 #[soroban_sdk::contractevent]
@@ -1276,8 +1301,10 @@ impl PriceOracle {
             .map(|pd| pd.price)
             .unwrap_or(0);
 
+        let bypass_active = crate::auth::_is_bypass_active(&env);
+
         let max_deviation_bps = Self::get_max_deviation_percentage(env.clone());
-        if old_price > 0 {
+        if old_price > 0 && !bypass_active {
             if let Some(pct_change_bps) = calculate_percentage_difference_bps(old_price, normalized) {
                 if pct_change_bps > max_deviation_bps {
                     return Err(Error::FlashCrashDetected);
@@ -1298,16 +1325,20 @@ impl PriceOracle {
             }
         }
 
-        enforce_price_floor(&env, &asset, normalized)?;
+        if !bypass_active {
+            enforce_price_floor(&env, &asset, normalized)?;
+        }
 
         let storage = env.storage().persistent();
         let bounds_map: soroban_sdk::Map<Symbol, PriceBounds> = storage
             .get(&DataKey::PriceBoundsData)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
-        
-        if let Some(bounds) = bounds_map.get(asset.clone()) {
-            if normalized < bounds.min_price || normalized > bounds.max_price {
-                return Err(Error::PriceOutOfBounds);
+
+        if !bypass_active {
+            if let Some(bounds) = bounds_map.get(asset.clone()) {
+                if normalized < bounds.min_price || normalized > bounds.max_price {
+                    return Err(Error::PriceOutOfBounds);
+                }
             }
         }
 
@@ -2218,6 +2249,63 @@ impl PriceOracle {
     /// A vector of addresses of all contracts currently subscribed to price updates.
     pub fn get_price_update_subscribers(env: Env) -> soroban_sdk::Vec<Address> {
         callbacks::get_subscribers(&env)
+    }
+
+    /// Enable a 1-hour grace period during which the circuit-breaker safety
+    /// checks (flash-crash, price floor, and price bounds) are bypassed.
+    ///
+    /// Only an authorized admin may call this. The bypass expires automatically
+    /// after 3,600 seconds regardless of contract state. Returns the expiry
+    /// timestamp so callers can log or display when the window closes.
+    pub fn enable_bypass_safety_checks(env: Env, admin: Address) -> Result<u64, Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        let expiry = env.ledger().timestamp() + 3_600;
+        crate::auth::_set_bypass_safety_checks(&env, expiry);
+
+        _log_admin_action(
+            &env,
+            &admin,
+            AdminAction::EnableBypassSafetyChecks,
+            Some(format!("expiry: {}", expiry)),
+        );
+
+        env.events().publish_event(&BypassEnabledEvent {
+            admin,
+            expiry,
+        });
+
+        Ok(expiry)
+    }
+
+    /// Immediately revoke the safety-checks bypass before its natural expiry.
+    pub fn disable_bypass_safety_checks(env: Env, admin: Address) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        crate::auth::_remove_bypass_safety_checks(&env);
+
+        _log_admin_action(
+            &env,
+            &admin,
+            AdminAction::DisableBypassSafetyChecks,
+            None,
+        );
+
+        env.events().publish_event(&BypassDisabledEvent { admin });
+
+        Ok(())
+    }
+
+    /// Return the raw expiry timestamp stored for the bypass, or `None` if never
+    /// set. Note: the bypass may be stored but already expired — callers that
+    /// care about liveness should compare against the current ledger timestamp.
+    pub fn get_bypass_safety_checks_expiry(env: Env) -> Option<u64> {
+        crate::auth::_get_bypass_expiry(&env)
     }
 }
 
