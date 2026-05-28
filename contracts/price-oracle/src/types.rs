@@ -39,6 +39,8 @@ pub enum DataKey {
     PriceUpdateSubscribers,
     /// Tracked asset flag for O(1) existence check.
     TrackedAsset(Symbol),
+    /// Pre-approved validator public keys for Ed25519 off-chain signatures.
+    Validator(soroban_sdk::BytesN<32>),
 }
 
 /// Decimal metadata for an asset pair.
@@ -251,4 +253,15 @@ pub struct ProposedAction {
     pub executed: bool,
     /// Whether the action has been cancelled.
     pub cancelled: bool,
+}
+
+/// Payload structure representing price update details signed by validators off-chain.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PricePayload {
+    pub asset: Symbol,
+    pub price: i128,
+    pub decimals: u32,
+    pub confidence_score: u32,
+    pub ttl: u64,
 }

@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 use super::*;
+use ed25519_dalek::{Signer, SigningKey};
 use soroban_sdk::{
     contract, contractimpl, symbol_short, testutils::Address as _, testutils::Events,
     testutils::Ledger, Address, Env, Symbol, vec,
@@ -23,6 +24,90 @@ impl DummyToken {
         env.events()
             .publish_event(&TokenTransferEvent { from, to, amount });
     }
+}
+
+fn do_update_price(
+    env: &Env,
+    client: &PriceOracleClient<'static>,
+    provider: &Address,
+    asset: &Symbol,
+    price: &i128,
+    decimals: &u32,
+    confidence_score: &u32,
+    ttl: &u64,
+) {
+    let signing_key = SigningKey::from_bytes(&[1u8; 32]);
+    let pk_bytes = signing_key.verifying_key().to_bytes();
+    let pk_soroban = soroban_sdk::BytesN::from_array(env, &pk_bytes);
+
+    env.as_contract(&client.address, || {
+        env.storage().persistent().set(&DataKey::Validator(pk_soroban.clone()), &true);
+    });
+
+    let payload = PricePayload {
+        asset: asset.clone(),
+        price: *price,
+        decimals: *decimals,
+        confidence_score: *confidence_score,
+        ttl: *ttl,
+    };
+    let payload_bytes = payload.to_xdr(env);
+    let signature = signing_key.sign(&payload_bytes.to_vec());
+    let sig_bytes = signature.to_bytes();
+    let sig_soroban = soroban_sdk::BytesN::from_array(env, &sig_bytes);
+
+    do_update_price(&env, &client, 
+        provider,
+        asset,
+        price,
+        decimals,
+        confidence_score,
+        ttl,
+        &sig_soroban,
+        &pk_soroban,
+    );
+}
+
+fn do_try_update_price(
+    env: &Env,
+    client: &PriceOracleClient<'static>,
+    provider: &Address,
+    asset: &Symbol,
+    price: &i128,
+    decimals: &u32,
+    confidence_score: &u32,
+    ttl: &u64,
+) -> Result<Result<(), Error>, soroban_sdk::InvokeError> {
+    let signing_key = SigningKey::from_bytes(&[1u8; 32]);
+    let pk_bytes = signing_key.verifying_key().to_bytes();
+    let pk_soroban = soroban_sdk::BytesN::from_array(env, &pk_bytes);
+
+    env.as_contract(&client.address, || {
+        env.storage().persistent().set(&DataKey::Validator(pk_soroban.clone()), &true);
+    });
+
+    let payload = PricePayload {
+        asset: asset.clone(),
+        price: *price,
+        decimals: *decimals,
+        confidence_score: *confidence_score,
+        ttl: *ttl,
+    };
+    let payload_bytes = payload.to_xdr(env);
+    let signature = signing_key.sign(&payload_bytes.to_vec());
+    let sig_bytes = signature.to_bytes();
+    let sig_soroban = soroban_sdk::BytesN::from_array(env, &sig_bytes);
+
+    do_try_update_price(&env, &client, 
+        provider,
+        asset,
+        price,
+        decimals,
+        confidence_score,
+        ttl,
+        &sig_soroban,
+        &pk_soroban,
+    )
 }
 
 fn setup() -> (Env, Address, PriceOracleClient<'static>) {
@@ -178,7 +263,7 @@ fn test_update_price_rejects_untracked_asset() {
     set_admin(&env, &contract_id, &admin);
     add_provider(&env, &contract_id, &provider);
 
-    let result = client.try_update_price(
+    let result = do_try_update_price(&env, &client, 
         &provider,
         &symbol_short!("BTC"),
         &50_000_i128,
@@ -201,7 +286,7 @@ fn test_update_price_rejects_non_provider() {
     set_admin(&env, &contract_id, &admin);
     client.add_asset(&admin, &symbol_short!("NGN"));
 
-    let result = client.try_update_price(
+    let result = do_try_update_price(&env, &client, 
         &provider,
         &symbol_short!("NGN"),
         &1_000_i128,
@@ -227,7 +312,7 @@ fn test_update_price_rejects_flash_crash() {
 
     client.set_price(&asset, &1_000_i128, &2u32, &3_600u64);
 
-    let result = client.try_update_price(&provider, &asset, &1_200_i128, &2u32, &100u32, &3_600u64);
+    let result = do_try_update_price(&env, &client, &provider, &asset, &1_200_i128, &2u32, &100u32, &3_600u64);
     match result {
         Err(Ok(err)) => assert_eq!(err, Error::FlashCrashDetected),
         other => panic!("expected FlashCrashDetected, got {:?}", other),
@@ -259,7 +344,7 @@ fn test_update_price_rejects_configured_max_deviation() {
     client.set_max_deviation_percentage(&admin, &500_i128);
     client.set_price(&asset, &1_000_i128, &2u32, &3_600u64);
 
-    let result = client.try_update_price(&provider, &asset, &1_100_i128, &2u32, &100u32, &3_600u64);
+    let result = do_try_update_price(&env, &client, &provider, &asset, &1_100_i128, &2u32, &100u32, &3_600u64);
     match result {
         Err(Ok(err)) => assert_eq!(err, Error::FlashCrashDetected),
         other => panic!("expected FlashCrashDetected, got {:?}", other),
@@ -305,7 +390,7 @@ fn test_set_price_rejects_zero_price() {
     let client = PriceOracleClient::new(&env, &contract_id);
     let asset = symbol_short!("NGN");
 
-    let result = client.try_update_price(&provider, &asset, &250_i128, &2u32, &100u32, &3_600u64);
+    let result = do_try_update_price(&env, &client, &provider, &asset, &250_i128, &2u32, &100u32, &3_600u64);
     match result {
         Err(Ok(err)) => assert_eq!(err, Error::PriceOutOfBounds),
         other => panic!("expected PriceOutOfBounds, got {:?}", other),
@@ -341,7 +426,7 @@ fn test_update_price_rejects_price_below_floor() {
 
     env.ledger().set_timestamp(1_700_000_500);
     env.ledger().set_sequence_number(2);
-    client.update_price(&provider, &asset, &1_500_000_i128, &6u32, &100u32, &3600u64);
+    do_update_price(&env, &client, &provider, &asset, &1_500_000_i128, &6u32, &100u32, &3600u64);
 
     let stored = client.get_price(&asset, &true);
     assert_eq!(stored.price, 1_500_000_i128);
@@ -367,9 +452,9 @@ fn test_set_price_rejects_price_below_floor() {
     client.add_asset(&admin, &asset);
     env.ledger().set_sequence_number(1);
 
-    client.update_price(&provider, &asset, &1_000_i128, &6u32, &100u32, &3600u64);
+    do_update_price(&env, &client, &provider, &asset, &1_000_i128, &6u32, &100u32, &3600u64);
     env.ledger().set_sequence_number(2);
-    client.update_price(&provider, &asset, &1_020_i128, &6u32, &100u32, &3600u64);
+    do_update_price(&env, &client, &provider, &asset, &1_020_i128, &6u32, &100u32, &3600u64);
 
     let stored = client.get_price(&asset, &true);
     assert_eq!(stored.price, 1_020_i128);
@@ -441,7 +526,7 @@ fn try_try_subscribe_to_price_updates() {
     assert!(!client.toggle_pause(&admin1, &admin2));
     let asset = symbol_short!("ETH");
     let price: i128 = 1_000_000;
-    match client.try_update_price(&provider, &asset, &price, &6u32, &100u32, &3600u64) {
+    match do_try_update_price(&env, &client, &provider, &asset, &price, &6u32, &100u32, &3600u64) {
         Err(Ok(e)) => assert_eq!(e, Error::InvalidAssetSymbol),
         other => panic!("expected InvalidAssetSymbol, got {:?}", other),
     }
@@ -469,7 +554,7 @@ fn test_update_price_emits_event() {
 
     env.ledger().set_timestamp(1_700_000_000);
     env.ledger().set_sequence_number(1);
-    client.update_price(&provider, &asset, &price, &6u32, &100u32, &3600u64);
+    do_update_price(&env, &client, &provider, &asset, &price, &6u32, &100u32, &3600u64);
 
     let events = env.events().all();
     let debug_str = alloc::format!("{:?}", events);
@@ -502,7 +587,7 @@ fn test_update_price_emits_cross_call_event_on_5pct_move() {
 
     client.set_price(&asset, &old_price, &6u32, &3600u64);
 
-    client.update_price(&provider, &asset, &new_price, &6u32, &100u32, &3600u64);
+    do_update_price(&env, &client, &provider, &asset, &new_price, &6u32, &100u32, &3600u64);
 
     let events = env.events().all();
     let debug_str = alloc::format!("{:?}", events);
@@ -534,7 +619,7 @@ fn test_update_price_no_cross_call_event_below_5pct() {
     let new_price: i128 = 51; // 2% increase
 
     client.set_price(&asset, &old_price, &6u32, &3600u64);
-    client.update_price(&provider, &asset, &new_price, &6u32, &100u32, &3600u64);
+    do_update_price(&env, &client, &provider, &asset, &new_price, &6u32, &100u32, &3600u64);
 
     let events = env.events().all();
     let debug_str = alloc::format!("{:?}", events);
@@ -562,11 +647,11 @@ fn test_update_price_delta_limit_rejection_emits_anomaly_event() {
 
     env.ledger().set_timestamp(1_700_100_000);
     env.ledger().set_sequence_number(1);
-    client.update_price(&provider, &asset, &1_000_i128, &6u32, &100u32, &3600u64);
+    do_update_price(&env, &client, &provider, &asset, &1_000_i128, &6u32, &100u32, &3600u64);
 
     env.ledger().set_timestamp(1_700_100_010);
     env.ledger().set_sequence_number(2);
-    let result = client.try_update_price(&provider, &asset, &1_100_i128, &6u32, &100u32, &3600u64);
+    let result = do_try_update_price(&env, &client, &provider, &asset, &1_100_i128, &6u32, &100u32, &3600u64);
     assert!(result.is_ok());
 
     let events = env.events().all();
@@ -633,7 +718,7 @@ fn test_flash_crash_protection_rejects_large_increase() {
     client.set_price(&asset, &old_price, &6u32, &3600u64);
 
     // Should reject 20% increase (exceeds 10% MAX_PERCENT_CHANGE)
-    match client.try_update_price(&provider, &asset, &new_price, &6u32, &100u32, &3600u64) {
+    match do_try_update_price(&env, &client, &provider, &asset, &new_price, &6u32, &100u32, &3600u64) {
         Err(Ok(e)) => assert_eq!(e, Error::FlashCrashDetected),
         other => panic!("expected FlashCrashDetected, got {:?}", other),
     }
@@ -835,7 +920,7 @@ fn test_flash_crash_protection_rejects_large_drop() {
     client.set_price(&asset, &old_price, &6u32, &3600u64);
 
     // Should reject 20% drop (exceeds 10% MAX_PERCENT_CHANGE)
-    match client.try_update_price(&provider, &asset, &new_price, &6u32, &100u32, &3600u64) {
+    match do_try_update_price(&env, &client, &provider, &asset, &new_price, &6u32, &100u32, &3600u64) {
         Err(Ok(e)) => assert_eq!(e, Error::FlashCrashDetected),
         other => panic!("expected FlashCrashDetected, got {:?}", other),
     }
@@ -1325,7 +1410,7 @@ fn test_update_price_within_bounds_succeeds() {
     client.set_price(&asset, &old_price, &6u32, &3600u64);
 
     // Should allow ~4% increase (within 10% MAX_PERCENT_CHANGE, delta ≤ 50)
-    client.update_price(&provider, &asset, &new_price, &6u32, &100u32, &3600u64);
+    do_update_price(&env, &client, &provider, &asset, &new_price, &6u32, &100u32, &3600u64);
 
     let price_data = client.get_price(&asset, &true);
     assert_eq!(price_data.price, new_price);
@@ -1354,7 +1439,7 @@ fn test_flash_crash_protection_allows_exact_threshold() {
     client.set_price(&asset, &old_price, &6u32, &3600u64);
 
     // Should allow exactly 10% increase (at threshold, not exceeding), delta=50 ≤ 50
-    client.update_price(&provider, &asset, &new_price, &6u32, &100u32, &3600u64);
+    do_update_price(&env, &client, &provider, &asset, &new_price, &6u32, &100u32, &3600u64);
 
     let price_data = client.get_price(&asset, &true);
     assert_eq!(price_data.price, new_price);
@@ -1380,7 +1465,7 @@ fn test_update_price_below_min_bound_rejected() {
     client.add_asset(&admin, &asset);
     client.set_price_bounds(&admin, &asset, &500_i128, &2_000_i128);
 
-    let result = client.try_update_price(&provider, &asset, &100_i128, &6u32, &100u32, &3600u64);
+    let result = do_try_update_price(&env, &client, &provider, &asset, &100_i128, &6u32, &100u32, &3600u64);
     match result {
         Err(Ok(e)) => assert_eq!(e, Error::PriceOutOfBounds),
         other => panic!("expected PriceOutOfBounds, got {:?}", other),
@@ -1406,7 +1491,7 @@ fn test_flash_crash_protection_allows_first_price_update() {
 
     // Track the asset first, then do first price update (no previous price)
     client.add_asset(&admin, &asset);
-    client.update_price(&provider, &asset, &1_000_i128, &6u32, &100u32, &3600u64);
+    do_update_price(&env, &client, &provider, &asset, &1_000_i128, &6u32, &100u32, &3600u64);
 
     let price_data = client.get_price(&asset, &true);
     assert_eq!(price_data.price, 1_000_i128);
@@ -1435,7 +1520,7 @@ fn test_update_price_above_max_bound_rejected() {
     client.set_price_bounds(&admin, &asset, &500_i128, &2_000_i128);
 
     // Price above max should be rejected
-    let result = client.try_update_price(&provider, &asset, &5_000_i128, &6u32, &100u32, &3600u64);
+    let result = do_try_update_price(&env, &client, &provider, &asset, &5_000_i128, &6u32, &100u32, &3600u64);
     match result {
         Err(Ok(e)) => assert_eq!(e, Error::PriceOutOfBounds),
         other => panic!("expected PriceOutOfBounds, got {:?}", other),
@@ -1462,7 +1547,7 @@ fn test_update_price_at_exact_bounds_succeeds() {
 
     // Track asset first, then first price update (no previous price) should always be allowed
     client.add_asset(&admin, &asset);
-    client.update_price(&provider, &asset, &price, &6u32, &100u32, &3600u64);
+    do_update_price(&env, &client, &provider, &asset, &price, &6u32, &100u32, &3600u64);
 
     let price_data = client.get_price(&asset, &true);
     assert_eq!(price_data.price, price);
@@ -1489,7 +1574,7 @@ fn test_flash_crash_protection_rejects_just_over_threshold() {
 
     client.set_price(&asset, &old_price, &6u32, &3600u64);
 
-    match client.try_update_price(&provider, &asset, &new_price, &6u32, &100u32, &3600u64) {
+    match do_try_update_price(&env, &client, &provider, &asset, &new_price, &6u32, &100u32, &3600u64) {
         Err(Ok(e)) => assert_eq!(e, Error::FlashCrashDetected),
         other => panic!("expected FlashCrashDetected, got {:?}", other),
     }
@@ -1515,7 +1600,7 @@ fn test_update_price_no_bounds_set_allows_any_valid_price() {
     client.add_asset(&admin, &asset);
 
     // No bounds set — should accept any positive price
-    let result = client.try_update_price(&provider, &asset, &999_999_999_i128, &6u32, &100u32, &3600u64);
+    let result = do_try_update_price(&env, &client, &provider, &asset, &999_999_999_i128, &6u32, &100u32, &3600u64);
     assert!(result.is_ok());
 }
 
@@ -2432,7 +2517,7 @@ fn test_update_price_does_not_crash_with_subscribers() {
     // Update price should not crash even with subscribers
     // (The callback will fail because subscriber doesn't implement on_price_update, but update should succeed)
     env.ledger().set_timestamp(1_000_000);
-    let result = client.update_price(&provider, &asset, &1_500_000_i128, &6u32, &90u32, &3600u64);
+    let result = do_update_price(&env, &client, &provider, &asset, &1_500_000_i128, &6u32, &90u32, &3600u64);
     
     // The update should succeed even if the callback fails
     assert!(result.is_ok(), "Price update should succeed even with subscribers");
@@ -2525,7 +2610,7 @@ fn test_bypass_allows_flash_crash_price() {
     client.set_max_deviation_percentage(&admin, &100_i128); // 1%
 
     // Without bypass, a 20% jump should be rejected.
-    let rejected = client.try_update_price(&provider, &asset, &1_200_i128, &2u32, &100u32, &3_600u64);
+    let rejected = do_try_update_price(&env, &client, &provider, &asset, &1_200_i128, &2u32, &100u32, &3_600u64);
     match rejected {
         Err(Ok(err)) => assert_eq!(err, Error::FlashCrashDetected),
         other => panic!("expected FlashCrashDetected, got {:?}", other),
@@ -2534,7 +2619,7 @@ fn test_bypass_allows_flash_crash_price() {
     // Enable bypass and retry — should succeed.
     env.ledger().set_timestamp(1_000_000);
     client.enable_bypass_safety_checks(&admin);
-    assert!(client.try_update_price(&provider, &asset, &1_200_i128, &2u32, &100u32, &3_600u64).is_ok());
+    assert!(do_try_update_price(&env, &client, &provider, &asset, &1_200_i128, &2u32, &100u32, &3_600u64).is_ok());
 }
 
 #[test]
@@ -2555,7 +2640,7 @@ fn test_bypass_allows_price_outside_bounds() {
     // Enable bypass and submit a price above max_price.
     env.ledger().set_timestamp(1_000_000);
     client.enable_bypass_safety_checks(&admin);
-    assert!(client.try_update_price(&provider, &asset, &2_000_i128, &2u32, &100u32, &3_600u64).is_ok());
+    assert!(do_try_update_price(&env, &client, &provider, &asset, &2_000_i128, &2u32, &100u32, &3_600u64).is_ok());
 }
 
 #[test]
@@ -2579,7 +2664,7 @@ fn test_bypass_expires_and_circuit_breaker_resumes() {
     env.ledger().set_timestamp(1_000 + 3_601);
 
     // Circuit breaker should be active again.
-    let result = client.try_update_price(&provider, &asset, &1_200_i128, &2u32, &100u32, &3_600u64);
+    let result = do_try_update_price(&env, &client, &provider, &asset, &1_200_i128, &2u32, &100u32, &3_600u64);
     match result {
         Err(Ok(err)) => assert_eq!(err, Error::FlashCrashDetected),
         other => panic!("expected FlashCrashDetected after bypass expiry, got {:?}", other),
@@ -2598,3 +2683,90 @@ fn test_enable_bypass_requires_admin() {
     // non_admin is not in the admin list — should panic.
     client.enable_bypass_safety_checks(&non_admin);
 }
+
+#[test]
+fn test_ed25519_signature_validation() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let asset = symbol_short!("NGN");
+
+    set_admin(&env, &contract_id, &admin);
+    add_provider(&env, &contract_id, &provider);
+    client.add_asset(&admin, &asset);
+
+    // Generate keys using ed25519-dalek
+    let signing_key = SigningKey::from_bytes(&[2u8; 32]); // a different key
+    let pk_bytes = signing_key.verifying_key().to_bytes();
+    let pk_soroban = soroban_sdk::BytesN::from_array(&env, &pk_bytes);
+
+    let price = 1_000_i128;
+    let decimals = 2u32;
+    let confidence_score = 100u32;
+    let ttl = 3600u64;
+
+    let payload = PricePayload {
+        asset: asset.clone(),
+        price,
+        decimals,
+        confidence_score,
+        ttl,
+    };
+    let payload_bytes = payload.to_xdr(&env);
+    let signature = signing_key.sign(&payload_bytes.to_vec());
+    let sig_bytes = signature.to_bytes();
+    let sig_soroban = soroban_sdk::BytesN::from_array(&env, &sig_bytes);
+
+    // 1. Rejects update if validator not approved
+    let result = client.try_update_price(
+        &provider,
+        &asset,
+        &price,
+        &decimals,
+        &confidence_score,
+        &ttl,
+        &sig_soroban,
+        &pk_soroban,
+    );
+    match result {
+        Err(Ok(err)) => assert_eq!(err, Error::Unauthorized),
+        other => panic!("expected Unauthorized error when validator is not approved, got {:?}", other),
+    }
+
+    // 2. Approve the validator
+    client.add_validator(&admin, &pk_soroban);
+    assert!(client.is_validator(&pk_soroban));
+
+    // 3. Update succeeds with valid signature from approved validator
+    let result = client.try_update_price(
+        &provider,
+        &asset,
+        &price,
+        &decimals,
+        &confidence_score,
+        &ttl,
+        &sig_soroban,
+        &pk_soroban,
+    );
+    assert!(result.is_ok());
+
+    // 4. Remove validator and verify it's rejected again
+    client.remove_validator(&admin, &pk_soroban);
+    assert!(!client.is_validator(&pk_soroban));
+
+    let result = client.try_update_price(
+        &provider,
+        &asset,
+        &price,
+        &decimals,
+        &confidence_score,
+        &ttl,
+        &sig_soroban,
+        &pk_soroban,
+    );
+    match result {
+        Err(Ok(err)) => assert_eq!(err, Error::Unauthorized),
+        other => panic!("expected Unauthorized error after validator is removed, got {:?}", other),
+    }
+}
+

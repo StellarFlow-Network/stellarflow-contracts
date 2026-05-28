@@ -1,13 +1,14 @@
 #![no_std]
 
 use soroban_sdk::{
+    Bytes, BytesN,
     contract, contractclient, contracterror, contractimpl, panic_with_error, Address, Env, Symbol, String, token,
 };
 
 use crate::types::{
     AssetInfo, AssetMeta, DataKey, PriceBounds, PriceBuffer, PriceBufferEntry, PriceData,
     PriceDataWithStatus, PriceEntryWithStatus, RecentEvent, AdminAction,
-    AdminLogEntry, PriceUpdatePayload, ProposedAction,
+    AdminLogEntry, PriceUpdatePayload, ProposedAction, PricePayload,
 };
 const ADMIN_TIMELOCK: u64 = 86_400;
 const MAX_CLEAR_ASSETS: u32 = 20;
@@ -92,6 +93,15 @@ pub trait StellarFlowTrait {
     ///
     /// The new asset is added to the internal asset list and initialized with a zero-price placeholder.
     fn add_asset(env: Env, admin: Address, asset: Symbol) -> Result<(), Error>;
+
+    /// Add a validator public key for off-chain signatures.
+    fn add_validator(env: Env, admin: Address, validator: BytesN<32>) -> Result<(), Error>;
+
+    /// Remove a validator public key.
+    fn remove_validator(env: Env, admin: Address, validator: BytesN<32>) -> Result<(), Error>;
+
+    /// Check if a validator public key is approved.
+    fn is_validator(env: Env, validator: BytesN<32>) -> bool;
 
     /// Set an absolute floor price for an asset.
     ///
@@ -742,6 +752,33 @@ impl PriceOracle {
         Ok(())
     }
 
+    /// Add a validator public key for off-chain signatures.
+    pub fn add_validator(env: Env, admin: Address, validator: BytesN<32>) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        env.storage().persistent().set(&DataKey::Validator(validator), &true);
+        Ok(())
+    }
+
+    /// Remove a validator public key.
+    pub fn remove_validator(env: Env, admin: Address, validator: BytesN<32>) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+
+        env.storage().persistent().remove(&DataKey::Validator(validator));
+        Ok(())
+    }
+
+    /// Check if a validator public key is approved.
+    pub fn is_validator(env: Env, validator: BytesN<32>) -> bool {
+        env.storage().persistent().has(&DataKey::Validator(validator))
+    }
+
     /// Register the native decimal precision for an asset pair.
     ///
     /// Stores `base_decimals` and `quote_decimals` in persistent storage so that
@@ -1297,9 +1334,7 @@ pub fn get_asset_info(env: Env, asset: Symbol) -> Option<AssetInfo> {
         Ok(())
     }
 
-    /// Update the price for a specific asset (authorized backend relayer function).
-    ///
-    /// Writes to the `VerifiedPrice` bucket. Only whitelisted providers may call this.
+    /// Update the price for a specific asset (authorized backend relayer function with cryptographic verification).
     pub fn update_price(
         env: Env,
         source: Address,
@@ -1308,10 +1343,25 @@ pub fn get_asset_info(env: Env, asset: Symbol) -> Option<AssetInfo> {
         decimals: u32,
         confidence_score: u32,
         ttl: u64,
+        signature: BytesN<64>,
+        public_key: BytesN<32>,
     ) -> Result<(), Error> {
         _require_not_destroyed(&env);
         crate::auth::_require_not_frozen(&env);
         source.require_auth();
+
+        if !Self::is_validator(env.clone(), public_key.clone()) {
+            return Err(Error::Unauthorized);
+        }
+
+        let payload = PricePayload {
+            asset: asset.clone(),
+            price,
+            decimals,
+            confidence_score,
+            ttl,
+        };
+        env.crypto().ed25519_verify(&public_key, &payload.to_xdr(&env), &signature);
 
         if !env.storage().persistent().has(&DataKey::TrackedAsset(asset.clone())) {
             return Err(Error::AssetNotFound);
@@ -1418,7 +1468,8 @@ pub fn get_asset_info(env: Env, asset: Symbol) -> Option<AssetInfo> {
             "invariant violated: median_price must be > 0"
         );
         
-        // Also update the legacy PriceData for backward compatibility
+        let storage = env.storage().persistent();
+        // Legacy flat price map — kept for migration compatibility only.
         let mut prices: soroban_sdk::Map<Symbol, PriceData> = storage
             .get(&DataKey::PriceData)
             .unwrap_or_else(|| soroban_sdk::Map::new(&env));
