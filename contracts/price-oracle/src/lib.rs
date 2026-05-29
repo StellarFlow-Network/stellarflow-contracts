@@ -335,6 +335,38 @@ pub trait StellarFlowTrait {
         bad_relayer: Address,
         amount: i128,
     ) -> Result<(), Error>;
+
+    /// Upgrade the contract WASM bytecode via multi-sig governance authority.
+    ///
+    /// Replaces the on-chain execution bytecode inline using
+    /// `env.deployer().update_current_contract_wasm()` while preserving all
+    /// existing persistent storage. This is the secure, decentralized upgrade
+    /// path that avoids a full state migration to a new contract ID.
+    ///
+    /// # Security
+    /// Requires **two distinct authorized admins** to co-sign the invocation
+    /// payload, preventing a single compromised key from silently swapping
+    /// contract logic. Both `admin1` and `admin2` must be registered in the
+    /// governance admin set and must provide valid Soroban auth signatures.
+    ///
+    /// # Arguments
+    /// * `admin1` - First governance admin (must provide auth)
+    /// * `admin2` - Second governance admin (must provide auth, must differ from `admin1`)
+    /// * `new_wasm_hash` - The 32-byte SHA-256 hash of the new WASM bytecode,
+    ///   pre-uploaded to the Stellar network via `stellar contract upload`
+    ///
+    /// # Returns
+    /// `Ok(())` on success. Errors if:
+    /// - Either admin is not in the authorized admin set (`Error::NotAuthorized`)
+    /// - Both admins are the same address (`Error::MultiSigValidationFailed`)
+    /// - Fewer than 2 admins are registered (`Error::MultiSigValidationFailed`)
+    /// - Contract is destroyed or frozen
+    fn upgrade_contract(
+        env: Env,
+        admin1: Address,
+        admin2: Address,
+        new_wasm_hash: soroban_sdk::BytesN<32>,
+    ) -> Result<(), Error>;
 }
 
 #[contractclient(name = "TokenContractClient")]
@@ -455,6 +487,17 @@ pub struct SlashExecutedEvent {
     pub reserve: Address,
     /// The admin who executed the slash.
     pub executor: Address,
+}
+
+/// Emitted when the contract WASM bytecode is upgraded via multi-sig governance.
+#[soroban_sdk::contractevent]
+pub struct ContractUpgradedEvent {
+    /// First governance admin who co-signed the upgrade.
+    pub admin1: Address,
+    /// Second governance admin who co-signed the upgrade.
+    pub admin2: Address,
+    /// The 32-byte hash of the new WASM bytecode that was installed.
+    pub new_wasm_hash: soroban_sdk::BytesN<32>,
 }
 
 #[soroban_sdk::contractevent]
@@ -1497,6 +1540,86 @@ impl PriceOracle {
         env.deployer().update_current_contract_wasm(new_wasm_hash);
     }
 
+    /// Upgrade the contract WASM bytecode via multi-sig governance authority.
+    ///
+    /// This is the secure, decentralized upgrade path for the oracle proxy contract.
+    /// It replaces the on-chain execution bytecode inline using
+    /// `env.deployer().update_current_contract_wasm()` while preserving all
+    /// existing persistent storage — no state migration or new contract ID required.
+    ///
+    /// # Security model
+    /// Two **distinct** authorized governance admins must co-sign the invocation.
+    /// This prevents a single compromised key from silently swapping contract logic.
+    /// The contract must also have at least 2 registered admins; if ownership has
+    /// been reduced to a single key the upgrade path is intentionally blocked.
+    ///
+    /// # Arguments
+    /// * `admin1` - First governance admin (must provide Soroban auth)
+    /// * `admin2` - Second governance admin (must provide Soroban auth, must differ from `admin1`)
+    /// * `new_wasm_hash` - 32-byte SHA-256 hash of the new WASM bytecode,
+    ///   pre-uploaded via `stellar contract upload`
+    ///
+    /// # Returns
+    /// `Ok(())` on success. Errors if:
+    /// - `admin1 == admin2` → `Error::MultiSigValidationFailed`
+    /// - Fewer than 2 admins registered → `Error::MultiSigValidationFailed`
+    /// - Either address is not an authorized admin → `Error::NotAuthorized`
+    /// - Contract is destroyed → `Error::ContractDestroyed`
+    /// - Contract is frozen → panics via `_require_not_frozen`
+    pub fn upgrade_contract(
+        env: Env,
+        admin1: Address,
+        admin2: Address,
+        new_wasm_hash: soroban_sdk::BytesN<32>,
+    ) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        crate::auth::_require_not_frozen(&env);
+
+        // Reject same-address submissions before touching auth — prevents a single
+        // key from satisfying both slots by passing itself twice.
+        if admin1 == admin2 {
+            return Err(Error::MultiSigValidationFailed);
+        }
+
+        // Require cryptographic signatures from both admins.
+        // Soroban's `require_auth()` verifies the transaction is signed by the
+        // corresponding key and that the invocation is authorized for this call.
+        admin1.require_auth();
+        admin2.require_auth();
+
+        // Verify both callers are in the registered governance admin set.
+        if !crate::auth::_is_authorized(&env, &admin1)
+            || !crate::auth::_is_authorized(&env, &admin2)
+        {
+            return Err(Error::NotAuthorized);
+        }
+
+        // Enforce that the contract has at least 2 admins registered.
+        // If the admin set has been reduced to 1, the multi-sig invariant cannot
+        // be satisfied and the upgrade path is intentionally blocked.
+        let admins = crate::auth::_get_admin(&env);
+        if admins.len() < 2 {
+            return Err(Error::MultiSigValidationFailed);
+        }
+
+        // Log the upgrade action for on-chain auditability.
+        _log_admin_action(&env, &admin1, AdminAction::Upgrade, None);
+
+        // Emit a structured event so indexers and downstream consumers can detect
+        // the bytecode swap and re-validate their integration.
+        env.events().publish_event(&ContractUpgradedEvent {
+            admin1: admin1.clone(),
+            admin2: admin2.clone(),
+            new_wasm_hash: new_wasm_hash.clone(),
+        });
+
+        // Perform the inline WASM bytecode swap.
+        // All persistent storage is preserved; only the execution code changes.
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+
+        Ok(())
+    }
+
     /// Remove an asset from the oracle, deleting its price entry.
     ///
     /// Only the admin can call this. Returns `Error::AssetNotFound` if the asset
@@ -2534,20 +2657,39 @@ impl PriceOracle {
                 );
             }
             AdminAction::Upgrade => {
-                // Parse wasm hash from data (expected as hex string)
-                // For simplicity, we'll skip the actual upgrade here
-                // In production, you'd parse the bytesN from the data string
+                // The `data` field carries the new WASM hash encoded as a
+                // 64-character lowercase hex string (32 bytes × 2 hex digits).
+                // Decode it into a BytesN<32> and perform the inline bytecode swap.
+                let wasm_hash = crate::upgrade::parse_wasm_hash_from_hex(&env, &proposed.data)?;
+
                 proposed.executed = true;
                 _log_admin_action(
                     &env,
                     &executor,
                     AdminAction::Upgrade,
-                    Some(format!("Data: {}", proposed.data.to_string())),
+                    Some(format!("wasm_hash: {}", proposed.data.to_string())),
                 );
                 env.events().publish(
                     (Symbol::new(&env, "contract_upgraded"),),
-                    (executor.clone(),),
+                    (executor.clone(), proposed.data.clone()),
                 );
+
+                // Persist the executed flag before swapping bytecode so the
+                // proposal record is written under the old ABI.
+                crate::auth::_set_proposed_action(&env, action_id, &proposed);
+
+                // Perform the inline WASM bytecode swap.
+                // All persistent storage is preserved; only the execution code changes.
+                // This call must be last because it replaces the running contract code.
+                env.deployer().update_current_contract_wasm(wasm_hash);
+
+                // Return early — the generic _set_proposed_action below would run
+                // under the new bytecode which may have a different layout.
+                env.events().publish(
+                    (Symbol::new(&env, "action_executed"),),
+                    (action_id, executor),
+                );
+                return Ok(());
             }
             AdminAction::Slash => {
                 // The target field holds the bad relayer's address.
@@ -3102,3 +3244,4 @@ mod median;
 mod slashing;
 mod test;
 mod types;
+mod upgrade;
