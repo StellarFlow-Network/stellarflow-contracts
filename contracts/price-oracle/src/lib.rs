@@ -1164,10 +1164,10 @@ impl PriceOracle {
             .ok_or(Error::AssetNotFound)
     }
 
-    /// Set the price data for a specific asset (admin/internal use).
+    /// Set the price data for a specific asset.
     ///
-    /// Writes to the `VerifiedPrice` bucket. Community submissions must use
-    /// `submit_community_price` instead.
+    /// Only whitelisted price managers may submit verified price updates.
+    /// Community submissions must use `submit_community_price` instead.
     ///
     /// # Gas optimisation — Zero-Write for identical prices
     /// When the incoming `val` is identical to the currently stored price the
@@ -1181,6 +1181,12 @@ impl PriceOracle {
     pub fn set_price(env: Env, asset: Symbol, val: i128, decimals: u32, ttl: u64) {
         _require_not_destroyed(&env);
         crate::auth::_require_not_frozen(&env);
+
+        let source = env.invoker();
+        source.require_auth();
+        if source != env.current_contract_address() {
+            crate::auth::_require_price_manager(&env, &source);
+        }
 
         // Acquire reentrancy lock
         if let Err(err) = acquire_lock(&env) {
@@ -1235,7 +1241,7 @@ impl PriceOracle {
             let price_data = PriceData {
                 price: normalized,
                 timestamp: now,
-                provider: env.current_contract_address(),
+                provider: source.clone(),
                 // All stored prices are 9-decimal normalized.
                 decimals: 9,
                 confidence_score: 100,
@@ -1273,7 +1279,7 @@ impl PriceOracle {
                 asset: asset.clone(),
                 price: normalized,
                 timestamp: now,
-                provider: env.current_contract_address(),
+                provider: source.clone(),
                 decimals: 9,
                 confidence_score: 100,
             };

@@ -150,6 +150,33 @@ pub fn _require_provider(env: &Env, caller: &Address) {
     }
 }
 
+/// Returns true when the caller is authorized as a dedicated price manager.
+///
+/// This separates everyday price submission rights from high-impact admin
+/// / multi-sig coordinator permissions.
+pub fn _is_price_manager(env: &Env, caller: &Address) -> bool {
+    _is_provider(env, caller)
+}
+
+/// Panics if the caller is not authorized as a dedicated price manager.
+pub fn _require_price_manager(env: &Env, caller: &Address) {
+    if !_is_price_manager(env, caller) {
+        panic!("Unauthorised: caller is not a price manager");
+    }
+}
+
+/// Returns true when the caller is an authorized network coordinator.
+pub fn _is_network_coordinator(env: &Env, caller: &Address) -> bool {
+    _is_authorized(env, caller)
+}
+
+/// Panics if the caller is not an authorized network coordinator.
+pub fn _require_network_coordinator(env: &Env, caller: &Address) {
+    if !_is_network_coordinator(env, caller) {
+        panic!("Unauthorised: caller is not a network coordinator");
+    }
+}
+
 pub fn _set_provider_weight(env: &Env, provider: &Address, weight: u32) {
     env.storage()
         .instance()

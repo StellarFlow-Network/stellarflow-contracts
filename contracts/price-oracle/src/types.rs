@@ -28,7 +28,7 @@ pub enum DataKey {
     Initialized,
     /// TWAP Buffer: Stores last 10 (Timestamp, Price) updates.
     Twap(Symbol),
-    /// Verified price bucket: written only by whitelisted providers / admins.
+    /// Verified price bucket: written only by whitelisted price managers.
     /// Internal math and `get_price` default to this bucket.
     VerifiedPrice(Symbol),
     /// Community price bucket: written by any caller; never used in internal math.
