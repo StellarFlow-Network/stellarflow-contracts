@@ -2567,6 +2567,50 @@ fn test_subscribe_unsubscribe_cycle() {
 }
 
 #[test]
+fn test_purge_inactive_subscribers() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    set_admin(&env, &contract_id, &admin);
+
+    let active = Address::generate(&env);
+    let inactive1 = Address::generate(&env);
+    let inactive2 = Address::generate(&env);
+
+    // Subscribe all three
+    client.subscribe_to_price_updates(&active);
+    client.subscribe_to_price_updates(&inactive1);
+    client.subscribe_to_price_updates(&inactive2);
+    assert_eq!(client.get_price_update_subscribers().len(), 3);
+
+    // Purge the two inactive ones
+    let to_remove = soroban_sdk::vec![&env, inactive1.clone(), inactive2.clone()];
+    let removed = client.purge_inactive_subscribers(&admin, &to_remove);
+    assert_eq!(removed, 2);
+
+    // Only the active subscriber should remain
+    let remaining = client.get_price_update_subscribers();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining.get(0).unwrap(), active);
+}
+
+#[test]
+fn test_purge_inactive_subscribers_unknown_addresses_ignored() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    set_admin(&env, &contract_id, &admin);
+
+    let sub = Address::generate(&env);
+    let unknown = Address::generate(&env);
+
+    client.subscribe_to_price_updates(&sub);
+
+    // Purging an address that was never subscribed returns 0 and leaves list intact
+    let removed = client.purge_inactive_subscribers(&admin, &soroban_sdk::vec![&env, unknown]);
+    assert_eq!(removed, 0);
+    assert_eq!(client.get_price_update_subscribers().len(), 1);
+}
+
+#[test]
 fn test_update_price_does_not_crash_with_subscribers() {
     let env = Env::default();
     env.mock_all_auths();

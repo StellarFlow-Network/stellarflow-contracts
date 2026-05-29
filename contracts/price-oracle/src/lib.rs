@@ -243,6 +243,16 @@ pub trait StellarFlowTrait {
     /// A vector of addresses of all contracts currently subscribed to price updates.
     fn get_price_update_subscribers(env: Env) -> soroban_sdk::Vec<Address>;
 
+    /// Remove a batch of deactivated/expired subscriber addresses from persistent storage.
+    ///
+    /// Admin-only. Accepts a list of addresses to purge and removes them from the
+    /// `PriceUpdateSubscribers` list in a single pass. Returns the count of entries removed.
+    fn purge_inactive_subscribers(
+        env: Env,
+        admin: Address,
+        to_remove: soroban_sdk::Vec<Address>,
+    ) -> u32;
+
     /// Set the Community Council address for emergency freeze functionality.
     ///
     /// Only the admin can call this. The Council address can be used to trigger
@@ -2677,6 +2687,21 @@ impl PriceOracle {
     /// A vector of addresses of all contracts currently subscribed to price updates.
     pub fn get_price_update_subscribers(env: Env) -> soroban_sdk::Vec<Address> {
         callbacks::get_subscribers(&env)
+    }
+
+    /// Remove a batch of deactivated/expired subscriber addresses from persistent storage.
+    ///
+    /// Admin-only. Accepts a list of addresses to purge and removes them from the
+    /// `PriceUpdateSubscribers` list in a single pass. Returns the count of entries removed.
+    pub fn purge_inactive_subscribers(
+        env: Env,
+        admin: Address,
+        to_remove: soroban_sdk::Vec<Address>,
+    ) -> u32 {
+        _require_not_destroyed(&env);
+        admin.require_auth();
+        crate::auth::_require_authorized(&env, &admin);
+        callbacks::purge_inactive_subscribers(&env, &to_remove)
     }
 
     /// Enable a 1-hour grace period during which the circuit-breaker safety

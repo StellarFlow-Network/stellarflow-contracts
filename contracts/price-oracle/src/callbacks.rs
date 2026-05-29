@@ -73,6 +73,32 @@ pub fn unsubscribe(env: &Env, callback_contract: &Address) -> Result<(), crate::
     Ok(())
 }
 
+/// Remove a batch of subscriber addresses from persistent storage in one pass.
+///
+/// Accepts a list of addresses to purge and rebuilds the subscriber list
+/// without them. Returns the number of entries actually removed.
+pub fn purge_inactive_subscribers(env: &Env, to_remove: &Vec<Address>) -> u32 {
+    let subscribers = get_subscribers(env);
+    let mut cleaned: Vec<Address> = Vec::new(env);
+    let mut removed: u32 = 0;
+
+    for sub in subscribers.iter() {
+        if to_remove.iter().any(|r| r == sub) {
+            removed += 1;
+        } else {
+            cleaned.push_back(sub);
+        }
+    }
+
+    if removed > 0 {
+        env.storage()
+            .persistent()
+            .set(&DataKey::PriceUpdateSubscribers, &cleaned);
+    }
+
+    removed
+}
+
 /// Invoke the `on_price_update` callback on all subscribed contracts.
 ///
 /// This function is called after a price update is successfully stored.
