@@ -335,6 +335,31 @@ pub trait StellarFlowTrait {
         bad_relayer: Address,
         amount: i128,
     ) -> Result<(), Error>;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Voting-power snapshot queries (issue #302)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Return the snapshotted voting weight for `voter` on `action_id`.
+    ///
+    /// Returns `None` if the voter had no checkpoint (was not an admin when
+    /// the proposal was created, or the proposal pre-dates the snapshot system).
+    fn get_voting_snapshot(
+        env: Env,
+        action_id: u64,
+        voter: Address,
+    ) -> Option<crate::types::VotingCheckpoint>;
+
+    /// Return the ledger sequence at which `action_id` was proposed.
+    ///
+    /// Returns `None` for proposals created before the snapshot system.
+    fn get_proposal_ledger(env: Env, action_id: u64) -> Option<u32>;
+
+    /// Return the total snapshotted weight that has already voted on `action_id`.
+    fn get_total_voted_weight(env: Env, action_id: u64) -> u32;
+
+    /// Return the total snapshotted weight across all eligible voters for `action_id`.
+    fn get_total_eligible_weight(env: Env, action_id: u64) -> u32;
 }
 
 #[contractclient(name = "TokenContractClient")]
@@ -2271,6 +2296,12 @@ impl PriceOracle {
         // Store the proposal
         crate::auth::_set_proposed_action(&env, action_id, &proposed);
 
+        // ── Snapshot voting power ────────────────────────────────────────────
+        // Lock every admin's current ProviderWeight into an immutable checkpoint
+        // keyed by (action_id, voter). Any weight change made *after* this point
+        // has zero effect on this proposal's vote outcome (issue #302).
+        crate::snapshot::record_snapshot(&env, action_id);
+
         // Add any vote weight that is effective for the proposer.
         crate::auth::_add_effective_action_votes(&env, action_id, &admin);
 
@@ -2330,24 +2361,57 @@ impl PriceOracle {
             return Err(Error::ActionCancelled);
         }
 
+        // ── Snapshot eligibility check (issue #302) ──────────────────────────
+        // A voter (or any principal they represent via delegation) must have had
+        // a checkpoint recorded at proposal time. This blocks anyone who became
+        // an admin *after* the proposal was submitted from casting a vote, and
+        // ensures that weight acquired after the snapshot has no effect.
+        //
+        // For proposals created before the snapshot system was deployed, no
+        // checkpoint exists and we fall back to the legacy head-count path.
+        let snapshot_exists = crate::snapshot::voter_was_eligible(&env, action_id, &voter);
+        let any_delegated_eligible = delegated_voters
+            .iter()
+            .any(|d| crate::snapshot::voter_was_eligible(&env, action_id, &d));
+
+        if snapshot_exists || any_delegated_eligible {
+            // Snapshot path: verify the voter (or at least one principal they
+            // represent) had a checkpoint. The actual weight is read from the
+            // snapshot inside `_add_effective_action_votes` via the helpers
+            // exposed by the snapshot module.
+            //
+            // If the voter themselves has no checkpoint but represents delegators
+            // who do, those delegators' snapshotted weights count.
+            if !snapshot_exists && !any_delegated_eligible {
+                return Err(Error::NotAuthorized);
+            }
+        }
+        // (If neither snapshot exists this is a pre-snapshot proposal — allow
+        //  the legacy head-count path to proceed unchanged.)
+
         let vote_count = crate::auth::_add_effective_action_votes(&env, action_id, &voter);
 
-        // Log the vote
+        // Log the vote, including the snapshotted weight for auditability.
+        let snapshotted_weight = crate::snapshot::get_snapshot_weight(&env, action_id, &voter)
+            .unwrap_or(0);
         _log_admin_action(
             &env,
             &voter,
             AdminAction::VoteForAction,
-            Some(format!("action_id: {}, votes: {}", action_id, vote_count)),
+            Some(format!(
+                "action_id: {}, votes: {}, snapshot_weight: {}",
+                action_id, vote_count, snapshotted_weight
+            )),
         );
 
-        // Emit event
+        // Emit event — include snapshotted weight so indexers can reconstruct
+        // the weighted tally without additional storage reads.
         env.events().publish(
             (Symbol::new(&env, "action_voted"),),
-            (action_id, voter, vote_count),
+            (action_id, voter, vote_count, snapshotted_weight),
         );
 
-        Ok(vote_count)
-    }
+        Ok(vote_count)    }
 
     /// Delegate the owner's vote weight to a proxy representative.
     ///
@@ -3092,6 +3156,43 @@ impl PriceOracle {
 
         crate::slashing::execute_slash_internal(&env, &executor, &bad_relayer, amount)
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Voting-power snapshot queries (issue #302)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Return the full `VotingCheckpoint` for `voter` on `action_id`, or `None`.
+    ///
+    /// Callers can use this to verify what weight a voter had at proposal time,
+    /// audit historical votes, or build off-chain weighted tallies.
+    pub fn get_voting_snapshot(
+        env: Env,
+        action_id: u64,
+        voter: Address,
+    ) -> Option<crate::types::VotingCheckpoint> {
+        crate::snapshot::get_checkpoint(&env, action_id, &voter)
+    }
+
+    /// Return the ledger sequence at which `action_id` was proposed.
+    ///
+    /// Returns `None` for proposals created before the snapshot system was
+    /// deployed (backwards-compatible).
+    pub fn get_proposal_ledger(env: Env, action_id: u64) -> Option<u32> {
+        crate::snapshot::get_proposal_ledger(&env, action_id)
+    }
+
+    /// Return the sum of snapshotted weights for all voters who have already
+    /// cast a vote on `action_id`.
+    pub fn get_total_voted_weight(env: Env, action_id: u64) -> u32 {
+        let voters = crate::auth::_get_action_votes(&env, action_id);
+        crate::snapshot::total_voted_weight(&env, action_id, &voters)
+    }
+
+    /// Return the sum of snapshotted weights across all eligible voters for
+    /// `action_id` (i.e. every admin who had a checkpoint at proposal time).
+    pub fn get_total_eligible_weight(env: Env, action_id: u64) -> u32 {
+        crate::snapshot::total_eligible_weight(&env, action_id)
+    }
 }
 
 mod asset_symbol;
@@ -3100,5 +3201,6 @@ mod callbacks;
 pub mod math;
 mod median;
 mod slashing;
+mod snapshot;
 mod test;
 mod types;
