@@ -73,6 +73,17 @@ pub enum DataKey {
     PrevPriceFloorEntry(Symbol),
     /// Minimum number of votes required for a governance action to reach quorum.
     MinQuorumThreshold,
+    /// Voting-power checkpoint for a specific voter on a specific proposal.
+    ///
+    /// Written once at `propose_action` time for every registered admin.
+    /// Key: `(action_id, voter_address)` -> `VotingCheckpoint`.
+    /// Never mutated after creation — guarantees flash-loan / borrow-attack immunity.
+    VotingSnapshot(u64, Address),
+    /// Ledger sequence number at which a proposal was submitted.
+    ///
+    /// Written once at `propose_action` time. Used by off-chain tooling and
+    /// on-chain queries to verify which ledger height the snapshot was taken at.
+    ProposalLedger(u64),
 }
 
 /// Decimal metadata for an asset pair.
@@ -263,6 +274,8 @@ pub enum AdminAction {
     EnableBypassSafetyChecks,
     /// Admin disabled the safety-checks grace-period bypass
     DisableBypassSafetyChecks,
+    /// Voting-power snapshot was recorded for a new proposal (issue #302)
+    RecordVotingSnapshot,
 }
 
 /// Admin log entry for tracking admin actions.
@@ -306,4 +319,24 @@ pub struct AssetWeight {
     pub asset: Symbol,
     /// Weight in basis points (0–10000). All weights in a basket should sum to 10000.
     pub weight: u32,
+}
+
+/// A frozen snapshot of a single voter's voting power for one proposal.
+///
+/// Created at `propose_action` time and never mutated. Ensures that any
+/// token balance changes made *after* a proposal is submitted have no effect
+/// on the outcome of that vote (flash-loan / borrow-attack immunity).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VotingCheckpoint {
+    /// The proposal this checkpoint belongs to.
+    pub action_id: u64,
+    /// The voter whose power was snapshotted.
+    pub voter: Address,
+    /// The voter's `ProviderWeight` at the ledger the proposal was submitted.
+    pub weight: u32,
+    /// Ledger sequence number at which the snapshot was taken.
+    pub ledger_sequence: u32,
+    /// Ledger timestamp at which the snapshot was taken.
+    pub timestamp: u64,
 }
