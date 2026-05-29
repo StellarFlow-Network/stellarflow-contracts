@@ -274,6 +274,9 @@ pub trait TokenContractTrait {
 /// This value is used when no configurable max deviation percentage has been set.
 const MAX_PERCENT_CHANGE_BPS: i128 = 1_000;
 
+/// Circuit breaker threshold (15% = 1500 basis points). If price deviation exceeds this, pause contract.
+const CIRCUIT_BREAKER_BPS: i128 = 1_500;
+
 /// Percentage move threshold (5% = 500 basis points) above which a "cross_call"
 /// volatility event is published so downstream contracts (e.g. liquidation bots)
 /// can react without polling.
@@ -1409,6 +1412,17 @@ pub fn get_asset_info(env: Env, asset: Symbol) -> Option<AssetInfo> {
         if old_price > 0 && !bypass_active {
             if let Some(pct_change_bps) = calculate_percentage_difference_bps(old_price, normalized) {
                 if pct_change_bps > max_deviation_bps {
+                    return Err(Error::FlashCrashDetected);
+                }
+                // Circuit breaker: pause if deviation exceeds circuit breaker threshold (15%).
+                if pct_change_bps > CIRCUIT_BREAKER_BPS {
+                    // Trigger pause state to protect the system.
+                    crate::auth::_set_paused(&env, true);
+                    // Emit circuit breaker event.
+                    env.events().publish(
+                        (Symbol::new(&env, "circuit_breaker_triggered"),),
+                        (asset.clone(), old_price, normalized, pct_change_bps),
+                    );
                     return Err(Error::FlashCrashDetected);
                 }
             }
