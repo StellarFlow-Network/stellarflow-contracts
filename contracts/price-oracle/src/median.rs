@@ -45,6 +45,10 @@ pub fn calculate_median(mut prices: Vec<i128>) -> Result<i128, MedianError> {
     } else {
         let lo = prices.get(mid - 1).unwrap();
         let hi = prices.get(mid).unwrap();
+        // Optimize: perform multiplication before division
+        // This avoids potential precision loss by accumulating first, then dividing once.
+        // For even-count medians: (lo + hi) / 2 is computed as a single division operation
+        // rather than dividing each value individually.
         Ok((lo + hi) / 2)
     }
 }

@@ -1194,7 +1194,8 @@ impl PriceOracle {
             }
 
             // Normalize the raw price to 9 fixed-point decimals on entry.
-            let normalized = Self::normalize_price(&env, &asset, val);
+            // Decimals parameter indicates the precision of the input price.
+            let normalized = Self::normalize_price(&env, &asset, val, decimals);
 
             // INVARIANT: normalization must never produce a non-positive price.
             // A positive raw input scaled by a positive power of 10 must remain
@@ -1316,7 +1317,8 @@ impl PriceOracle {
         }
 
         // Normalize the raw price to 9 fixed-point decimals on entry.
-        let normalized = Self::normalize_price(&env, &asset, price);
+        // Decimals parameter indicates the precision of the input price.
+        let normalized = Self::normalize_price(&env, &asset, price, decimals);
 
         // INVARIANT: normalization must never produce a non-positive price.
         // A positive raw input scaled by a positive power of 10 must remain
@@ -1484,7 +1486,8 @@ impl PriceOracle {
         }
 
         // Normalize the raw price to 9 fixed-point decimals on entry.
-        let normalized = Self::normalize_price(&env, &asset, price);
+        // Decimals parameter indicates the precision of the input price.
+        let normalized = Self::normalize_price(&env, &asset, price, decimals);
 
         // INVARIANT: normalization must never produce a non-positive price.
         // A positive raw input scaled by a positive power of 10 must remain
@@ -2615,8 +2618,53 @@ impl PriceOracle {
         }
         Some(buffer)
     }
-    pub fn normalize_price(_env: &Env, _asset: &Symbol, price: i128) -> i128 {
-        price // Returns the integer directly
+    /// Normalize a raw price to 9 fixed-point decimals based on the input decimal precision.
+    ///
+    /// Performs decimal normalization by using multiplication for scale-ups (gas-efficient)
+    /// and division for scale-downs only when necessary. This optimizes gas usage by
+    /// ensuring all mathematical scaling operations happen before any division operations
+    /// in the aggregation pipeline.
+    ///
+    /// # Arguments
+    /// * `_env` - The contract environment
+    /// * `_asset` - The asset symbol (reserved for future use with asset-specific decimals)
+    /// * `price` - The raw price value to normalize
+    /// * `source_decimals` - The decimal precision of the input price
+    ///
+    /// # Returns
+    /// The price normalized to 9 fixed-point decimals
+    pub fn normalize_price(
+        _env: &Env,
+        _asset: &Symbol,
+        price: i128,
+        source_decimals: u32,
+    ) -> i128 {
+        const TARGET_DECIMALS: u32 = 9;
+
+        if source_decimals < TARGET_DECIMALS {
+            // Scale up: multiply by 10^(9 - source_decimals)
+            // This is gas-efficient as multiplication is cheaper than division
+            let diff = TARGET_DECIMALS - source_decimals;
+            let multiplier = 10_i128
+                .checked_pow(diff)
+                .expect("Overflow on multiplier pow in normalize_price");
+            price
+                .checked_mul(multiplier)
+                .expect("Overflow on price multiplication in normalize_price")
+        } else if source_decimals > TARGET_DECIMALS {
+            // Scale down: divide by 10^(source_decimals - 9)
+            // Deferred division happens only when necessary, reducing gas in aggregation loops
+            let diff = source_decimals - TARGET_DECIMALS;
+            let divisor = 10_i128
+                .checked_pow(diff)
+                .expect("Overflow on divisor pow in normalize_price");
+            price
+                .checked_div(divisor)
+                .expect("Overflow on price division in normalize_price")
+        } else {
+            // Already 9 decimals, return as-is
+            price
+        }
     }
     /// Get the number of unique relayer submissions for an asset in the current ledger.
     pub fn get_relayer_count(env: Env, asset: Symbol) -> u32 {
