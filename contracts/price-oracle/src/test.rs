@@ -2264,6 +2264,39 @@ fn test_cleared_delegate_cannot_vote_owner_weight() {
     }
 }
 
+#[test]
+fn test_proposal_records_voting_window_and_expires_votes() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(&env, &contract_id);
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+
+    client.init_admin(&admin1);
+    env.as_contract(&contract_id, || {
+        crate::auth::_add_authorized(&env, &admin2);
+    });
+
+    env.ledger().set_timestamp(1_000_000);
+    env.ledger().set_sequence_number(42);
+
+    let action_id = client.propose_action(&admin1, &0u32, &None, &String::from_str(&env, ""));
+    let proposed = client.get_proposed_action(&action_id).expect("proposal should exist");
+
+    assert_eq!(proposed.activation_ledger, 42);
+    assert_eq!(proposed.expiration_ledger, 42 + 86_400);
+
+    env.ledger().set_sequence_number(proposed.expiration_ledger + 1);
+
+    let result = client.try_vote_for_action(&admin2, &action_id);
+    match result {
+        Err(Ok(e)) => assert_eq!(e, Error::ProposalVotingExpired),
+        other => panic!("expected ProposalVotingExpired, got {:?}", other),
+    }
+}
+
 // ============================================================================
 // Self-Destruct Tests
 // ============================================================================

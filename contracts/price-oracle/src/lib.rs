@@ -11,6 +11,7 @@ use crate::types::{
     ProposedAction, RecentEvent,
 };
 const ADMIN_TIMELOCK: u64 = 86_400;
+const PROPOSAL_VOTING_WINDOW_LEDGERS: u32 = 86_400;
 const MAX_CLEAR_ASSETS: u32 = 20;
 
 /// A clean, gas-optimized interface for other Soroban contracts to fetch prices from StellarFlow.
@@ -349,6 +350,8 @@ pub enum Error {
     NoPreviousConfig = 23,
     /// Contract has not been initialized yet.
     NotInitialized = 24,
+    /// Proposal voting window has expired.
+    ProposalVotingExpired = 25,
 }
 
 #[contract]
@@ -2159,6 +2162,11 @@ impl PriceOracle {
             target: target.clone(),
             data: data.clone(),
             proposed_at: env.ledger().timestamp(),
+            activation_ledger: env.ledger().sequence(),
+            expiration_ledger: env
+                .ledger()
+                .sequence()
+                .saturating_add(PROPOSAL_VOTING_WINDOW_LEDGERS),
             executed: false,
             cancelled: false,
         };
@@ -2171,11 +2179,13 @@ impl PriceOracle {
 
         // Log the action
         let details = format!(
-            "action_id: {}, type: {}, target: {:?}, data: {}",
+            "action_id: {}, type: {}, target: {:?}, data: {}, activation_ledger: {}, expiration_ledger: {}",
             action_id,
             action_type,
             target.map(|t| t.to_string()).unwrap_or_default(),
-            data.to_string()
+            data.to_string(),
+            proposed.activation_ledger,
+            proposed.expiration_ledger
         );
         _log_admin_action(&env, &admin, AdminAction::ProposeAction, Some(details));
 
@@ -2223,6 +2233,11 @@ impl PriceOracle {
         }
         if proposed.cancelled {
             return Err(Error::ActionCancelled);
+        }
+
+        let current_ledger = env.ledger().sequence();
+        if current_ledger > proposed.expiration_ledger {
+            return Err(Error::ProposalVotingExpired);
         }
 
         let vote_count = crate::auth::_add_effective_action_votes(&env, action_id, &voter);

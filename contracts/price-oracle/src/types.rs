@@ -289,6 +289,10 @@ pub struct ProposedAction {
     pub data: soroban_sdk::String,
     /// Timestamp when the action was proposed.
     pub proposed_at: u64,
+    /// Ledger height when voting on the proposal becomes active.
+    pub activation_ledger: u32,
+    /// Ledger height after which voting is no longer accepted.
+    pub expiration_ledger: u32,
     /// Whether the action has been executed.
     pub executed: bool,
     /// Whether the action has been cancelled.
