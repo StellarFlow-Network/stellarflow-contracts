@@ -35,6 +35,8 @@ pub enum DataKey {
     CommunityPrice(Symbol),
     /// Query fee amount for get_price calls (in stroops).
     QueryFee,
+    /// Per-subscriber info (balance and expiry).
+    SubscriberInfo(Address),
     /// Destroyed flag to mark contract as permanently unusable.
     Destroyed,
     /// Asset decimal metadata (base_decimals, quote_decimals).
@@ -216,6 +218,15 @@ pub struct OracleHealth {
     pub total_assets: u32,
     /// Current ledger sequence number.
     pub last_ledger: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubscriberInfo {
+    /// Remaining prepaid balance (in stroops) for this subscriber.
+    pub balance: i128,
+    /// Expiry timestamp (seconds) of the subscription.
+    pub expiry: u64,
 }
 
 /// Callback payload sent to subscribed contracts when a price is updated.

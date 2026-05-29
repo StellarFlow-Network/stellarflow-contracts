@@ -10,6 +10,7 @@ use crate::types::{
     PriceBufferEntry, PriceData, PriceDataWithStatus, PriceEntryWithStatus, PriceUpdatePayload,
     ProposedAction, RecentEvent,
 };
+use crate::types::SubscriberInfo;
 const ADMIN_TIMELOCK: u64 = 86_400;
 const MAX_CLEAR_ASSETS: u32 = 20;
 
@@ -414,6 +415,10 @@ pub enum Error {
     NotInitialized = 24,
     /// Contract is emergency halted — all rate read queries are blocked.
     EmergencyHalted = 25,
+    /// Subscriber's subscription has expired or is not active.
+    SubscriptionExpired = 26,
+    /// Subscriber's prepaid balance has been depleted (run dry).
+    SubscriptionDepleted = 27,
 }
 
 #[contract]
@@ -573,6 +578,31 @@ pub fn is_stale(current_time: u64, stored_timestamp: u64, ttl: u64) -> bool {
 pub fn enforce_rate_map_max_age(env: &Env, current_time: u64, stored_timestamp: u64) {
     if current_time > stored_timestamp.saturating_add(MAX_RATE_AGE_SECONDS) {
         panic_with_error!(env, Error::StaleRateData);
+    }
+}
+
+/// Verify the invoker has an active subscription and a positive prepaid balance.
+/// Panics with `Error::SubscriptionExpired` when the subscription is missing or expired,
+/// and with `Error::SubscriptionDepleted` when the prepaid balance is zero or negative.
+pub fn enforce_subscriber_access(env: &Env) {
+    let caller = env.invoker();
+    let info: Option<SubscriberInfo> = env
+        .storage()
+        .instance()
+        .get(&DataKey::SubscriberInfo(caller.clone()));
+
+    let now = env.ledger().timestamp();
+
+    match info {
+        Some(s) => {
+            if now >= s.expiry {
+                panic_with_error!(env, Error::SubscriptionExpired);
+            }
+            if s.balance <= 0 {
+                panic_with_error!(env, Error::SubscriptionDepleted);
+            }
+        }
+        None => panic_with_error!(env, Error::SubscriptionExpired),
     }
 }
 
@@ -808,6 +838,7 @@ impl PriceOracle {
         if crate::auth::_is_halted(&env) {
             panic_with_error!(&env, Error::EmergencyHalted);
         }
+        enforce_subscriber_access(&env);
         if components.is_empty() {
             return Err(Error::AssetNotFound);
         }
@@ -1104,6 +1135,7 @@ impl PriceOracle {
         if crate::auth::_is_halted(&env) {
             panic_with_error!(&env, Error::EmergencyHalted);
         }
+        enforce_subscriber_access(&env);
         let key = if verified {
             DataKey::VerifiedPrice(asset)
         } else {
@@ -1130,6 +1162,7 @@ impl PriceOracle {
         if crate::auth::_is_halted(&env) {
             panic_with_error!(&env, Error::EmergencyHalted);
         }
+        enforce_subscriber_access(&env);
         match env
             .storage()
             .persistent()
@@ -1152,6 +1185,7 @@ impl PriceOracle {
         if crate::auth::_is_halted(&env) {
             panic_with_error!(&env, Error::EmergencyHalted);
         }
+        enforce_subscriber_access(&env);
         env.storage()
             .persistent()
             .get::<DataKey, PriceData>(&DataKey::VerifiedPrice(asset))
@@ -1165,6 +1199,7 @@ impl PriceOracle {
         if crate::auth::_is_halted(&env) {
             panic_with_error!(&env, Error::EmergencyHalted);
         }
+        enforce_subscriber_access(&env);
         let price_data = Self::get_price(env, asset, true)?;
         Ok(price_data.price)
     }
@@ -1182,6 +1217,7 @@ impl PriceOracle {
         if crate::auth::_is_halted(&env) {
             panic_with_error!(&env, Error::EmergencyHalted);
         }
+        enforce_subscriber_access(&env);
         let now = env.ledger().timestamp();
         let mut result = soroban_sdk::Vec::new(&env);
 
@@ -1225,6 +1261,10 @@ impl PriceOracle {
         env: Env,
         assets: soroban_sdk::Vec<Symbol>,
     ) -> soroban_sdk::Vec<Option<PriceEntryWithStatus>> {
+        if crate::auth::_is_halted(&env) {
+            panic_with_error!(&env, Error::EmergencyHalted);
+        }
+        enforce_subscriber_access(&env);
         let now = env.ledger().timestamp();
         let mut result = soroban_sdk::Vec::new(&env);
 
@@ -2780,6 +2820,7 @@ impl PriceOracle {
         if crate::auth::_is_halted(&env) {
             panic_with_error!(&env, Error::EmergencyHalted);
         }
+        enforce_subscriber_access(&env);
         let key = DataKey::Twap(asset);
         let twap_buffer: soroban_sdk::Vec<(u64, i128)> = env.storage().temporary().get(&key)?;
 
