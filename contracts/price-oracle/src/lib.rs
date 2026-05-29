@@ -574,16 +574,34 @@ fn has_provider_submitted(buffer: &PriceBuffer, provider: &Address) -> bool {
 }
 
 /// Calculate the median price from the buffer entries.
-/// Returns None if the buffer is empty.
-fn calculate_median_from_buffer(env: &Env, buffer: &PriceBuffer) -> Option<i128> {
+/// When `consensus_price` is Some(p) and p > 0, entries deviating by more than
+/// 50% from `p` are excluded before the median sort (issue #291).
+/// Returns None if the buffer is empty (or all entries are filtered out).
+fn calculate_median_from_buffer(env: &Env, buffer: &PriceBuffer, consensus_price: Option<i128>) -> Option<i128> {
     if buffer.entries.len() == 0 {
         return None;
     }
 
-    // Extract prices into a Vec for sorting
+    // Extract prices, filtering outliers when a consensus reference is available.
     let mut prices = soroban_sdk::Vec::new(env);
     for entry in buffer.entries.iter() {
-        prices.push_back(entry.price);
+        let include = match consensus_price {
+            Some(consensus) if consensus > 0 => {
+                // Keep entry only if deviation from consensus is ≤ 50%
+                // |entry.price - consensus| / consensus ≤ 0.5
+                // ⟺ |entry.price - consensus| * 2 ≤ consensus
+                let diff = (entry.price - consensus).unsigned_abs();
+                diff.saturating_mul(2) <= consensus.unsigned_abs()
+            }
+            _ => true,
+        };
+        if include {
+            prices.push_back(entry.price);
+        }
+    }
+
+    if prices.len() == 0 {
+        return None;
     }
 
     // Use the existing median calculation
@@ -1567,8 +1585,11 @@ impl PriceOracle {
         // Save the updated buffer
         set_price_buffer(&env, asset.clone(), &buffer);
 
-        // Calculate the new median and store it as the canonical price
-        let median_price = calculate_median_from_buffer(&env, &buffer).unwrap_or(normalized);
+        // Calculate the new median and store it as the canonical price.
+        // Pass old_price as the consensus reference so outliers (>50% deviation)
+        // are excluded from the median sort (issue #291).
+        let consensus = if old_price > 0 { Some(old_price) } else { None };
+        let median_price = calculate_median_from_buffer(&env, &buffer, consensus).unwrap_or(normalized);
 
         // INVARIANT: the median of a set of positive prices must itself be
         // positive. If this fires, the median aggregation logic has a bug.

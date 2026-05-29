@@ -2774,3 +2774,50 @@ fn test_enable_bypass_requires_admin() {
     // non_admin is not in the admin list — should panic.
     client.enable_bypass_safety_checks(&non_admin);
 }
+
+/// Issue #291: Outlier filtering for median price updates.
+///
+/// Submissions that deviate by more than 50% from the previous consensus price
+/// must be excluded before the median sort.
+#[test]
+fn test_outlier_filtering_excludes_manipulated_submissions() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let provider1 = Address::generate(&env);
+    let provider2 = Address::generate(&env);
+    let provider3 = Address::generate(&env);
+    let asset = symbol_short!("NGN");
+
+    env.ledger().set_sequence_number(1);
+    env.ledger().set_timestamp(1_000_000);
+
+    set_admin(&env, &contract_id, &admin);
+    add_provider(&env, &contract_id, &provider1);
+    add_provider(&env, &contract_id, &provider2);
+    add_provider(&env, &contract_id, &provider3);
+    client.add_asset(&admin, &asset);
+
+    // Seed an initial consensus price of 1_000 (2 decimals → normalized to 100_000_000_000).
+    // Use a large max deviation so the seeding call is not blocked.
+    client.set_max_deviation_percentage(&admin, &10_000_i128);
+    client.update_price(&provider1, &asset, &1_000_i128, &2u32, &100u32, &3_600u64);
+
+    // Advance to a new ledger so the buffer is fresh.
+    env.ledger().set_sequence_number(2);
+    env.ledger().set_timestamp(1_000_001);
+
+    // provider1 and provider2 submit honest prices close to consensus.
+    // provider3 submits a manipulated price >50% above consensus — should be filtered.
+    // Consensus (normalized) ≈ 100_000_000_000 (1_000 with 2 dec → 9 dec).
+    // Honest: 1_000 and 1_010 (within 50%).
+    // Outlier: 2_000 (100% above consensus — must be excluded).
+    client.update_price(&provider1, &asset, &1_000_i128, &2u32, &100u32, &3_600u64);
+    client.update_price(&provider2, &asset, &1_010_i128, &2u32, &100u32, &3_600u64);
+    client.update_price(&provider3, &asset, &2_000_i128, &2u32, &100u32, &3_600u64);
+
+    // The median should be computed from only the two honest submissions (1_000 and 1_010),
+    // yielding (100_000_000_000 + 101_000_000_000) / 2 = 100_500_000_000.
+    // If the outlier were included the median of three values would be 101_000_000_000.
+    let stored = client.get_price(&asset, &true);
+    assert_eq!(stored.price, 100_500_000_000_i128, "outlier should be excluded from median");
+}
