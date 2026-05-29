@@ -8,10 +8,14 @@ use soroban_sdk::{
 use crate::types::{
     AdminAction, AdminLogEntry, AssetInfo, AssetMeta, DataKey, PriceBounds, PriceBuffer,
     PriceBufferEntry, PriceData, PriceDataWithStatus, PriceEntryWithStatus, PriceUpdatePayload,
-    ProposedAction, RecentEvent,
+    ProposedAction, RecentEvent, UnbondingRequest,
 };
 const ADMIN_TIMELOCK: u64 = 86_400;
 const MAX_CLEAR_ASSETS: u32 = 20;
+/// Number of ledgers a relayer must wait after requesting a withdrawal before
+/// stake can be released. Prevents instant unstaking after a malicious price
+/// submission from draining security collateral.
+const UNBONDING_FREEZE_LEDGERS: u32 = 10_000;
 
 /// A clean, gas-optimized interface for other Soroban contracts to fetch prices from StellarFlow.
 ///
@@ -2783,6 +2787,88 @@ impl PriceOracle {
     /// care about liveness should compare against the current ledger timestamp.
     pub fn get_bypass_safety_checks_expiry(env: Env) -> Option<u64> {
         crate::auth::_get_bypass_expiry(&env)
+    }
+
+    // ── Unbonding / Withdrawal (10,000-ledger freeze window) ─────────────────
+
+    /// Request a stake withdrawal for a whitelisted relayer.
+    ///
+    /// Records the current ledger sequence and the requested `amount` under
+    /// `DataKey::UnbondRequest(relayer)`. The relayer's stake is frozen for
+    /// exactly `UNBONDING_FREEZE_LEDGERS` (10,000) ledgers from this point.
+    ///
+    /// Panics if the relayer already has a pending unbonding request.
+    pub fn request_withdrawal(env: Env, relayer: Address, amount: i128) -> Result<(), Error> {
+        _require_not_destroyed(&env);
+        _require_initialized(&env);
+        crate::auth::_require_not_frozen(&env);
+        relayer.require_auth();
+        crate::auth::_require_provider(&env, &relayer);
+
+        let key = DataKey::UnbondRequest(relayer.clone());
+        if env.storage().persistent().has(&key) {
+            panic!("unbonding request already pending");
+        }
+
+        let req = UnbondingRequest {
+            request_ledger: env.ledger().sequence(),
+            amount,
+        };
+        env.storage().persistent().set(&key, &req);
+
+        env.events().publish(
+            (Symbol::new(&env, "unbond_requested"),),
+            (relayer, req.request_ledger, amount),
+        );
+
+        Ok(())
+    }
+
+    /// Release a relayer's stake after the 10,000-ledger unbonding window has passed.
+    ///
+    /// Verifies that at least `UNBONDING_FREEZE_LEDGERS` ledgers have elapsed
+    /// since the matching `request_withdrawal` call, then removes the pending
+    /// request. Token transfer logic should follow this call in the integrating
+    /// contract once the guard passes.
+    ///
+    /// Panics if no pending request exists or the freeze window has not expired.
+    pub fn release_stake(env: Env, relayer: Address) -> Result<i128, Error> {
+        _require_not_destroyed(&env);
+        _require_initialized(&env);
+        crate::auth::_require_not_frozen(&env);
+        relayer.require_auth();
+
+        let key = DataKey::UnbondRequest(relayer.clone());
+        let req: UnbondingRequest = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| panic!("no pending unbonding request"));
+
+        let current_ledger = env.ledger().sequence();
+        let elapsed = current_ledger.saturating_sub(req.request_ledger);
+        if elapsed < UNBONDING_FREEZE_LEDGERS {
+            panic!(
+                "unbonding freeze active: {} ledgers remaining",
+                UNBONDING_FREEZE_LEDGERS - elapsed
+            );
+        }
+
+        env.storage().persistent().remove(&key);
+
+        env.events().publish(
+            (Symbol::new(&env, "stake_released"),),
+            (relayer, req.amount),
+        );
+
+        Ok(req.amount)
+    }
+
+    /// Get the pending unbonding request for a relayer, if any.
+    pub fn get_unbonding_request(env: Env, relayer: Address) -> Option<UnbondingRequest> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::UnbondRequest(relayer))
     }
 }
 

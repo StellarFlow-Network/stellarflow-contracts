@@ -73,6 +73,9 @@ pub enum DataKey {
     PrevPriceFloorEntry(Symbol),
     /// Minimum number of votes required for a governance action to reach quorum.
     MinQuorumThreshold,
+    /// Unbonding withdrawal request for a relayer: stores the ledger sequence at which
+    /// the request was made so the 10,000-ledger freeze window can be enforced.
+    UnbondRequest(Address),
 }
 
 /// Decimal metadata for an asset pair.
@@ -306,4 +309,17 @@ pub struct AssetWeight {
     pub asset: Symbol,
     /// Weight in basis points (0–10000). All weights in a basket should sum to 10000.
     pub weight: u32,
+}
+
+/// Pending unbonding request for a relayer.
+///
+/// Created by `request_withdrawal`; consumed (and deleted) by `release_stake`
+/// once the 10,000-ledger freeze window has elapsed.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UnbondingRequest {
+    /// Ledger sequence number at which the withdrawal was requested.
+    pub request_ledger: u32,
+    /// Amount of stake the relayer wishes to withdraw.
+    pub amount: i128,
 }

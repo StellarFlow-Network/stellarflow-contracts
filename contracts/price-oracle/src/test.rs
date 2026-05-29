@@ -2774,3 +2774,94 @@ fn test_enable_bypass_requires_admin() {
     // non_admin is not in the admin list — should panic.
     client.enable_bypass_safety_checks(&non_admin);
 }
+
+// ── Unbonding freeze window tests ────────────────────────────────────────────
+
+fn initialized_client_with_relayer(
+    env: &Env,
+) -> (Address, PriceOracleClient<'static>, Address) {
+    let contract_id = env.register(PriceOracle, ());
+    let client = PriceOracleClient::new(env, &contract_id);
+    let admin = Address::generate(env);
+    let relayer = Address::generate(env);
+
+    client.initialize(&admin, &soroban_sdk::Vec::new(env));
+    env.as_contract(&contract_id, || {
+        crate::auth::_add_provider(env, &relayer);
+    });
+
+    (contract_id, client, relayer)
+}
+
+#[test]
+fn test_request_withdrawal_stores_unbonding_request() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_sequence_number(100);
+
+    let (_contract_id, client, relayer) = initialized_client_with_relayer(&env);
+
+    client.request_withdrawal(&relayer, &5_000_i128);
+
+    let req = client.get_unbonding_request(&relayer).expect("request should exist");
+    assert_eq!(req.request_ledger, 100);
+    assert_eq!(req.amount, 5_000);
+}
+
+#[test]
+#[should_panic(expected = "unbonding freeze active")]
+fn test_release_stake_blocked_before_freeze_window_expires() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_sequence_number(100);
+
+    let (_contract_id, client, relayer) = initialized_client_with_relayer(&env);
+    client.request_withdrawal(&relayer, &5_000_i128);
+
+    // Advance only 9,999 ledgers — one short of the required 10,000.
+    env.ledger().set_sequence_number(10_099);
+    client.release_stake(&relayer);
+}
+
+#[test]
+fn test_release_stake_succeeds_after_freeze_window_expires() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_sequence_number(100);
+
+    let (_contract_id, client, relayer) = initialized_client_with_relayer(&env);
+    client.request_withdrawal(&relayer, &5_000_i128);
+
+    // Advance exactly 10,000 ledgers.
+    env.ledger().set_sequence_number(10_100);
+    let released = client.release_stake(&relayer);
+    assert_eq!(released, 5_000);
+
+    // Request should be cleared after release.
+    assert!(client.get_unbonding_request(&relayer).is_none());
+}
+
+#[test]
+#[should_panic(expected = "unbonding request already pending")]
+fn test_duplicate_withdrawal_request_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_sequence_number(100);
+
+    let (_contract_id, client, relayer) = initialized_client_with_relayer(&env);
+    client.request_withdrawal(&relayer, &1_000_i128);
+    // Second request before the first is released must panic.
+    client.request_withdrawal(&relayer, &2_000_i128);
+}
+
+#[test]
+#[should_panic(expected = "no pending unbonding request")]
+fn test_release_stake_without_request_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_sequence_number(100);
+
+    let (_contract_id, client, relayer) = initialized_client_with_relayer(&env);
+    // No request was made — should panic.
+    client.release_stake(&relayer);
+}
