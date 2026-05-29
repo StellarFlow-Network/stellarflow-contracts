@@ -1,7 +1,9 @@
 //! FE-208: Re-entrancy guard for sensitive governance functions.
 //! Uses a `lock` flag in instance storage to prevent re-entrant calls.
 
-use soroban_sdk::{contracttype, Env};
+use soroban_sdk::{contracttype, panic_with_error, Env};
+
+use crate::Error;
 
 #[contracttype]
 pub enum LockKey {
@@ -16,7 +18,7 @@ pub fn acquire_lock(env: &Env) {
         .get(&LockKey::ReentrancyLock)
         .unwrap_or(false);
     if locked {
-        panic!("re-entrancy detected");
+        panic_with_error!(env, Error::ReentrancyDetected);
     }
     env.storage()
         .instance()

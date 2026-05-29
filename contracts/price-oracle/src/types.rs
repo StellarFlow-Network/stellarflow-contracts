@@ -8,11 +8,17 @@ pub enum DataKey {
     BaseCurrencyPairs,
     /// Legacy flat price map — kept for migration compatibility only.
     PriceData,
+    /// Legacy single-key buffer map — superseded by PriceBufferByAsset(Symbol, u64).
+    /// Kept for migration compatibility only; no longer written by new code.
     PriceBuffer,
+    /// Legacy single-key bounds map — superseded by PriceBoundsEntry(Symbol).
+    /// Kept for migration compatibility only; no longer written by new code.
     PriceBoundsData,
     /// Configurable global maximum allowed price deviation in basis points.
     MaxPriceDeviationBps,
     IsLocked,
+    /// Legacy single-key floor map — superseded by PriceFloorEntry(Symbol).
+    /// Kept for migration compatibility only; no longer written by new code.
     PriceFloorData,
     AssetDescription(Symbol),
     PendingAdmin,
@@ -41,6 +47,51 @@ pub enum DataKey {
     TrackedAsset(Symbol),
     /// Pre-approved validator public keys for Ed25519 off-chain signatures.
     Validator(soroban_sdk::BytesN<32>),
+
+    /// Composite-key price buffer: one storage slot per (asset, ledger_sequence) pair.
+    ///
+    /// Replaces the legacy `PriceBuffer` map so a single-asset read no longer
+    /// loads every other asset's buffer. The `u64` component is the ledger
+    /// sequence number, which naturally scopes each buffer to one ledger.
+    PriceBufferByAsset(Symbol, u64),
+
+    /// Composite-key price bounds: one storage slot per asset.
+    ///
+    /// Replaces the legacy `PriceBoundsData` map so reading one asset's bounds
+    /// does not load bounds for every other asset.
+    PriceBoundsEntry(Symbol),
+
+    /// Composite-key price floor: one storage slot per asset.
+    ///
+    /// Replaces the legacy `PriceFloorData` map so reading one asset's floor
+    /// does not load floors for every other asset.
+    PriceFloorEntry(Symbol),
+
+    /// Composite-key price entry: one storage slot per (asset, sequence) pair.
+    ///
+    /// Used by `clear_assets` and snapshot tests that reference `DataKey::Price`.
+    Price(Symbol),
+
+    /// Rollback slot for per-asset price bounds — written before every bounds update.
+    PrevPriceBoundsEntry(Symbol),
+
+    /// Rollback slot for the global max deviation percentage — written before every update.
+    PrevMaxDeviationBps,
+
+    /// Rollback slot for per-asset price floor — written before every floor update.
+    PrevPriceFloorEntry(Symbol),
+
+    /// Minimum number of votes required for a governance action to reach quorum.
+    MinQuorumThreshold,
+
+    /// Staked collateral balance for a relayer/provider (i128, in token stroops).
+    ProviderStake(Address),
+
+    /// The SEP-41 token contract address used for staking and slashing.
+    SlashToken,
+
+    /// The address of the ecosystem insurance reserve that receives slashed funds.
+    InsuranceReserve,
 }
 
 /// Decimal metadata for an asset pair.
@@ -71,6 +122,14 @@ pub struct AssetInfo {
     /// Native decimal precision of the quote asset.
     pub quote_decimals: u32,
 }
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssetWeight {
+    pub asset: Symbol,
+    pub weight: u32,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PriceData {
@@ -223,6 +282,12 @@ pub enum AdminAction {
     EnableBypassSafetyChecks,
     /// Admin disabled the safety-checks grace-period bypass
     DisableBypassSafetyChecks,
+    /// Governance-gated slash of a malicious relayer's staked collateral
+    Slash,
+    /// Admin set the insurance reserve address
+    SetInsuranceReserve,
+    /// Admin set the slash token address
+    SetSlashToken,
 }
 
 /// Admin log entry for tracking admin actions.
@@ -264,4 +329,19 @@ pub struct PricePayload {
     pub decimals: u32,
     pub confidence_score: u32,
     pub ttl: u64,
+}
+
+/// A weighted component of a multi-asset index basket.
+///
+/// Used by `get_index_price` to compute a weighted average across assets.
+/// `weight` is expressed in basis points (e.g. 4000 = 40%).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssetWeight {
+    /// The asset symbol (e.g. NGN, KES, GHS).
+    pub asset: Symbol,
+
+    /// Weight in basis points (0–10000). All weights in a basket should sum to 10000.
+    pub weight: u32,
+}
 }

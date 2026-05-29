@@ -5,6 +5,18 @@ edition = "2021"
 authors = ["StellarFlow Network"]
 description = "StellarFlow smart contracts with time-locked upgrade mechanism"
 
+[workspace]
+members = [
+    "contracts/hello-world",
+    "contracts/ledger-time-helper",
+    "contracts/price-oracle",
+    "contracts/reward-splitter",
+]
+resolver = "2"
+
+[workspace.dependencies]
+soroban-sdk = "20.0.0"
+
 [dependencies]
 soroban-sdk = "20.0.0"
 soroban-token-sdk = "20.0.0"

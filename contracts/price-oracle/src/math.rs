@@ -1,5 +1,7 @@
 use soroban_sdk::{Env, String};
 
+use crate::Error;
+
 /// Format a scaled integer price into a human-readable decimal string.
 ///
 /// Inserts a decimal point at the position indicated by `decimals`.
@@ -96,17 +98,17 @@ use soroban_sdk::{Env, String};
 //     String::from_bytes(env, &out[..pos])
 // }
 
-pub fn normalize_to_seven(value: i128, input_decimals: u32) -> i128 {
+pub fn normalize_to_seven(value: i128, input_decimals: u32) -> Result<i128, Error> {
     if input_decimals < 7 {
         let diff = 7 - input_decimals;
-        let multiplier = 10_i128.checked_pow(diff).expect("Overflow on multiplier pow");
-        value.checked_mul(multiplier).expect("Overflow on multiplication")
+        let multiplier = 10_i128.checked_pow(diff).ok_or(Error::PriceMathOverflow)?;
+        value.checked_mul(multiplier).ok_or(Error::PriceMathOverflow)
     } else if input_decimals > 7 {
         let diff = input_decimals - 7;
-        let divisor = 10_i128.checked_pow(diff).expect("Overflow on divisor pow");
-        value.checked_div(divisor).expect("Overflow on division")
+        let divisor = 10_i128.checked_pow(diff).ok_or(Error::PriceMathOverflow)?;
+        value.checked_div(divisor).ok_or(Error::PriceMathOverflow)
     } else {
-        value
+        Ok(value)
     }
 }
 
@@ -125,18 +127,18 @@ pub fn normalize_to_seven(value: i128, input_decimals: u32) -> i128 {
 /// normalize_to_nine(1_000_000_000, 9) => 1_000_000_000  (already 9 dec, no-op)
 /// normalize_to_nine(1_000_000_000_00, 11) => 1_000_000_000 (scale down)
 /// ```
-pub fn normalize_to_nine(value: i128, native_decimals: u32) -> i128 {
+pub fn normalize_to_nine(value: i128, native_decimals: u32) -> Result<i128, Error> {
     const TARGET: u32 = 9;
     if native_decimals < TARGET {
         let diff = TARGET - native_decimals;
-        let multiplier = 10_i128.checked_pow(diff).expect("Overflow on multiplier pow");
-        value.checked_mul(multiplier).expect("Overflow on multiplication")
+        let multiplier = 10_i128.checked_pow(diff).ok_or(Error::PriceMathOverflow)?;
+        value.checked_mul(multiplier).ok_or(Error::PriceMathOverflow)
     } else if native_decimals > TARGET {
         let diff = native_decimals - TARGET;
-        let divisor = 10_i128.checked_pow(diff).expect("Overflow on divisor pow");
-        value.checked_div(divisor).expect("Overflow on division")
+        let divisor = 10_i128.checked_pow(diff).ok_or(Error::PriceMathOverflow)?;
+        value.checked_div(divisor).ok_or(Error::PriceMathOverflow)
     } else {
-        value
+        Ok(value)
     }
 }
 
@@ -168,7 +170,6 @@ pub fn calculate_inverse_price(price: i128, decimals: u32) -> Option<i128> {
 mod tests {
     use super::*;
     use soroban_sdk::Env;
-    feat/190-multi-asset-index-price
 
     // --- format_price tests ---------------------------------------------------
 
@@ -224,17 +225,17 @@ mod tests {
 
     #[test]
     fn test_normalize_to_seven_scale_up() {
-        assert_eq!(normalize_to_seven(150, 2), 15_000_000);
+        assert_eq!(normalize_to_seven(150, 2), Ok(15_000_000));
     }
 
     #[test]
     fn test_normalize_to_seven_scale_down() {
-        assert_eq!(normalize_to_seven(100_000_000, 9), 1_000_000);
+        assert_eq!(normalize_to_seven(100_000_000, 9), Ok(1_000_000));
     }
 
     #[test]
     fn test_normalize_to_seven_no_scale() {
-        assert_eq!(normalize_to_seven(1234567, 7), 1234567);
+        assert_eq!(normalize_to_seven(1234567, 7), Ok(1234567));
     }
 
     // --- normalize_to_nine tests ---------------------------------------------
@@ -242,30 +243,30 @@ mod tests {
     #[test]
     fn test_normalize_to_nine_scale_up_from_7() {
         // XLM has 7 decimals: multiply by 10^2
-        assert_eq!(normalize_to_nine(10_000_000, 7), 1_000_000_000);
+        assert_eq!(normalize_to_nine(10_000_000, 7), Ok(1_000_000_000));
     }
 
     #[test]
     fn test_normalize_to_nine_scale_up_from_2() {
         // NGN has 2 decimals: multiply by 10^7
-        assert_eq!(normalize_to_nine(100, 2), 10_000_000_000);
+        assert_eq!(normalize_to_nine(100, 2), Ok(10_000_000_000));
     }
 
     #[test]
     fn test_normalize_to_nine_no_scale() {
         // Already 9 decimals — no-op
-        assert_eq!(normalize_to_nine(1_000_000_000, 9), 1_000_000_000);
+        assert_eq!(normalize_to_nine(1_000_000_000, 9), Ok(1_000_000_000));
     }
 
     #[test]
     fn test_normalize_to_nine_scale_down() {
         // 11 decimals → divide by 10^2
-        assert_eq!(normalize_to_nine(100_000_000_000, 11), 1_000_000_000);
+        assert_eq!(normalize_to_nine(100_000_000_000, 11), Ok(1_000_000_000));
     }
 
     #[test]
     fn test_normalize_to_nine_zero_decimals() {
         // 0 native decimals → multiply by 10^9
-        assert_eq!(normalize_to_nine(1, 0), 1_000_000_000);
+        assert_eq!(normalize_to_nine(1, 0), Ok(1_000_000_000));
     }
 }

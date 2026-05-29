@@ -1,4 +1,5 @@
 use soroban_sdk::{Address, BytesN, Env};
+use soroban_sdk::testutils::Address as _;
 
 // Example usage of the Time-Locked Upgrade Contract
 // This demonstrates the complete upgrade flow
@@ -7,14 +8,14 @@ pub fn example_upgrade_flow() {
     let env = Env::default();
     
     // Contract setup (in real deployment, you'd get this from deployment)
-    let contract_address = Address::generate(&env);
+    let _contract_address = Address::generate(&env);
     
     // Admin address (should be your actual admin address)
     let admin = Address::generate(&env);
     
     // Step 1: Initialize the contract
     // stellar contract invoke --id <CONTRACT_ID> -- initialize --admin <ADMIN_ADDRESS>
-    println!("🔧 Initializing contract with admin: {}", admin);
+    println!("🔧 Initializing contract with admin: {:?}", admin);
     
     // Step 2: Prepare new WASM hash
     // This would be the hash of your new contract code
@@ -57,14 +58,20 @@ pub fn example_status_check() {
 
 // Example of emergency upgrade cancellation
 pub fn example_cancellation() {
-    let env = Env::default();
-    let admin = Address::generate(&env);
+    let _env = Env::default();
+    let admin = Address::generate(&_env);
     
     println!("🚨 Emergency upgrade cancellation:");
     
     // If you need to cancel a pending upgrade
     // stellar contract invoke --id <CONTRACT_ID> -- cancel_upgrade --canceller <ADMIN_ADDRESS>
     
-    println!("⚠️  Upgrade cancelled by admin: {}", admin);
+    println!("⚠️  Upgrade cancelled by admin: {:?}", admin);
     println!("📋 Pending upgrade removed from contract state");
+}
+
+fn main() {
+    example_upgrade_flow();
+    example_status_check();
+    example_cancellation();
 }
