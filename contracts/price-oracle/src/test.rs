@@ -256,6 +256,24 @@ fn test_set_and_get_max_deviation_percentage() {
 }
 
 #[test]
+fn test_set_deviation_threshold_enforces_ten_percent_maximum() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+
+    set_admin(&env, &contract_id, &admin);
+    client.set_deviation_threshold(&admin, &1_000u32);
+
+    let max_deviation = client.get_max_deviation_percentage();
+    assert_eq!(max_deviation, 1_000_i128);
+
+    let result = client.try_set_deviation_threshold(&admin, &1_001u32);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, Error::InvalidMaxDeviation),
+        other => panic!("expected InvalidMaxDeviation, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_update_price_rejects_configured_max_deviation() {
     let (env, contract_id, client) = setup();
     let admin = Address::generate(&env);

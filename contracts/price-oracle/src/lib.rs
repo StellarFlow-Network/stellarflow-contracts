@@ -100,6 +100,10 @@ pub trait StellarFlowTrait {
     /// Any attempted price update below this value will be rejected.
     fn set_price_floor(env: Env, admin: Address, asset: Symbol, price_floor: i128);
 
+    /// Set the maximum allowed deviation threshold for price updates.
+    /// This is expressed in basis points and is capped at 10% (1000 bps).
+    fn set_deviation_threshold(env: Env, admin: Address, new_threshold: u32);
+
     /// Get the configured absolute floor price for an asset, if any.
     fn get_price_floor(env: Env, asset: Symbol) -> Option<i128>;
 
@@ -382,38 +386,40 @@ pub enum Error {
     PriceDeltaExceeded = 8,
     /// Price is outside the configured min/max bounds for the asset.
     PriceOutOfBounds = 9,
+    /// Invalid maximum deviation threshold; must be between 1 and 1000 basis points.
+    InvalidMaxDeviation = 10,
     /// Provider weight must be between 0 and 100.
-    InvalidWeight = 10,
+    InvalidWeight = 11,
     /// Multi-signature validation failed - insufficient or invalid admin signatures.
-    MultiSigValidationFailed = 11,
+    MultiSigValidationFailed = 12,
     /// Cannot add more admins - maximum of 3 admins allowed.
-    MaxAdminsReached = 12,
+    MaxAdminsReached = 13,
     /// Cannot remove admin - would leave contract without any admins.
-    CannotRemoveLastAdmin = 13,
+    CannotRemoveLastAdmin = 14,
     /// Reentrancy detected - function is already executing.
-    ReentrancyDetected = 14,
+    ReentrancyDetected = 15,
     /// Action not found or already executed/cancelled.
-    ActionNotFound = 15,
+    ActionNotFound = 16,
     /// Vote threshold not reached - insufficient approvals.
-    ThresholdNotReached = 16,
+    ThresholdNotReached = 17,
     /// Invalid action type for execution.
-    InvalidActionType = 17,
+    InvalidActionType = 18,
     /// Action has already been executed.
-    ActionAlreadyExecuted = 18,
+    ActionAlreadyExecuted = 19,
     /// Action has been cancelled.
-    ActionCancelled = 19,
+    ActionCancelled = 20,
     /// Contract has been permanently destroyed.
-    ContractDestroyed = 20,
+    ContractDestroyed = 21,
     /// Delegate assignment is invalid.
-    InvalidDelegate = 21,
+    InvalidDelegate = 22,
     /// Governance action cannot execute: total votes cast are below the minimum quorum.
-    QuorumNotReached = 22,
+    QuorumNotReached = 23,
     /// Config rollback failed: no previous value has been backed up for this parameter.
-    NoPreviousConfig = 23,
+    NoPreviousConfig = 24,
     /// Contract has not been initialized yet.
-    NotInitialized = 24,
+    NotInitialized = 25,
     /// Contract is emergency halted — all rate read queries are blocked.
-    EmergencyHalted = 25,
+    EmergencyHalted = 26,
 }
 
 #[contract]
@@ -1866,7 +1872,7 @@ impl PriceOracle {
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
 
-        if max_deviation_bps <= 0 || max_deviation_bps > 10_000 {
+        if max_deviation_bps <= 0 || max_deviation_bps > MAX_PERCENT_CHANGE_BPS {
             panic_with_error!(&env, Error::InvalidMaxDeviation);
         }
 
@@ -1884,6 +1890,13 @@ impl PriceOracle {
         env.storage()
             .persistent()
             .set(&DataKey::MaxPriceDeviationBps, &max_deviation_bps);
+    }
+
+    /// Set the maximum allowed price deviation threshold in basis points.
+    /// Admin-only. This is capped at 10% (1000 basis points).
+    pub fn set_deviation_threshold(env: Env, admin: Address, new_threshold: u32) {
+        let max_deviation_bps = i128::from(new_threshold);
+        Self::set_max_deviation_percentage(env, admin, max_deviation_bps);
     }
 
     /// Restore the previous max deviation percentage (issue #281).
