@@ -419,6 +419,127 @@ pub struct RescueTokensEvent {
     pub amount: i128,
 }
 
+#[soroban_sdk::contractevent]
+pub struct AdminChangedEvent {
+    pub admin: Address,
+}
+
+#[soroban_sdk::contractevent]
+pub struct PauseToggledEvent {
+    pub admin1: Address,
+    pub admin2: Address,
+    pub paused: bool,
+}
+
+#[soroban_sdk::contractevent]
+pub struct AdminRegisteredEvent {
+    pub admin1: Address,
+    pub admin2: Address,
+    pub new_admin: Address,
+}
+
+#[soroban_sdk::contractevent]
+pub struct AdminRemovedEvent {
+    pub admin1: Address,
+    pub admin2: Address,
+    pub removed_admin: Address,
+}
+
+#[soroban_sdk::contractevent]
+pub struct ContractDestroyedEvent {
+    pub admin1: Address,
+    pub admin2: Address,
+}
+
+#[soroban_sdk::contractevent]
+pub struct ContractUpgradedEvent {
+    pub executor: Address,
+}
+
+#[soroban_sdk::contractevent]
+pub struct ActionProposedEvent {
+    pub action_id: u64,
+    pub admin: Address,
+    pub action_type: u32,
+}
+
+#[soroban_sdk::contractevent]
+pub struct ActionVotedEvent {
+    pub action_id: u64,
+    pub voter: Address,
+    pub vote_count: u32,
+}
+
+#[soroban_sdk::contractevent]
+pub struct ActionExecutedEvent {
+    pub action_id: u64,
+    pub executor: Address,
+}
+
+#[soroban_sdk::contractevent]
+pub struct ActionCancelledEvent {
+    pub action_id: u64,
+    pub canceller: Address,
+}
+
+#[soroban_sdk::contractevent]
+pub struct CouncilSetEvent {
+    pub admin: Address,
+    pub council: Address,
+}
+
+#[soroban_sdk::contractevent]
+pub struct EmergencyFreezeEvent {
+    pub council: Address,
+}
+
+#[soroban_sdk::contractevent]
+pub struct UnbondRequestedEvent {
+    pub relayer: Address,
+    pub request_ledger: u32,
+    pub amount: i128,
+}
+
+#[soroban_sdk::contractevent]
+pub struct StakeReleasedEvent {
+    pub relayer: Address,
+    pub amount: i128,
+}
+
+#[soroban_sdk::contractevent]
+pub struct VoteDelegatedEvent {
+    pub owner: Address,
+    pub delegate: Address,
+}
+
+#[soroban_sdk::contractevent]
+pub struct VoteDelegateClearedEvent {
+    pub owner: Address,
+}
+
+#[soroban_sdk::contractevent]
+pub struct QuorumSetEvent {
+    pub admin: Address,
+    pub threshold: u32,
+}
+
+#[soroban_sdk::contractevent]
+pub struct AdminTransferInitiatedEvent {
+    pub current_admin: Address,
+    pub new_admin: Address,
+}
+
+#[soroban_sdk::contractevent]
+pub struct AdminTransferAcceptedEvent {
+    pub new_admin: Address,
+}
+
+#[soroban_sdk::contractevent]
+pub struct CommunityPriceUpdatedEvent {
+    pub asset: Symbol,
+    pub price: i128,
+}
+
 /// Returns the signed percentage change in basis points.
 ///
 /// Example: 1_000_000 -> 1_200_000 returns 2_000 (20.00%).
@@ -702,15 +823,11 @@ impl PriceOracle {
             panic_with_error!(&env, Error::AlreadyInitialized);
         }
 
-        #[allow(deprecated)]
-        env.events()
-            .publish((Symbol::new(&env, "AdminChanged"),), admin.clone());
-
-        // Emit ContractInitialized event to log when the Oracle goes live
-        env.events().publish(
-            (Symbol::new(&env, "ContractInitialized"),),
-            (admin.clone(), String::from_str(&env, VERSION)),
-        );
+        env.events().publish_event(&AdminChangedEvent { admin: admin.clone() });
+        env.events().publish_event(&ContractInitialized {
+            admin: admin.clone(),
+            version: String::from_str(&env, VERSION),
+        });
 
         //_log_admin_action(&env, &admin, AdminAction::Initialize, None);
         let admins = soroban_sdk::vec![&env, admin];
@@ -790,15 +907,11 @@ impl PriceOracle {
             panic_with_error!(&env, Error::AlreadyInitialized);
         }
 
-        #[allow(deprecated)]
-        env.events()
-            .publish((Symbol::new(&env, "AdminChanged"),), admin.clone());
-
-        // Emit ContractInitialized event to log when the Oracle goes live
-        env.events().publish(
-            (Symbol::new(&env, "ContractInitialized"),),
-            (admin.clone(), String::from_str(&env, VERSION)),
-        );
+        env.events().publish_event(&AdminChangedEvent { admin: admin.clone() });
+        env.events().publish_event(&ContractInitialized {
+            admin: admin.clone(),
+            version: String::from_str(&env, VERSION),
+        });
 
         //_log_admin_action(&env, &admin, AdminAction::InitAdmin, None);
         let admins = soroban_sdk::vec![&env, admin];
@@ -845,7 +958,6 @@ impl PriceOracle {
         env.events().publish_event(&AssetAddedEvent {
             symbol: asset.clone(),
         });
-        log_event(&env, Symbol::new(&env, "asset_added"), asset, 0);
 
         Ok(())
     }
@@ -943,6 +1055,10 @@ impl PriceOracle {
         env.storage()
             .instance()
             .set(&DataKey::PendingAdminTimestamp, &now);
+        env.events().publish_event(&AdminTransferInitiatedEvent {
+            current_admin,
+            new_admin,
+        });
     }
 
     /// Finalizes the admin transfer after the timelock expires.
@@ -984,6 +1100,7 @@ impl PriceOracle {
         env.storage()
             .instance()
             .remove(&DataKey::PendingAdminTimestamp);
+        env.events().publish_event(&AdminTransferAcceptedEvent { new_admin });
     }
 
     /// Permanently renounce ownership of the contract.
@@ -1262,7 +1379,6 @@ impl PriceOracle {
                         asset: asset.clone(),
                         price: val,
                     });
-                    log_event(&env, Symbol::new(&env, "price_updated"), asset, val);
                     return Ok(());
                 }
             }
@@ -1284,19 +1400,7 @@ impl PriceOracle {
                 env.events().publish_event(&AssetAddedEvent {
                     symbol: asset.clone(),
                 });
-                log_event(
-                    &env,
-                    Symbol::new(&env, "asset_added"),
-                    asset.clone(),
-                    normalized,
-                );
             } else {
-                log_event(
-                    &env,
-                    Symbol::new(&env, "price_updated"),
-                    asset.clone(),
-                    normalized,
-                );
                 env.events().publish_event(&PriceUpdatedEvent {
                     asset: asset.clone(),
                     price: normalized,
@@ -1376,12 +1480,10 @@ impl PriceOracle {
             .persistent()
             .set(&DataKey::CommunityPrice(asset.clone()), &price_data);
 
-        log_event(
-            &env,
-            Symbol::new(&env, "community_price"),
+        env.events().publish_event(&CommunityPriceUpdatedEvent {
             asset,
-            normalized,
-        );
+            price: normalized,
+        });
 
         Ok(())
     }
@@ -1634,12 +1736,6 @@ impl PriceOracle {
             asset: asset.clone(),
             price: normalized,
         });
-        log_event(
-            &env,
-            Symbol::new(&env, "price_updated"),
-            asset.clone(),
-            normalized,
-        );
 
         // Notify all subscribed contracts of the price update
         let payload = PriceUpdatePayload {
@@ -1930,10 +2026,11 @@ impl PriceOracle {
         crate::auth::_set_paused(&env, new_paused);
 
         // Emit event
-        env.events().publish(
-            (Symbol::new(&env, "pause_toggled"),),
-            (admin1.clone(), admin2.clone(), new_paused),
-        );
+        env.events().publish_event(&PauseToggledEvent {
+            admin1: admin1.clone(),
+            admin2: admin2.clone(),
+            paused: new_paused,
+        });
 
         Ok(new_paused)
     }
@@ -1984,10 +2081,11 @@ impl PriceOracle {
         crate::auth::_add_authorized(&env, &new_admin);
 
         // Emit event
-        env.events().publish(
-            (Symbol::new(&env, "admin_registered"),),
-            (admin1.clone(), admin2.clone(), new_admin.clone()),
-        );
+        env.events().publish_event(&AdminRegisteredEvent {
+            admin1: admin1.clone(),
+            admin2: admin2.clone(),
+            new_admin: new_admin.clone(),
+        });
 
         Ok(())
     }
@@ -2043,10 +2141,11 @@ impl PriceOracle {
         crate::auth::_remove_authorized(&env, &admin_to_remove);
 
         // Emit event
-        env.events().publish(
-            (Symbol::new(&env, "admin_removed"),),
-            (admin1.clone(), admin2.clone(), admin_to_remove.clone()),
-        );
+        env.events().publish_event(&AdminRemovedEvent {
+            admin1: admin1.clone(),
+            admin2: admin2.clone(),
+            removed_admin: admin_to_remove.clone(),
+        });
 
         Ok(())
     }
@@ -2100,10 +2199,10 @@ impl PriceOracle {
         // Set the destroyed flag so the contract is permanently unusable
         env.storage().instance().set(&DataKey::Destroyed, &true);
 
-        env.events().publish(
-            (Symbol::new(&env, "contract_destroyed"),),
-            (admin1.clone(), admin2.clone()),
-        );
+        env.events().publish_event(&ContractDestroyedEvent {
+            admin1: admin1.clone(),
+            admin2: admin2.clone(),
+        });
 
         Ok(())
     }
@@ -2146,10 +2245,7 @@ impl PriceOracle {
             .persistent()
             .set(&DataKey::MinQuorumThreshold, &threshold);
 
-        env.events().publish(
-            (Symbol::new(&env, "quorum_set"),),
-            (admin, threshold),
-        );
+        env.events().publish_event(&QuorumSetEvent { admin, threshold });
 
         Ok(())
     }
@@ -2215,10 +2311,11 @@ impl PriceOracle {
         _log_admin_action(&env, &admin, AdminAction::ProposeAction, Some(details));
 
         // Emit event
-        env.events().publish(
-            (Symbol::new(&env, "action_proposed"),),
-            (action_id, admin, action_type),
-        );
+        env.events().publish_event(&ActionProposedEvent {
+            action_id,
+            admin,
+            action_type,
+        });
 
         Ok(action_id)
     }
@@ -2271,10 +2368,11 @@ impl PriceOracle {
         );
 
         // Emit event
-        env.events().publish(
-            (Symbol::new(&env, "action_voted"),),
-            (action_id, voter, vote_count),
-        );
+        env.events().publish_event(&ActionVotedEvent {
+            action_id,
+            voter,
+            vote_count,
+        });
 
         Ok(vote_count)
     }
@@ -2293,8 +2391,7 @@ impl PriceOracle {
         }
 
         crate::auth::_set_vote_delegate(&env, &owner, &delegate);
-        env.events()
-            .publish((Symbol::new(&env, "vote_delegated"),), (owner, delegate));
+        env.events().publish_event(&VoteDelegatedEvent { owner, delegate });
 
         Ok(())
     }
@@ -2305,8 +2402,7 @@ impl PriceOracle {
         owner.require_auth();
 
         crate::auth::_remove_vote_delegate(&env, &owner);
-        env.events()
-            .publish((Symbol::new(&env, "vote_delegate_cleared"),), (owner,));
+        env.events().publish_event(&VoteDelegateClearedEvent { owner });
 
         Ok(())
     }
@@ -2381,10 +2477,11 @@ impl PriceOracle {
                     AdminAction::TogglePause,
                     Some(format!("Executed: pause={}", new_paused)),
                 );
-                env.events().publish(
-                    (Symbol::new(&env, "pause_toggled"),),
-                    (executor.clone(), new_paused),
-                );
+                env.events().publish_event(&PauseToggledEvent {
+                    admin1: executor.clone(),
+                    admin2: executor.clone(),
+                    paused: new_paused,
+                });
             }
             AdminAction::RegisterAdmin => {
                 if let Some(ref new_admin) = proposed.target {
@@ -2396,10 +2493,11 @@ impl PriceOracle {
                         AdminAction::RegisterAdmin,
                         Some(format!("Registered: {}", new_admin)),
                     );
-                    env.events().publish(
-                        (Symbol::new(&env, "admin_registered"),),
-                        (executor.clone(), new_admin.clone()),
-                    );
+                    env.events().publish_event(&AdminRegisteredEvent {
+                        admin1: executor.clone(),
+                        admin2: executor.clone(),
+                        new_admin: new_admin.clone(),
+                    });
                 } else {
                     return Err(Error::InvalidActionType);
                 }
@@ -2418,10 +2516,11 @@ impl PriceOracle {
                         AdminAction::RemoveAdmin,
                         Some(format!("Removed: {}", admin_to_remove)),
                     );
-                    env.events().publish(
-                        (Symbol::new(&env, "admin_removed"),),
-                        (executor.clone(), admin_to_remove.clone()),
-                    );
+                    env.events().publish_event(&AdminRemovedEvent {
+                        admin1: executor.clone(),
+                        admin2: executor.clone(),
+                        removed_admin: admin_to_remove.clone(),
+                    });
                 } else {
                     return Err(Error::InvalidActionType);
                 }
@@ -2458,10 +2557,10 @@ impl PriceOracle {
                 proposed.executed = true;
 
                 _log_admin_action(&env, &executor, AdminAction::SelfDestruct, None);
-                env.events().publish(
-                    (Symbol::new(&env, "contract_destroyed"),),
-                    (executor.clone(),),
-                );
+                env.events().publish_event(&ContractDestroyedEvent {
+                    admin1: executor.clone(),
+                    admin2: executor.clone(),
+                });
             }
             AdminAction::Upgrade => {
                 // Parse wasm hash from data (expected as hex string)
@@ -2474,10 +2573,9 @@ impl PriceOracle {
                     AdminAction::Upgrade,
                     Some(format!("Data: {}", proposed.data.to_string())),
                 );
-                env.events().publish(
-                    (Symbol::new(&env, "contract_upgraded"),),
-                    (executor.clone(),),
-                );
+                env.events().publish_event(&ContractUpgradedEvent {
+                    executor: executor.clone(),
+                });
             }
             _ => return Err(Error::InvalidActionType),
         }
@@ -2486,10 +2584,7 @@ impl PriceOracle {
         crate::auth::_set_proposed_action(&env, action_id, &proposed);
 
         // Emit execution event
-        env.events().publish(
-            (Symbol::new(&env, "action_executed"),),
-            (action_id, executor),
-        );
+        env.events().publish_event(&ActionExecutedEvent { action_id, executor });
 
         Ok(())
     }
@@ -2563,10 +2658,7 @@ impl PriceOracle {
         );
 
         // Emit event
-        env.events().publish(
-            (Symbol::new(&env, "action_cancelled"),),
-            (action_id, canceller),
-        );
+        env.events().publish_event(&ActionCancelledEvent { action_id, canceller });
 
         Ok(())
     }
@@ -2588,10 +2680,10 @@ impl PriceOracle {
         );
         crate::auth::_set_council(&env, &council);
 
-        env.events().publish(
-            (Symbol::new(&env, "council_set"),),
-            (admin.clone(), council.clone()),
-        );
+        env.events().publish_event(&CouncilSetEvent {
+            admin: admin.clone(),
+            council: council.clone(),
+        });
     }
 
     /// Get the current Community Council address.
@@ -2626,8 +2718,7 @@ impl PriceOracle {
         crate::auth::_set_frozen(&env, true);
 
         // Emit event
-        env.events()
-            .publish((Symbol::new(&env, "emergency_freeze"),), (council.clone(),));
+        env.events().publish_event(&EmergencyFreezeEvent { council: council.clone() });
 
         Ok(())
     }
@@ -2816,10 +2907,11 @@ impl PriceOracle {
         };
         env.storage().persistent().set(&key, &req);
 
-        env.events().publish(
-            (Symbol::new(&env, "unbond_requested"),),
-            (relayer, req.request_ledger, amount),
-        );
+        env.events().publish_event(&UnbondRequestedEvent {
+            relayer,
+            request_ledger: req.request_ledger,
+            amount,
+        });
 
         Ok(())
     }
@@ -2856,10 +2948,10 @@ impl PriceOracle {
 
         env.storage().persistent().remove(&key);
 
-        env.events().publish(
-            (Symbol::new(&env, "stake_released"),),
-            (relayer, req.amount),
-        );
+        env.events().publish_event(&StakeReleasedEvent {
+            relayer,
+            amount: req.amount,
+        });
 
         Ok(req.amount)
     }
