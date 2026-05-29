@@ -1110,6 +1110,10 @@ impl PriceOracle {
     ///
     /// Returns `Error::AssetNotFound` when the asset is missing or stale.
     pub fn get_price(env: Env, asset: Symbol, verified: bool) -> Result<PriceData, Error> {
+        // Reentrancy guard: reject calls during a locked set_price
+        if env.storage().temporary().get(&DataKey::IsLocked).unwrap_or(false) {
+            panic_with_error!(&env, Error::ReentrancyDetected);
+        }
         if crate::auth::_is_halted(&env) {
             panic_with_error!(&env, Error::EmergencyHalted);
         }
@@ -1136,6 +1140,10 @@ impl PriceOracle {
     /// Returns the last known price data and marks it stale when TTL has expired.
     /// Always reads from the `VerifiedPrice` bucket.
     pub fn get_price_with_status(env: Env, asset: Symbol) -> Result<PriceDataWithStatus, Error> {
+        // Reentrancy guard
+        if env.storage().temporary().get(&DataKey::IsLocked).unwrap_or(false) {
+            panic_with_error!(&env, Error::ReentrancyDetected);
+        }
         if crate::auth::_is_halted(&env) {
             panic_with_error!(&env, Error::EmergencyHalted);
         }
@@ -1158,6 +1166,10 @@ impl PriceOracle {
     /// Returns `None` instead of an error when the asset is not found.
     /// Always reads from the `VerifiedPrice` bucket.
     pub fn get_price_safe(env: Env, asset: Symbol) -> Option<PriceData> {
+        // Reentrancy guard
+        if env.storage().temporary().get(&DataKey::IsLocked).unwrap_or(false) {
+            panic_with_error!(&env, Error::ReentrancyDetected);
+        }
         if crate::auth::_is_halted(&env) {
             panic_with_error!(&env, Error::EmergencyHalted);
         }
@@ -1171,6 +1183,10 @@ impl PriceOracle {
     /// Always reads from the `VerifiedPrice` bucket.
     /// Returns the price value as an i128, or an error if the asset is not found.
     pub fn get_last_price(env: Env, asset: Symbol) -> Result<i128, Error> {
+        // Reentrancy guard
+        if env.storage().temporary().get(&DataKey::IsLocked).unwrap_or(false) {
+            panic_with_error!(&env, Error::ReentrancyDetected);
+        }
         if crate::auth::_is_halted(&env) {
             panic_with_error!(&env, Error::EmergencyHalted);
         }
@@ -1234,6 +1250,10 @@ impl PriceOracle {
         env: Env,
         assets: soroban_sdk::Vec<Symbol>,
     ) -> soroban_sdk::Vec<Option<PriceEntryWithStatus>> {
+        // Reentrancy guard
+        if env.storage().temporary().get(&DataKey::IsLocked).unwrap_or(false) {
+            panic_with_error!(&env, Error::ReentrancyDetected);
+        }
         let now = env.ledger().timestamp();
         let mut result = soroban_sdk::Vec::new(&env);
 
@@ -1438,6 +1458,10 @@ impl PriceOracle {
         decimals: u32,
         ttl: u64,
     ) -> Result<(), Error> {
+        // Reentrancy guard
+        if env.storage().temporary().get(&DataKey::IsLocked).unwrap_or(false) {
+            panic_with_error!(&env, Error::ReentrancyDetected);
+        }
         crate::auth::_require_not_frozen(&env);
         source.require_auth();
 
@@ -1566,6 +1590,14 @@ impl PriceOracle {
     /// This function operates on the `DataKey::Price(Symbol)` composite key used
     /// by snapshot tests and migration tooling. It does **not** touch
     /// `VerifiedPrice` or `CommunityPrice` buckets; use `remove_asset` for that.
+    pub fn get_index_price(env: Env, components: soroban_sdk::Vec<AssetWeight>) -> Result<i128, Error> {
+        // Reentrancy guard
+        if env.storage().temporary().get(&DataKey::IsLocked).unwrap_or(false) {
+            panic_with_error!(&env, Error::ReentrancyDetected);
+        }
+        // ... (existing logic)
+    }
+
     pub fn clear_assets(env: Env, assets: soroban_sdk::Vec<Symbol>) -> Result<(), Error> {
         if assets.len() > MAX_CLEAR_ASSETS {
             return Err(Error::TooManyAssets);
@@ -1801,6 +1833,10 @@ impl PriceOracle {
 
     /// Get the configured absolute floor price for an asset, if any.
     pub fn get_price_floor(env: Env, asset: Symbol) -> Option<i128> {
+        // Reentrancy guard
+        if env.storage().temporary().get(&DataKey::IsLocked).unwrap_or(false) {
+            panic_with_error!(&env, Error::ReentrancyDetected);
+        }
         read_price_floor(&env, &asset)
     }
 
@@ -1872,6 +1908,10 @@ impl PriceOracle {
 
     /// Get the current min/max price bounds for an asset, if configured.
     pub fn get_price_bounds(env: Env, asset: Symbol) -> Option<PriceBounds> {
+        // Reentrancy guard
+        if env.storage().temporary().get(&DataKey::IsLocked).unwrap_or(false) {
+            panic_with_error!(&env, Error::ReentrancyDetected);
+        }
         // Composite key: read only the single per-asset slot.
         env.storage()
             .persistent()
@@ -2781,6 +2821,10 @@ impl PriceOracle {
     /// Returns all relayer submissions for the current ledger,
     /// allowing consumers to see the individual inputs before median calculation.
     pub fn get_price_buffer_data(env: Env, asset: Symbol) -> Option<PriceBuffer> {
+        // Reentrancy guard
+        if env.storage().temporary().get(&DataKey::IsLocked).unwrap_or(false) {
+            panic_with_error!(&env, Error::ReentrancyDetected);
+        }
         let buffer = get_price_buffer(&env, asset);
         if buffer.entries.len() == 0 {
             return None;
@@ -2798,6 +2842,10 @@ impl PriceOracle {
 
     /// Get the Time-Weighted Average Price (TWAP) for a specific asset.
     pub fn get_twap(env: Env, asset: Symbol) -> Option<i128> {
+        // Reentrancy guard
+        if env.storage().temporary().get(&DataKey::IsLocked).unwrap_or(false) {
+            panic_with_error!(&env, Error::ReentrancyDetected);
+        }
         if crate::auth::_is_halted(&env) {
             panic_with_error!(&env, Error::EmergencyHalted);
         }
@@ -2851,6 +2899,10 @@ impl PriceOracle {
     /// # Returns
     /// A vector of addresses of all contracts currently subscribed to price updates.
     pub fn get_price_update_subscribers(env: Env) -> soroban_sdk::Vec<Address> {
+        // Reentrancy guard
+        if env.storage().temporary().get(&DataKey::IsLocked).unwrap_or(false) {
+            panic_with_error!(&env, Error::ReentrancyDetected);
+        }
         callbacks::get_subscribers(&env)
     }
 
