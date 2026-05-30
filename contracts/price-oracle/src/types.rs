@@ -65,6 +65,10 @@ pub enum DataKey {
     ///
     /// Used by `clear_assets` and snapshot tests that reference `DataKey::Price`.
     Price(Symbol),
+    /// Compact verified price payload packed into a single `u128`.
+    VerifiedPricePacked(Symbol),
+    /// Compact community price payload packed into a single `u128`.
+    CommunityPricePacked(Symbol),
     /// Rollback slot for per-asset price bounds — written before every bounds update.
     PrevPriceBoundsEntry(Symbol),
     /// Rollback slot for the global max deviation percentage — written before every update.
@@ -131,6 +135,21 @@ pub struct PriceData {
     /// Confidence score (0-100, higher is more confident)
     pub confidence_score: u32,
     /// Time-to-live in seconds for this price (per-asset expiration)
+    pub ttl: u64,
+}
+
+/// Compact storage payload for price records.
+///
+/// `packed` stores the price and timestamp in a single `u128` so the hot-path
+/// storage slot only carries one compressed integer payload. The remaining
+/// fields stay separate because they are not part of the issue's packing
+/// requirement and are only needed by specific callers.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PackedPriceData {
+    pub packed: u128,
+    pub provider: Address,
+    pub confidence_score: u32,
     pub ttl: u64,
 }
 
@@ -305,17 +324,4 @@ pub struct ProposedAction {
     pub executed: bool,
     /// Whether the action has been cancelled.
     pub cancelled: bool,
-}
-
-/// A weighted component of a multi-asset index basket.
-///
-/// Used by `get_index_price` to compute a weighted average across assets.
-/// `weight` is expressed in basis points (e.g. 4000 = 40%).
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AssetWeight {
-    /// The asset symbol (e.g. NGN, KES, GHS).
-    pub asset: Symbol,
-    /// Weight in basis points (0–10000). All weights in a basket should sum to 10000.
-    pub weight: u32,
 }
