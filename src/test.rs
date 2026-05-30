@@ -493,7 +493,7 @@ fn test_unauthorized_set_value_returns_typed_error() {
     let unauthorized = soroban_sdk::Address::generate(&env);
     client.initialize(&admin);
 
-    let result = client.try_set_value(&42, &unauthorized);
+    let result = client.try_set_value(&42, &unauthorized, &0);
     assert_eq!(result, Err(Ok(ContractError::NotAdmin)));
 }
 
@@ -509,4 +509,93 @@ fn test_zero_heartbeat_interval_returns_typed_error() {
 
     let result = client.try_set_heartbeat_interval(&0, &admin);
     assert_eq!(result, Err(Ok(ContractError::InvalidHeartbeatInterval)));
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Gas Reserve Tank tests (Issue #344)
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_fund_gas_reserve_increases_balance() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let consumer = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin);
+
+    assert_eq!(client.get_gas_reserve(&consumer), 0);
+
+    client.fund_gas_reserve(&consumer, &1000);
+    assert_eq!(client.get_gas_reserve(&consumer), 1000);
+
+    // Top-up accumulates
+    client.fund_gas_reserve(&consumer, &500);
+    assert_eq!(client.get_gas_reserve(&consumer), 1500);
+}
+
+#[test]
+fn test_ingest_with_deferred_cost_deducts_fee() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let consumer = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin);
+
+    client.fund_gas_reserve(&consumer, &1000);
+
+    let asset = symbol_short!("BTC");
+    client.ingest_with_deferred_cost(&consumer, &asset, &42_u64, &200_u64);
+
+    // Fee deducted from reserve
+    assert_eq!(client.get_gas_reserve(&consumer), 800);
+
+    // Heartbeat recorded for the asset
+    assert!(client.is_data_fresh(&asset));
+}
+
+#[test]
+fn test_ingest_with_deferred_cost_rejects_insufficient_reserve() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let consumer = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin);
+
+    // Fund less than the required fee
+    client.fund_gas_reserve(&consumer, &100);
+
+    let asset = symbol_short!("ETH");
+    let result = client.try_ingest_with_deferred_cost(&consumer, &asset, &99_u64, &500_u64);
+    assert_eq!(result, Err(Ok(ContractError::InsufficientGasReserve)));
+
+    // Reserve unchanged after rejection
+    assert_eq!(client.get_gas_reserve(&consumer), 100);
+}
+
+#[test]
+fn test_ingest_with_zero_fee_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let consumer = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin);
+
+    // Zero fee — no reserve needed
+    let asset = symbol_short!("XLM");
+    client.ingest_with_deferred_cost(&consumer, &asset, &10_u64, &0_u64);
+
+    assert_eq!(client.get_gas_reserve(&consumer), 0);
+    assert!(client.is_data_fresh(&asset));
 }
