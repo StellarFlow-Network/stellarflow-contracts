@@ -1998,10 +1998,10 @@ impl PriceOracle {
         //_log_admin_action(&env, &admin1, AdminAction::TogglePause, Some(format!("New state: {}", new_paused)));
         crate::auth::_set_paused(&env, new_paused);
 
-        // Emit event
+        // Emit event with admin as indexed topic
         env.events().publish(
-            (Symbol::new(&env, "pause_toggled"),),
-            (admin1.clone(), admin2.clone(), new_paused),
+            (Symbol::new(&env, "pause_toggled"), admin1.clone()),
+            (admin2.clone(), new_paused),
         );
 
         Ok(new_paused)
@@ -2052,10 +2052,10 @@ impl PriceOracle {
         // Add the new admin
         crate::auth::_add_authorized(&env, &new_admin);
 
-        // Emit event
+        // Emit event with new_admin as indexed topic for efficient filtering
         env.events().publish(
-            (Symbol::new(&env, "admin_registered"),),
-            (admin1.clone(), admin2.clone(), new_admin.clone()),
+            (Symbol::new(&env, "admin_registered"), new_admin.clone()),
+            (admin1.clone(), admin2.clone()),
         );
 
         Ok(())
@@ -2111,10 +2111,10 @@ impl PriceOracle {
         // Remove the admin
         crate::auth::_remove_authorized(&env, &admin_to_remove);
 
-        // Emit event
+        // Emit event with removed admin as indexed topic for efficient filtering
         env.events().publish(
-            (Symbol::new(&env, "admin_removed"),),
-            (admin1.clone(), admin2.clone(), admin_to_remove.clone()),
+            (Symbol::new(&env, "admin_removed"), admin_to_remove.clone()),
+            (admin1.clone(), admin2.clone()),
         );
 
         Ok(())
@@ -2169,9 +2169,10 @@ impl PriceOracle {
         // Set the destroyed flag so the contract is permanently unusable
         env.storage().instance().set(&DataKey::Destroyed, &true);
 
+        // Emit event with first admin as indexed topic
         env.events().publish(
-            (Symbol::new(&env, "contract_destroyed"),),
-            (admin1.clone(), admin2.clone()),
+            (Symbol::new(&env, "contract_destroyed"), admin1.clone()),
+            (admin2.clone(),),
         );
 
         Ok(())
@@ -2215,9 +2216,10 @@ impl PriceOracle {
             .persistent()
             .set(&DataKey::MinQuorumThreshold, &threshold);
 
+        // Emit event with admin as indexed topic
         env.events().publish(
-            (Symbol::new(&env, "quorum_set"),),
-            (admin, threshold),
+            (Symbol::new(&env, "quorum_set"), admin.clone()),
+            (threshold,),
         );
 
         Ok(())
@@ -2284,10 +2286,10 @@ impl PriceOracle {
         );
         _log_admin_action(&env, &admin, AdminAction::ProposeAction, Some(details));
 
-        // Emit event
+        // Emit event with admin as indexed topic for governance tracking
         env.events().publish(
-            (Symbol::new(&env, "action_proposed"),),
-            (action_id, admin, action_type),
+            (Symbol::new(&env, "action_proposed"), admin.clone()),
+            (action_id, action_type),
         );
 
         Ok(action_id)
@@ -2340,10 +2342,10 @@ impl PriceOracle {
             Some(format!("action_id: {}, votes: {}", action_id, vote_count)),
         );
 
-        // Emit event
+        // Emit event with voter as indexed topic for vote tracking
         env.events().publish(
-            (Symbol::new(&env, "action_voted"),),
-            (action_id, voter, vote_count),
+            (Symbol::new(&env, "action_voted"), voter.clone()),
+            (action_id, vote_count),
         );
 
         Ok(vote_count)
@@ -2363,8 +2365,9 @@ impl PriceOracle {
         }
 
         crate::auth::_set_vote_delegate(&env, &owner, &delegate);
+        // Emit event with owner as indexed topic for delegation tracking
         env.events()
-            .publish((Symbol::new(&env, "vote_delegated"),), (owner, delegate));
+            .publish((Symbol::new(&env, "vote_delegated"), owner.clone()), (delegate,));
 
         Ok(())
     }
@@ -2375,8 +2378,9 @@ impl PriceOracle {
         owner.require_auth();
 
         crate::auth::_remove_vote_delegate(&env, &owner);
+        // Emit event with owner as indexed topic
         env.events()
-            .publish((Symbol::new(&env, "vote_delegate_cleared"),), (owner,));
+            .publish((Symbol::new(&env, "vote_delegate_cleared"), owner.clone()), ());
 
         Ok(())
     }
@@ -2451,9 +2455,10 @@ impl PriceOracle {
                     AdminAction::TogglePause,
                     Some(format!("Executed: pause={}", new_paused)),
                 );
+                // Emit event with executor as indexed topic
                 env.events().publish(
-                    (Symbol::new(&env, "pause_toggled"),),
-                    (executor.clone(), new_paused),
+                    (Symbol::new(&env, "pause_toggled"), executor.clone()),
+                    (new_paused,),
                 );
             }
             AdminAction::RegisterAdmin => {
@@ -2466,9 +2471,10 @@ impl PriceOracle {
                         AdminAction::RegisterAdmin,
                         Some(format!("Registered: {}", new_admin)),
                     );
+                    // Emit event with new admin as indexed topic
                     env.events().publish(
-                        (Symbol::new(&env, "admin_registered"),),
-                        (executor.clone(), new_admin.clone()),
+                        (Symbol::new(&env, "admin_registered"), new_admin.clone()),
+                        (executor.clone(),),
                     );
                 } else {
                     return Err(Error::InvalidActionType);
@@ -2488,9 +2494,10 @@ impl PriceOracle {
                         AdminAction::RemoveAdmin,
                         Some(format!("Removed: {}", admin_to_remove)),
                     );
+                    // Emit event with removed admin as indexed topic
                     env.events().publish(
-                        (Symbol::new(&env, "admin_removed"),),
-                        (executor.clone(), admin_to_remove.clone()),
+                        (Symbol::new(&env, "admin_removed"), admin_to_remove.clone()),
+                        (executor.clone(),),
                     );
                 } else {
                     return Err(Error::InvalidActionType);
@@ -2528,9 +2535,10 @@ impl PriceOracle {
                 proposed.executed = true;
 
                 _log_admin_action(&env, &executor, AdminAction::SelfDestruct, None);
+                // Emit event with executor as indexed topic
                 env.events().publish(
-                    (Symbol::new(&env, "contract_destroyed"),),
-                    (executor.clone(),),
+                    (Symbol::new(&env, "contract_destroyed"), executor.clone()),
+                    (),
                 );
             }
             AdminAction::Upgrade => {
@@ -2544,9 +2552,10 @@ impl PriceOracle {
                     AdminAction::Upgrade,
                     Some(format!("Data: {}", proposed.data.to_string())),
                 );
+                // Emit event with executor as indexed topic
                 env.events().publish(
-                    (Symbol::new(&env, "contract_upgraded"),),
-                    (executor.clone(),),
+                    (Symbol::new(&env, "contract_upgraded"), executor.clone()),
+                    (),
                 );
             }
             AdminAction::Slash => {
@@ -2579,10 +2588,10 @@ impl PriceOracle {
         // Update the proposal status
         crate::auth::_set_proposed_action(&env, action_id, &proposed);
 
-        // Emit execution event
+        // Emit execution event with executor as indexed topic
         env.events().publish(
-            (Symbol::new(&env, "action_executed"),),
-            (action_id, executor),
+            (Symbol::new(&env, "action_executed"), executor.clone()),
+            (action_id,),
         );
 
         Ok(())
@@ -2656,10 +2665,10 @@ impl PriceOracle {
             Some(format!("action_id: {}", action_id)),
         );
 
-        // Emit event
+        // Emit event with canceller as indexed topic
         env.events().publish(
-            (Symbol::new(&env, "action_cancelled"),),
-            (action_id, canceller),
+            (Symbol::new(&env, "action_cancelled"), canceller.clone()),
+            (action_id,),
         );
 
         Ok(())
@@ -2682,9 +2691,10 @@ impl PriceOracle {
         );
         crate::auth::_set_council(&env, &council);
 
+        // Emit event with council address as indexed topic
         env.events().publish(
-            (Symbol::new(&env, "council_set"),),
-            (admin.clone(), council.clone()),
+            (Symbol::new(&env, "council_set"), council.clone()),
+            (admin.clone(),),
         );
     }
 
@@ -2719,9 +2729,9 @@ impl PriceOracle {
         // Set the frozen state
         crate::auth::_set_frozen(&env, true);
 
-        // Emit event
+        // Emit event with council as indexed topic
         env.events()
-            .publish((Symbol::new(&env, "emergency_freeze"),), (council.clone(),));
+            .publish((Symbol::new(&env, "emergency_freeze"), council.clone()), ());
 
         Ok(())
     }
@@ -2909,8 +2919,9 @@ impl PriceOracle {
             Some(token.to_string()),
         );
 
+        // Emit event with token address as indexed topic for tracking
         env.events()
-            .publish((Symbol::new(&env, "slash_token_set"),), (admin, token));
+            .publish((Symbol::new(&env, "slash_token_set"), token.clone()), (admin,));
 
         Ok(())
     }
@@ -2942,9 +2953,10 @@ impl PriceOracle {
             Some(reserve.to_string()),
         );
 
+        // Emit event with reserve address as indexed topic
         env.events().publish(
-            (Symbol::new(&env, "insurance_reserve_set"),),
-            (admin, reserve),
+            (Symbol::new(&env, "insurance_reserve_set"), reserve.clone()),
+            (admin,),
         );
 
         Ok(())
@@ -2996,9 +3008,10 @@ impl PriceOracle {
             .persistent()
             .set(&DataKey::ProviderStake(relayer.clone()), &new_stake);
 
+        // Emit event with relayer as indexed topic for validator tracking
         env.events().publish(
-            (Symbol::new(&env, "stake_deposited"),),
-            (relayer, amount, new_stake),
+            (Symbol::new(&env, "stake_deposited"), relayer.clone()),
+            (amount, new_stake),
         );
 
         Ok(())
@@ -3047,9 +3060,10 @@ impl PriceOracle {
         let token_client = token::Client::new(&env, &token_address);
         token_client.transfer(&env.current_contract_address(), &relayer, &amount);
 
+        // Emit event with relayer as indexed topic for validator tracking
         env.events().publish(
-            (Symbol::new(&env, "stake_withdrawn"),),
-            (relayer, amount, new_stake),
+            (Symbol::new(&env, "stake_withdrawn"), relayer.clone()),
+            (amount, new_stake),
         );
 
         Ok(())

@@ -171,17 +171,13 @@ pub fn execute_slash_internal(
         executor: executor.clone(),
     });
 
-    // Also publish a plain tuple event for off-chain indexers that don't parse
-    // the typed event schema.
+    // Also publish a raw event for off-chain indexers with proper topic indexing.
+    // topic[0] = bad_relayer (validator identity)
+    // topic[1] = executor (admin who executed the slash)
+    // This allows indexers to efficiently filter by validator and administrator.
     env.events().publish(
-        (Symbol::new(env, "slash_executed"),),
-        (
-            bad_relayer.clone(),
-            amount,
-            reserve,
-            executor.clone(),
-            remaining_stake,
-        ),
+        (Symbol::new(env, "slash_executed"), bad_relayer.clone(), executor.clone()),
+        (amount, reserve, remaining_stake),
     );
 
     Ok(())
