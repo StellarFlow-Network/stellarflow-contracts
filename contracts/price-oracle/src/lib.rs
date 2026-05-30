@@ -6,12 +6,14 @@ use soroban_sdk::{
 };
 
 use crate::types::{
-    AdminAction, AdminLogEntry, AssetInfo, AssetMeta, DataKey, PriceBounds, PriceBuffer,
-    PriceBufferEntry, PriceData, PriceDataWithStatus, PriceEntryWithStatus, PriceUpdatePayload,
-    ProposedAction, RecentEvent,
+    AdminAction, AdminLogEntry, AssetInfo, AssetMeta, DataKey, PackedPriceData, PriceBounds,
+    PriceBuffer, PriceBufferEntry, PriceData, PriceDataWithStatus, PriceEntryWithStatus,
+    PriceUpdatePayload, ProposedAction, RecentEvent,
 };
 const ADMIN_TIMELOCK: u64 = 86_400;
 const MAX_CLEAR_ASSETS: u32 = 20;
+const CANONICAL_PRICE_DECIMALS: u32 = 9;
+const PRICE_PAYLOAD_SHIFT: u32 = 64;
 
 /// A clean, gas-optimized interface for other Soroban contracts to fetch prices from StellarFlow.
 ///
@@ -273,7 +275,12 @@ pub trait StellarFlowTrait {
     /// When `status` is `true`, every public rate read (get_price, get_last_price,
     /// get_prices, get_price_with_status, get_price_safe, get_twap, get_index_price)
     /// will panic with `Error::EmergencyHalted` until the halt is lifted.
-    fn set_emergency_halt(env: Env, admin1: Address, admin2: Address, status: bool) -> Result<(), Error>;
+    fn set_emergency_halt(
+        env: Env,
+        admin1: Address,
+        admin2: Address,
+        status: bool,
+    ) -> Result<(), Error>;
 
     /// Return the current emergency halt state.
     fn is_halted(env: Env) -> bool;
@@ -418,6 +425,46 @@ pub enum Error {
 
 #[contract]
 pub struct PriceOracle;
+
+fn pack_price_payload(price: i128, timestamp: u64) -> u128 {
+    let price = u64::try_from(price).expect("packed prices must be non-negative and fit in u64");
+    ((timestamp as u128) << PRICE_PAYLOAD_SHIFT) | (price as u128)
+}
+
+fn unpack_price_payload(packed: u128) -> (i128, u64) {
+    let price = (packed & u64::MAX as u128) as u64;
+    let timestamp = (packed >> PRICE_PAYLOAD_SHIFT) as u64;
+    (price as i128, timestamp)
+}
+
+fn build_price_data(packed: &PackedPriceData) -> PriceData {
+    let (price, timestamp) = unpack_price_payload(packed.packed);
+    PriceData {
+        price,
+        timestamp,
+        provider: packed.provider.clone(),
+        decimals: CANONICAL_PRICE_DECIMALS,
+        confidence_score: packed.confidence_score,
+        ttl: packed.ttl,
+    }
+}
+
+fn pack_price_data(price_data: &PriceData) -> PackedPriceData {
+    PackedPriceData {
+        packed: pack_price_payload(price_data.price, price_data.timestamp),
+        provider: price_data.provider.clone(),
+        confidence_score: price_data.confidence_score,
+        ttl: price_data.ttl,
+    }
+}
+
+fn read_packed_price(env: &Env, key: &DataKey, legacy_key: &DataKey) -> Option<PriceData> {
+    let storage = env.storage().persistent();
+    storage
+        .get::<DataKey, PackedPriceData>(key)
+        .map(|packed| build_price_data(&packed))
+        .or_else(|| storage.get::<DataKey, PriceData>(legacy_key))
+}
 
 #[soroban_sdk::contractevent]
 pub struct PriceUpdatedEvent {
@@ -900,19 +947,23 @@ impl PriceOracle {
         _track_asset(&env, asset.clone());
 
         let key = DataKey::VerifiedPrice(asset.clone());
+        let packed_key = DataKey::VerifiedPricePacked(asset.clone());
         if env
             .storage()
             .persistent()
-            .get::<DataKey, PriceData>(&key)
+            .get::<DataKey, PackedPriceData>(&packed_key)
             .is_none()
+            && env
+                .storage()
+                .persistent()
+                .get::<DataKey, PriceData>(&key)
+                .is_none()
         {
             env.storage().persistent().set(
-                &key,
-                &PriceData {
-                    price: 0,
-                    timestamp: env.ledger().timestamp(),
+                &packed_key,
+                &PackedPriceData {
+                    packed: pack_price_payload(0, env.ledger().timestamp()),
                     provider: env.current_contract_address(),
-                    decimals: 0,
                     confidence_score: 0,
                     ttl: 0,
                 },
@@ -1104,13 +1155,19 @@ impl PriceOracle {
         if crate::auth::_is_halted(&env) {
             panic_with_error!(&env, Error::EmergencyHalted);
         }
-        let key = if verified {
-            DataKey::VerifiedPrice(asset)
+        let (key, packed_key) = if verified {
+            (
+                DataKey::VerifiedPrice(asset.clone()),
+                DataKey::VerifiedPricePacked(asset.clone()),
+            )
         } else {
-            DataKey::CommunityPrice(asset)
+            (
+                DataKey::CommunityPrice(asset.clone()),
+                DataKey::CommunityPricePacked(asset.clone()),
+            )
         };
 
-        match env.storage().persistent().get::<DataKey, PriceData>(&key) {
+        match read_packed_price(&env, &packed_key, &key) {
             Some(price_data) => {
                 let now = env.ledger().timestamp();
                 // Issue #262: panic if the rate map entry exceeds the hard maximum age.
@@ -1130,11 +1187,11 @@ impl PriceOracle {
         if crate::auth::_is_halted(&env) {
             panic_with_error!(&env, Error::EmergencyHalted);
         }
-        match env
-            .storage()
-            .persistent()
-            .get::<DataKey, PriceData>(&DataKey::VerifiedPrice(asset))
-        {
+        match read_packed_price(
+            &env,
+            &DataKey::VerifiedPricePacked(asset.clone()),
+            &DataKey::VerifiedPrice(asset),
+        ) {
             Some(price_data) => {
                 let now = env.ledger().timestamp();
                 Ok(PriceDataWithStatus {
@@ -1152,9 +1209,11 @@ impl PriceOracle {
         if crate::auth::_is_halted(&env) {
             panic_with_error!(&env, Error::EmergencyHalted);
         }
-        env.storage()
-            .persistent()
-            .get::<DataKey, PriceData>(&DataKey::VerifiedPrice(asset))
+        read_packed_price(
+            &env,
+            &DataKey::VerifiedPricePacked(asset.clone()),
+            &DataKey::VerifiedPrice(asset),
+        )
     }
 
     /// Get the most recent price for a specific asset.
@@ -1201,7 +1260,13 @@ impl PriceOracle {
             let entry = env
                 .storage()
                 .persistent()
-                .get::<DataKey, PriceData>(&DataKey::VerifiedPrice(asset))
+                .get::<DataKey, PackedPriceData>(&DataKey::VerifiedPricePacked(asset.clone()))
+                .map(|packed| build_price_data(&packed))
+                .or_else(|| {
+                    env.storage()
+                        .persistent()
+                        .get::<DataKey, PriceData>(&DataKey::VerifiedPrice(asset))
+                })
                 .and_then(|pd| {
                     if is_stale(now, pd.timestamp, pd.ttl) {
                         None
@@ -1232,7 +1297,13 @@ impl PriceOracle {
             let entry = env
                 .storage()
                 .persistent()
-                .get::<DataKey, PriceData>(&DataKey::VerifiedPrice(asset))
+                .get::<DataKey, PackedPriceData>(&DataKey::VerifiedPricePacked(asset.clone()))
+                .map(|packed| build_price_data(&packed))
+                .or_else(|| {
+                    env.storage()
+                        .persistent()
+                        .get::<DataKey, PriceData>(&DataKey::VerifiedPrice(asset))
+                })
                 .map(|pd| PriceEntryWithStatus {
                     price: pd.price,
                     timestamp: pd.timestamp,
@@ -1322,8 +1393,9 @@ impl PriceOracle {
             }
 
             let storage = env.storage().persistent();
-            let key = DataKey::VerifiedPrice(asset.clone());
-            let existing: Option<PriceData> = storage.get(&key);
+            let key = DataKey::VerifiedPricePacked(asset.clone());
+            let legacy_key = DataKey::VerifiedPrice(asset.clone());
+            let existing: Option<PriceData> = read_packed_price(&env, &key, &legacy_key);
             let is_new_asset = existing.is_none();
 
             _track_asset(&env, asset.clone());
@@ -1331,16 +1403,16 @@ impl PriceOracle {
             let now = env.ledger().timestamp();
 
             if let Some(mut current) = existing {
-                if current.price == val {
+                if current.price == normalized {
                     // Price unchanged — only refresh the timestamp (zero-write optimisation).
                     current.timestamp = now;
-                    storage.set(&key, &current);
-                    update_twap(&env, asset.clone(), val, now);
+                    storage.set(&key, &pack_price_data(&current));
+                    update_twap(&env, asset.clone(), normalized, now);
                     env.events().publish_event(&PriceUpdatedEvent {
                         asset: asset.clone(),
-                        price: val,
+                        price: normalized,
                     });
-                    log_event(&env, Symbol::new(&env, "price_updated"), asset, val);
+                    log_event(&env, Symbol::new(&env, "price_updated"), asset, normalized);
                     return Ok(());
                 }
             }
@@ -1350,12 +1422,13 @@ impl PriceOracle {
                 timestamp: now,
                 provider: env.current_contract_address(),
                 // All stored prices are 9-decimal normalized.
-                decimals: 9,
+                decimals: CANONICAL_PRICE_DECIMALS,
                 confidence_score: 100,
                 ttl,
             };
 
-            storage.set(&key, &price_data);
+            storage.set(&key, &pack_price_data(&price_data));
+            storage.remove(&legacy_key);
             update_twap(&env, asset.clone(), normalized, now);
 
             if is_new_asset {
@@ -1387,7 +1460,7 @@ impl PriceOracle {
                 price: normalized,
                 timestamp: now,
                 provider: env.current_contract_address(),
-                decimals: 9,
+                decimals: CANONICAL_PRICE_DECIMALS,
                 confidence_score: 100,
             };
             callbacks::notify_subscribers(&env, &payload);
@@ -1441,14 +1514,18 @@ impl PriceOracle {
             timestamp: now,
             provider: source,
             // All stored prices are 9-decimal normalized.
-            decimals: 9,
+            decimals: CANONICAL_PRICE_DECIMALS,
             confidence_score: 0,
             ttl,
         };
 
+        env.storage().persistent().set(
+            &DataKey::CommunityPricePacked(asset.clone()),
+            &pack_price_data(&price_data),
+        );
         env.storage()
             .persistent()
-            .set(&DataKey::CommunityPrice(asset.clone()), &price_data);
+            .remove(&DataKey::CommunityPrice(asset.clone()));
 
         log_event(
             &env,
@@ -1510,14 +1587,19 @@ impl PriceOracle {
         let storage = env.storage().persistent();
 
         // Asset must exist in at least the verified bucket
-        if storage
-            .get::<DataKey, PriceData>(&DataKey::VerifiedPrice(asset.clone()))
-            .is_none()
+        if read_packed_price(
+            &env,
+            &DataKey::VerifiedPricePacked(asset.clone()),
+            &DataKey::VerifiedPrice(asset.clone()),
+        )
+        .is_none()
         {
             return Err(Error::AssetNotFound);
         }
 
+        storage.remove(&DataKey::VerifiedPricePacked(asset.clone()));
         storage.remove(&DataKey::VerifiedPrice(asset.clone()));
+        storage.remove(&DataKey::CommunityPricePacked(asset.clone()));
         storage.remove(&DataKey::CommunityPrice(asset.clone()));
         storage.remove(&DataKey::TrackedAsset(asset.clone()));
         // Remove composite-key per-asset config slots.
@@ -1569,7 +1651,6 @@ impl PriceOracle {
         decimals: u32,
         confidence_score: u32,
         ttl: u64,
-
     ) -> Result<(), Error> {
         _require_not_destroyed(&env);
         _require_initialized(&env);
@@ -1610,9 +1691,9 @@ impl PriceOracle {
             return Err(Error::AlreadyInitialized);
         }
         let storage = env.storage().persistent();
-        let key = DataKey::VerifiedPrice(asset.clone());
-        let old_price: i128 = storage
-            .get::<DataKey, PriceData>(&key)
+        let key = DataKey::VerifiedPricePacked(asset.clone());
+        let legacy_key = DataKey::VerifiedPrice(asset.clone());
+        let old_price: i128 = read_packed_price(&env, &key, &legacy_key)
             .map(|pd| pd.price)
             .unwrap_or(0);
 
@@ -1679,22 +1760,18 @@ impl PriceOracle {
             return Err(Error::InvalidNormalizedPrice);
         }
 
-        // Also update the legacy PriceData for backward compatibility
-        let mut prices: soroban_sdk::Map<Symbol, PriceData> = storage
-            .get(&DataKey::PriceData)
-            .unwrap_or_else(|| soroban_sdk::Map::new(&env));
-
         let price_data = PriceData {
             price: median_price,
             timestamp: env.ledger().timestamp(),
             provider: source.clone(),
             // All stored prices are 9-decimal normalized.
-            decimals: 9,
+            decimals: CANONICAL_PRICE_DECIMALS,
             confidence_score,
             ttl,
         };
 
-        storage.set(&key, &price_data);
+        storage.set(&key, &pack_price_data(&price_data));
+        storage.remove(&legacy_key);
         update_twap(&env, asset.clone(), median_price, env.ledger().timestamp());
 
         env.events().publish_event(&PriceUpdatedEvent {
@@ -1820,7 +1897,10 @@ impl PriceOracle {
         // Composite key: write directly to the per-asset slot — no map load needed.
         env.storage().persistent().set(
             &DataKey::PriceBoundsEntry(asset),
-            &PriceBounds { min_price, max_price },
+            &PriceBounds {
+                min_price,
+                max_price,
+            },
         );
     }
 
@@ -2215,10 +2295,8 @@ impl PriceOracle {
             .persistent()
             .set(&DataKey::MinQuorumThreshold, &threshold);
 
-        env.events().publish(
-            (Symbol::new(&env, "quorum_set"),),
-            (admin, threshold),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "quorum_set"),), (admin, threshold));
 
         Ok(())
     }
@@ -2737,7 +2815,12 @@ impl PriceOracle {
     ///
     /// Requires 2 distinct authorized admins. When `status` is `true`, every
     /// public rate read panics with `Error::EmergencyHalted` until lifted.
-    pub fn set_emergency_halt(env: Env, admin1: Address, admin2: Address, status: bool) -> Result<(), Error> {
+    pub fn set_emergency_halt(
+        env: Env,
+        admin1: Address,
+        admin2: Address,
+        status: bool,
+    ) -> Result<(), Error> {
         _require_not_destroyed(&env);
         if admin1 == admin2 {
             return Err(Error::MultiSigValidationFailed);
@@ -2898,9 +2981,7 @@ impl PriceOracle {
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
 
-        env.storage()
-            .persistent()
-            .set(&DataKey::SlashToken, &token);
+        env.storage().persistent().set(&DataKey::SlashToken, &token);
 
         _log_admin_action(
             &env,
