@@ -2,6 +2,132 @@ use soroban_sdk::{Env, String};
 
 use crate::Error;
 
+const INTERNAL_SCALE_9: i128 = 1_000_000_000; // 10^9
+const LEDGER_SCALE_7: i128 = 10_000_000; // 10^7
+
+/// Divide two 7-decimal fixed-point values using a 9-decimal internal scale.
+///
+/// This implements issue #346's precision workaround:
+/// - upscale by 10^9 before the division
+/// - downscale precisely back to 10^7 (with rounding) for ledger storage/return
+///
+/// Concretely:
+/// `result_7 = round( (numerator_7 / denominator_7) * 10^7 )`
+///
+/// # Notes
+/// - `numerator_7` and `denominator_7` are assumed to be scaled by 10^7.
+/// - Returns `Error::PriceMathOverflow` on overflow or divide-by-zero.
+pub fn div_7_by_7_to_7(numerator_7: i128, denominator_7: i128) -> Result<i128, Error> {
+    if denominator_7 == 0 {
+        return Err(Error::PriceMathOverflow);
+    }
+
+    // numerator_7 / denominator_7 yields a dimensionless ratio.
+    // To return 7-decimal fixed-point, multiply by 10^7.
+    //
+    // We keep extra precision by using an internal 9-decimal multiplier first:
+    // ratio_scaled_9 = numerator_7 * 10^9 / denominator_7
+    // result_7 = round( ratio_scaled_9 / 10^2 )
+    //
+    // (10^9 -> 10^7 is a /100 downscale).
+    let ratio_scaled_9 = numerator_7
+        .checked_mul(INTERNAL_SCALE_9)
+        .ok_or(Error::PriceMathOverflow)?
+        .checked_div(denominator_7)
+        .ok_or(Error::PriceMathOverflow)?;
+
+    round_divide_by_100(ratio_scaled_9)
+}
+
+/// Convert a 9-decimal fixed-point value to 7 decimals with rounding-to-nearest
+/// (ties away from zero).
+pub fn downscale_9_to_7_round(value_9: i128) -> Result<i128, Error> {
+    if value_9 == 0 {
+        return Ok(0);
+    }
+    round_divide_by_100(value_9)
+}
+
+fn round_divide_by_100(value: i128) -> Result<i128, Error> {
+    const DIVISOR: i128 = INTERNAL_SCALE_9 / LEDGER_SCALE_7; // 100
+    const HALF: i128 = DIVISOR / 2; // 50
+
+    let adjusted = if value >= 0 {
+        value.checked_add(HALF).ok_or(Error::PriceMathOverflow)?
+    } else {
+        value.checked_sub(HALF).ok_or(Error::PriceMathOverflow)?
+    };
+
+    adjusted.checked_div(DIVISOR).ok_or(Error::PriceMathOverflow)
+}
+
+pub fn format_price(env: &Env, price: i128, decimals: u32) -> String {
+    const BUF: usize = 42;
+    let mut digits = [0u8; BUF];
+    let mut len = 0usize;
+    let negative = price < 0;
+    let mut remaining: u128 = if negative {
+        (price as i128).unsigned_abs()
+    } else {
+        price as u128
+    };
+
+    if remaining == 0 {
+        digits[BUF - 1] = b'0';
+        len = 1;
+    } else {
+        while remaining > 0 {
+            len += 1;
+            digits[BUF - len] = b'0' + (remaining % 10) as u8;
+            remaining /= 10;
+        }
+    }
+
+    let mut out = [0u8; 41];
+    let mut pos = 0usize;
+    let decimals = decimals as usize;
+
+    if negative {
+        out[pos] = b'-';
+        pos += 1;
+    }
+
+    if decimals == 0 {
+        let src = &digits[BUF - len..BUF];
+        out[pos..pos + len].copy_from_slice(src);
+        pos += len;
+    } else if len <= decimals {
+        out[pos] = b'0';
+        pos += 1;
+        out[pos] = b'.';
+        pos += 1;
+
+        let leading_zeros = decimals - len;
+        for _ in 0..leading_zeros {
+            out[pos] = b'0';
+            pos += 1;
+        }
+
+        let src = &digits[BUF - len..BUF];
+        out[pos..pos + len].copy_from_slice(src);
+        pos += len;
+    } else {
+        let int_len = len - decimals;
+        let src = &digits[BUF - len..BUF];
+
+        out[pos..pos + int_len].copy_from_slice(&src[..int_len]);
+        pos += int_len;
+
+        out[pos] = b'.';
+        pos += 1;
+
+        out[pos..pos + decimals].copy_from_slice(&src[int_len..]);
+        pos += decimals;
+    }
+
+    String::from_bytes(env, &out[..pos])
+}
+
 /// Format a scaled integer price into a human-readable decimal string.
 ///
 /// Inserts a decimal point at the position indicated by `decimals`.
@@ -106,7 +232,15 @@ pub fn normalize_to_seven(value: i128, input_decimals: u32) -> Result<i128, Erro
     } else if input_decimals > 7 {
         let diff = input_decimals - 7;
         let divisor = 10_i128.checked_pow(diff).ok_or(Error::PriceMathOverflow)?;
-        value.checked_div(divisor).ok_or(Error::PriceMathOverflow)
+        // When scaling down, round to the nearest representable 7-decimal value.
+        // This avoids truncating small fractional values to zero (issue #346).
+        let half = divisor / 2;
+        let adjusted = if value >= 0 {
+            value.checked_add(half).ok_or(Error::PriceMathOverflow)?
+        } else {
+            value.checked_sub(half).ok_or(Error::PriceMathOverflow)?
+        };
+        adjusted.checked_div(divisor).ok_or(Error::PriceMathOverflow)
     } else {
         Ok(value)
     }
@@ -169,6 +303,8 @@ pub fn calculate_inverse_price(price: i128, decimals: u32) -> Option<i128> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    extern crate alloc;
+    use alloc::string::ToString;
     use soroban_sdk::Env;
 
     // --- format_price tests ---------------------------------------------------
@@ -221,6 +357,26 @@ mod tests {
         assert_eq!(s.to_string(), "-750.50");
     }
 
+    // --- #346 precision helpers -----------------------------------------------
+
+    #[test]
+    fn test_downscale_9_to_7_round_small_nonzero() {
+        // 0.000000015 (9dp) should round up to 0.0000000? (7dp) => 0
+        assert_eq!(downscale_9_to_7_round(15), Ok(0));
+
+        // 0.000000050 (9dp) is exactly half of 1e-7; ties round away from zero.
+        assert_eq!(downscale_9_to_7_round(50), Ok(1));
+        assert_eq!(downscale_9_to_7_round(-50), Ok(-1));
+    }
+
+    #[test]
+    fn test_div_7_by_7_to_7_low_value_ratio() {
+        // (1 stroop / 3 stroops) in 7dp should be ~0.3333333 (rounded)
+        let one = 1_i128;
+        let three = 3_i128;
+        assert_eq!(div_7_by_7_to_7(one, three), Ok(3_333_333));
+    }
+
     // --- normalize_to_seven tests ---------------------------------------------
 
     #[test]
@@ -249,7 +405,7 @@ mod tests {
     #[test]
     fn test_normalize_to_nine_scale_up_from_2() {
         // NGN has 2 decimals: multiply by 10^7
-        assert_eq!(normalize_to_nine(100, 2), Ok(10_000_000_000));
+        assert_eq!(normalize_to_nine(100, 2), Ok(1_000_000_000));
     }
 
     #[test]

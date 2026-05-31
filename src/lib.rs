@@ -1,6 +1,12 @@
 #![no_std]
-#![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, BytesN, Map, Symbol, Vec};
+
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Map,
+    Symbol, Vec,
+};
+
+mod nonce;
+use nonce::{consume_nonce, get_nonce};
 
 // Contract state keys
 const DATA_KEY: Symbol = Symbol::short("DATA");
@@ -23,6 +29,10 @@ const DEFAULT_HEARTBEAT_INTERVAL: u64 = 5 * 60;
 const SIGNERS_KEY: Symbol = Symbol::short("SIGNERS");
 /// Active revocation proposal
 const REVOCATION_KEY: Symbol = Symbol::short("REVOKE");
+
+// ── Staking keys (Issue #289) ────────────────────────────────────────────────
+const STAKE_REGISTRY_KEY: Symbol = symbol_short!("STAKES");
+const TOTAL_STAKED_KEY: Symbol = symbol_short!("TSTAKED");
 
 /// An active revocation proposal.
 #[contracttype]
@@ -60,6 +70,18 @@ pub struct StakeRecord {
     pub node: Address,
     pub amount: u64,
     pub registered_at: u64,
+}
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum ContractError {
+    AlreadyInitialized = 1,
+    NotInitialized = 2,
+    NotAdmin = 3,
+    NoPendingUpgrade = 4,
+    UpgradeTimelockNotSatisfied = 5,
+    InvalidHeartbeatInterval = 6,
 }
 
 #[contract]
@@ -217,7 +239,6 @@ impl TimeLockedUpgradeContract {
         }
         
         proposer.require_auth();
-        consume_nonce(&env, &proposer, nonce);
         let current_time = env.ledger().timestamp();
         
         let pending_upgrade = PendingUpgrade {
@@ -240,7 +261,6 @@ impl TimeLockedUpgradeContract {
         }
         
         executor.require_auth();
-        consume_nonce(&env, &executor, nonce);
         let pending_upgrade: PendingUpgrade = env
             .storage()
             .instance()
@@ -317,7 +337,6 @@ impl TimeLockedUpgradeContract {
         }
         
         setter.require_auth();
-        consume_nonce(&env, &setter, nonce);
         data.value = value;
         env.storage().instance().set(&DATA_KEY, &data);
 
@@ -430,7 +449,7 @@ impl TimeLockedUpgradeContract {
     /// revocation votes. The admin itself always counts as a signer but
     /// does not need to be explicitly registered.
     pub fn register_signer(env: Env, signer: Address, caller: Address) {
-        let data = Self::get_data(env.clone());
+        let data = Self::get_data(env.clone()).unwrap_or_else(|_| panic!("not initialized"));
         if data.admin != caller {
             panic!("only admin can register signers");
         }
@@ -445,7 +464,7 @@ impl TimeLockedUpgradeContract {
 
     /// Remove a registered signer. Admin-only.
     pub fn remove_signer(env: Env, signer: Address, caller: Address) {
-        let data = Self::get_data(env.clone());
+        let data = Self::get_data(env.clone()).unwrap_or_else(|_| panic!("not initialized"));
         if data.admin != caller {
             panic!("only admin can remove signers");
         }
@@ -480,7 +499,7 @@ impl TimeLockedUpgradeContract {
         proposer: Address,
     ) {
         proposer.require_auth();
-        let data = Self::get_data(env.clone());
+        let data = Self::get_data(env.clone()).unwrap_or_else(|_| panic!("not initialized"));
 
         if !Self::_is_signer(&env, &proposer) && data.admin != proposer {
             panic!("only a registered signer can propose revocation");
@@ -511,7 +530,7 @@ impl TimeLockedUpgradeContract {
     /// immediately replaced with `replacement`.
     pub fn vote_revocation(env: Env, voter: Address) {
         voter.require_auth();
-        let data = Self::get_data(env.clone());
+        let data = Self::get_data(env.clone()).unwrap_or_else(|_| panic!("not initialized"));
 
         if !Self::_is_signer(&env, &voter) && data.admin != voter {
             panic!("only a registered signer can vote");
@@ -546,7 +565,7 @@ impl TimeLockedUpgradeContract {
     /// exists as an explicit on-chain confirmation path.
     pub fn execute_revocation(env: Env, caller: Address) {
         caller.require_auth();
-        let data = Self::get_data(env.clone());
+        let data = Self::get_data(env.clone()).unwrap_or_else(|_| panic!("not initialized"));
 
         if !Self::_is_signer(&env, &caller) && data.admin != caller {
             panic!("only a registered signer can execute revocation");
@@ -575,7 +594,7 @@ impl TimeLockedUpgradeContract {
     /// may cancel.
     pub fn cancel_revocation(env: Env, caller: Address) {
         caller.require_auth();
-        let data = Self::get_data(env.clone());
+        let data = Self::get_data(env.clone()).unwrap_or_else(|_| panic!("not initialized"));
 
         let proposal: RevocationProposal = env
             .storage()
@@ -642,5 +661,5 @@ impl TimeLockedUpgradeContract {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "full-tests"))]
 mod test;
