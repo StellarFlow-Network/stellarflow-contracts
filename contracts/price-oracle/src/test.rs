@@ -2330,6 +2330,38 @@ fn test_remove_admin_emits_event() {
 }
 
 #[test]
+fn test_revoke_compromised_key_blocks_admin_and_provider_paths() {
+    let (env, contract_id, client) = setup();
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+    let compromised = Address::generate(&env);
+    let asset = symbol_short!("NGN");
+
+    client.init_admin(&admin1);
+    env.as_contract(&contract_id, || {
+        crate::auth::_add_authorized(&env, &admin2);
+        crate::auth::_add_provider(&env, &compromised);
+    });
+
+    client.revoke_compromised_key(&admin1, &admin2, &compromised);
+
+    assert!(!client.is_admin(&compromised));
+    client.add_asset(&admin1, &asset);
+
+    let result = client.try_add_asset(&compromised, &symbol_short!("KES"));
+    match result {
+        Err(Ok(err)) => assert_eq!(err, Error::NotAuthorized),
+        other => panic!("expected NotAuthorized for admin path, got {:?}", other),
+    }
+
+    let result = client.try_update_price(&compromised, &asset, &1_000_i128, &6u32, &100u32, &3600u64);
+    match result {
+        Err(Ok(err)) => assert_eq!(err, Error::ProviderNotAuthorized),
+        other => panic!("expected ProviderNotAuthorized for provider path, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_get_admin_count_returns_correct_value() {
     let env = Env::default();
     env.mock_all_auths();

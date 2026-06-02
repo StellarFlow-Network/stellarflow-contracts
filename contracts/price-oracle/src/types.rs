@@ -5,6 +5,8 @@ use soroban_sdk::{contracttype, Address, Symbol};
 #[contracttype]
 pub enum DataKey {
     Admin,
+    /// Permanently revoked admin/provider/delegate identity.
+    Revoked(Address),
     BaseCurrencyPairs,
     /// Legacy flat price map — kept for migration compatibility only.
     PriceData,

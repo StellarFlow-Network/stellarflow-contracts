@@ -190,6 +190,18 @@ pub trait StellarFlowTrait {
         admin_to_remove: Address,
     ) -> Result<(), ContractError>;
 
+    /// Emergency revoke a compromised admin/provider/delegate identity.
+    ///
+    /// Requires 2-of-3 existing admin signatures. The target is immediately
+    /// marked revoked and removed from all configuration-bearing storage paths
+    /// so it can no longer sign, vote, or mutate state.
+    fn revoke_compromised_key(
+        env: Env,
+        admin1: Address,
+        admin2: Address,
+        compromised: Address,
+    ) -> Result<(), ContractError>;
+
     /// Get the total number of registered admins.
     fn get_admin_count(env: Env) -> u32;
 
@@ -2583,6 +2595,10 @@ impl PriceOracle {
             return Err(ContractError::NotAuthorized);
         }
 
+        if crate::auth::_is_revoked(&env, &new_admin) {
+            return Err(ContractError::NotAuthorized);
+        }
+
         // Get current admin list
         let admins = crate::auth::_get_admin(&env);
         let admin_count = admins.len();
@@ -2720,6 +2736,43 @@ impl PriceOracle {
         env.events().publish(
             (Symbol::new(&env, "admin_removed"),),
             (admin1.clone(), admin2.clone(), admin_to_remove.clone()),
+        );
+
+        Ok(())
+    }
+
+    /// Emergency revoke a compromised admin/provider/delegate identity.
+    pub fn revoke_compromised_key(
+        env: Env,
+        admin1: Address,
+        admin2: Address,
+        compromised: Address,
+    ) -> Result<(), ContractError> {
+        crate::auth::_require_not_frozen(&env);
+        if admin1 == admin2 {
+            return Err(ContractError::MultiSigValidationFailed);
+        }
+
+        admin1.require_auth();
+        admin2.require_auth();
+
+        if !crate::auth::_is_authorized(&env, &admin1)
+            || !crate::auth::_is_authorized(&env, &admin2)
+        {
+            return Err(ContractError::NotAuthorized);
+        }
+
+        crate::auth::_set_revoked(&env, &compromised);
+        crate::auth::_remove_authorized(&env, &compromised);
+        crate::auth::_remove_provider(&env, &compromised);
+        crate::auth::_remove_delegate(&env, &compromised);
+        crate::auth::_remove_delegate_references(&env, &compromised);
+        crate::auth::_remove_vote_delegate(&env, &compromised);
+        crate::auth::_remove_vote_delegate_references(&env, &compromised);
+
+        env.events().publish(
+            (Symbol::new(&env, "key_revoked"),),
+            (admin1.clone(), admin2.clone(), compromised.clone()),
         );
 
         Ok(())
@@ -3095,6 +3148,10 @@ impl PriceOracle {
         crate::auth::_require_not_frozen(&env);
         owner.require_auth();
 
+        if crate::auth::_is_revoked(&env, &owner) || crate::auth::_is_revoked(&env, &delegate) {
+            return Err(ContractError::NotAuthorized);
+        }
+
         if owner == delegate {
             return Err(ContractError::InvalidDelegate);
         }
@@ -3110,6 +3167,10 @@ impl PriceOracle {
     pub fn clear_vote_delegate(env: Env, owner: Address) -> Result<(), ContractError> {
         _require_not_destroyed(&env);
         owner.require_auth();
+
+        if crate::auth::_is_revoked(&env, &owner) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         crate::auth::_remove_vote_delegate(&env, &owner);
         env.events()
@@ -3133,6 +3194,10 @@ impl PriceOracle {
         crate::auth::_require_not_frozen(&env);
         admin.require_auth();
         crate::auth::_require_authorized(&env, &admin);
+
+        if crate::auth::_is_revoked(&env, &delegate) {
+            return Err(ContractError::InvalidDelegate);
+        }
 
         if admin == delegate {
             return Err(ContractError::InvalidDelegate);
@@ -3248,6 +3313,9 @@ impl PriceOracle {
             }
             AdminAction::RegisterAdmin => {
                 if let Some(ref new_admin) = proposed.target {
+                    if crate::auth::_is_revoked(&env, new_admin) {
+                        return Err(ContractError::NotAuthorized);
+                    }
                     crate::auth::_add_authorized(&env, new_admin);
                     proposed.executed = true;
                     _log_admin_action(

@@ -51,8 +51,26 @@ pub fn _has_admin(env: &Env) -> bool {
     env.storage().instance().has(&DataKey::Admin)
 }
 
+/// Check whether an address has been revoked by multisig governance.
+pub fn _is_revoked(env: &Env, caller: &Address) -> bool {
+    env.storage()
+        .instance()
+        .get::<DataKey, bool>(&DataKey::Revoked(caller.clone()))
+        .unwrap_or(false)
+}
+
+/// Mark an address as revoked so it can no longer act as admin/provider/delegate.
+pub fn _set_revoked(env: &Env, caller: &Address) {
+    env.storage()
+        .instance()
+        .set(&DataKey::Revoked(caller.clone()), &true);
+}
+
 /// Check if a caller is in the authorized admin list.
 pub fn _is_authorized(env: &Env, caller: &Address) -> bool {
+    if _is_revoked(env, caller) {
+        return false;
+    }
     env.storage()
         .instance()
         .get::<DataKey, Vec<Address>>(&DataKey::Admin)
@@ -68,6 +86,9 @@ pub fn _require_authorized(env: &Env, caller: &Address) {
 
 /// Add an address to the authorized admin list.
 pub fn _add_authorized(env: &Env, new_admin: &Address) {
+    if _is_revoked(env, new_admin) {
+        return;
+    }
     let mut admins = _get_admin(env);
     // Avoid duplicates
     if !admins.iter().any(|admin| admin == *new_admin) {
@@ -151,6 +172,39 @@ pub fn _remove_delegate(env: &Env, admin: &Address) {
     }
 }
 
+/// Remove any submission-delegate references that point at `delegate`.
+pub fn _remove_delegate_references(env: &Env, delegate: &Address) {
+    let admins = _get_admin(env);
+    for admin in admins.iter() {
+        if _get_delegate(env, &admin)
+            .map(|stored_delegate| stored_delegate == *delegate)
+            .unwrap_or(false)
+        {
+            env.storage()
+                .instance()
+                .remove(&DataKey::SubmissionDelegate(admin.clone()));
+        }
+    }
+    env.storage()
+        .instance()
+        .remove(&DataKey::DelegateOf(delegate.clone()));
+}
+
+/// Remove any vote-delegation references that point at `delegate`.
+pub fn _remove_vote_delegate_references(env: &Env, delegate: &Address) {
+    let admins = _get_admin(env);
+    for admin in admins.iter() {
+        if _get_vote_delegate(env, &admin)
+            .map(|stored_delegate| stored_delegate == *delegate)
+            .unwrap_or(false)
+        {
+            env.storage()
+                .instance()
+                .remove(&DataKey::VoteDelegate(admin.clone()));
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Pause Helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -204,6 +258,9 @@ pub fn _remove_provider(env: &Env, provider: &Address) {
 
 /// Returns `true` if the address is a whitelisted provider OR an authorized delegate.
 pub fn _is_provider(env: &Env, addr: &Address) -> bool {
+    if _is_revoked(env, addr) {
+        return false;
+    }
     // 1. Direct provider whitelist check
     if env
         .storage()
@@ -261,10 +318,16 @@ pub fn _remove_vote_delegate(env: &Env, owner: &Address) {
 }
 
 pub fn _get_delegated_voters(env: &Env, delegate: &Address) -> Vec<Address> {
+    if _is_revoked(env, delegate) {
+        return Vec::new(env);
+    }
     let admins = _get_admin(env);
     let mut delegated = Vec::new(env);
 
     for admin in admins.iter() {
+        if _is_revoked(env, &admin) {
+            continue;
+        }
         if _get_vote_delegate(env, &admin)
             .map(|stored_delegate| stored_delegate == *delegate)
             .unwrap_or(false)
@@ -280,13 +343,19 @@ pub fn _add_effective_action_votes(env: &Env, action_id: u64, voter: &Address) -
     let admins = _get_admin(env);
     let mut voters = _get_action_votes(env, action_id);
 
-    if admins.iter().any(|admin| admin == *voter) && _get_vote_delegate(env, voter).is_none() {
+    if admins.iter().any(|admin| admin == *voter)
+        && !_is_revoked(env, voter)
+        && _get_vote_delegate(env, voter).is_none()
+    {
         if !voters.iter().any(|existing| existing == voter) {
             voters.push_back(voter.clone());
         }
     }
 
     for admin in admins.iter() {
+        if _is_revoked(env, &admin) {
+            continue;
+        }
         if admin == *voter {
             continue;
         }
