@@ -32,7 +32,7 @@ pub fn compact_duplicate_price_rows(env: &Env, entries: &Vec<WeightedEntry>) -> 
         let entry = entries.get(i).unwrap();
 
         if let Some(existing_index) = index_by_value.get(entry.value) {
-            let idx = existing_index as usize;
+            let idx = existing_index as u32;
             let existing = compacted.get(idx).unwrap();
             let merged_weight = existing
                 .weight
@@ -134,6 +134,42 @@ pub fn entry_weight_share_bps(entry_weight: u64, total_weight: u64) -> Result<u6
     Ok(numerator / total_weight)
 }
 
+/// Compute the median of up to 11 `u32` price records using a stack-allocated
+/// fixed-size array and inline insertion sort.
+///
+/// The first `count` elements of `values` are sorted in-place; the function
+/// returns the median value.  No heap allocation is performed.
+///
+/// # Errors
+///
+/// Returns `ContractError::EmptyMedianInput` when `count == 0`.
+pub fn median_of(values: &mut [u32; 11], count: usize) -> Result<u32, ContractError> {
+    if count == 0 {
+        return Err(ContractError::EmptyMedianInput);
+    }
+
+    let n = count.min(11);
+
+    // Inline insertion sort on the active portion of the array
+    for i in 1..n {
+        let key = values[i];
+        let mut j = i;
+        while j > 0 && values[j - 1] > key {
+            values[j] = values[j - 1];
+            j -= 1;
+        }
+        values[j] = key;
+    }
+
+    let mid = n / 2;
+    if n % 2 == 0 {
+        let sum = (values[mid - 1] as u64) + (values[mid] as u64);
+        Ok((sum / 2) as u32)
+    } else {
+        Ok(values[mid])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,9 +231,10 @@ mod tests {
     fn test_weighted_sum_duplicate_price_rows_compact() {
         let env = Env::default();
         // Same price value appears twice; weights should merge before weighted sum.
+        // 100*(10+5) + 200*5 = 1500 + 1000 = 2500
         let entries = make_entries(&env, &[(100, 10), (100, 5), (200, 5)]);
         let (ws, tw) = compute_weighted_sum(&env, &entries).unwrap();
-        assert_eq!(ws, 2_000);
+        assert_eq!(ws, 2_500);
         assert_eq!(tw, 20);
     }
 
@@ -312,5 +349,101 @@ mod tests {
     fn test_share_bps_overflow_on_numerator() {
         let result = entry_weight_share_bps(u64::MAX, 1);
         assert_eq!(result, Err(ContractError::Overflow));
+    }
+
+    // --- median_of ---
+
+    #[test]
+    fn test_median_odd_count() {
+        let mut buf = [0u32; 11];
+        buf[..5].copy_from_slice(&[100, 40, 80, 20, 60]);
+        assert_eq!(median_of(&mut buf, 5).unwrap(), 60);
+    }
+
+    #[test]
+    fn test_median_even_count() {
+        let mut buf = [0u32; 11];
+        buf[..4].copy_from_slice(&[10, 30, 20, 40]);
+        // sorted: [10, 20, 30, 40] → (20+30)/2 = 25
+        assert_eq!(median_of(&mut buf, 4).unwrap(), 25);
+    }
+
+    #[test]
+    fn test_median_single_element() {
+        let mut buf = [0u32; 11];
+        buf[0] = 42;
+        assert_eq!(median_of(&mut buf, 1).unwrap(), 42);
+    }
+
+    #[test]
+    fn test_median_full_array_odd() {
+        let mut buf = [0u32; 11];
+        buf.copy_from_slice(&[99, 11, 77, 33, 55, 22, 88, 44, 66, 0, 110]);
+        // sorted: [0, 11, 22, 33, 44, 55, 66, 77, 88, 99, 110]
+        assert_eq!(median_of(&mut buf, 11).unwrap(), 55);
+    }
+
+    #[test]
+    fn test_median_full_array_even_truncated() {
+        let mut buf = [0u32; 11];
+        buf[..10].copy_from_slice(&[100, 200, 50, 150, 75, 175, 25, 125, 60, 90]);
+        // sorted top-10: [25, 50, 60, 75, 90, 100, 125, 150, 175, 200]
+        // median of 10: (90+100)/2 = 95
+        assert_eq!(median_of(&mut buf, 10).unwrap(), 95);
+    }
+
+    #[test]
+    fn test_median_already_sorted() {
+        let mut buf = [0u32; 11];
+        buf[..5].copy_from_slice(&[10, 20, 30, 40, 50]);
+        assert_eq!(median_of(&mut buf, 5).unwrap(), 30);
+    }
+
+    #[test]
+    fn test_median_reverse_sorted() {
+        let mut buf = [0u32; 11];
+        buf[..6].copy_from_slice(&[60, 50, 40, 30, 20, 10]);
+        // sorted: [10, 20, 30, 40, 50, 60]
+        // median of 6: (30+40)/2 = 35
+        assert_eq!(median_of(&mut buf, 6).unwrap(), 35);
+    }
+
+    #[test]
+    fn test_median_duplicates() {
+        let mut buf = [0u32; 11];
+        buf[..7].copy_from_slice(&[50, 50, 30, 40, 40, 40, 30]);
+        // sorted: [30, 30, 40, 40, 40, 50, 50]
+        assert_eq!(median_of(&mut buf, 7).unwrap(), 40);
+    }
+
+    #[test]
+    fn test_median_empty_returns_error() {
+        let mut buf = [0u32; 11];
+        assert_eq!(
+            median_of(&mut buf, 0),
+            Err(ContractError::EmptyMedianInput)
+        );
+    }
+
+    #[test]
+    fn test_median_count_clamped_to_11() {
+        let mut buf = [0u32; 11];
+        buf.copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+        // passing count=20 still only sorts 11
+        assert_eq!(median_of(&mut buf, 20).unwrap(), 6);
+    }
+
+    #[test]
+    fn test_median_zero_values() {
+        let mut buf = [0u32; 11];
+        buf[..3].copy_from_slice(&[0, 0, 1]);
+        assert_eq!(median_of(&mut buf, 3).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_median_max_values() {
+        let mut buf = [0u32; 11];
+        buf[..3].copy_from_slice(&[u32::MAX, u32::MAX - 1, u32::MAX - 2]);
+        assert_eq!(median_of(&mut buf, 3).unwrap(), u32::MAX - 1);
     }
 }
