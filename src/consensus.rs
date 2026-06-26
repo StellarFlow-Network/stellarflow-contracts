@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Env, Map, Vec};
+use soroban_sdk::{contracttype, symbol_short, Address, Env, Map, Symbol, Vec};
 use crate::ContractError;
 
 /// Basis-point denominator used when converting a BPS fraction to a multiplier.
@@ -134,39 +134,49 @@ pub fn entry_weight_share_bps(entry_weight: u64, total_weight: u64) -> Result<u6
     Ok(numerator / total_weight)
 }
 
-/// Compute the median of up to 11 `u32` price records using a stack-allocated
-/// fixed-size array and inline insertion sort.
-///
-/// The first `count` elements of `values` are sorted in-place; the function
-/// returns the median value.  No heap allocation is performed.
-///
-/// # Errors
-///
-/// Returns `ContractError::EmptyMedianInput` when `count == 0`.
-pub fn median_of(values: &mut [u32; 11], count: usize) -> Result<u32, ContractError> {
-    if count == 0 {
-        return Err(ContractError::EmptyMedianInput);
-    }
+/// Result type for price retrieval.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PriceResult {
+    Live(i64),            // Live price from oracle
+    Fallback(i64, u32),   // Historical backup price and safety warning code
+}
 
-    let n = count.min(11);
+/// Safety warning code returned when the live oracle feed is offline.
+pub const WARNING_ORACLE_OFFLINE: u32 = 1001;
 
-    // Inline insertion sort on the active portion of the array
-    for i in 1..n {
-        let key = values[i];
-        let mut j = i;
-        while j > 0 && values[j - 1] > key {
-            values[j] = values[j - 1];
-            j -= 1;
+/// Retrieves the price for a given asset symbol with a graceful fallback.
+///
+/// Returns `PriceResult::Live` if the oracle call succeeds, otherwise `PriceResult::Fallback`
+/// and emits a warning event.
+pub fn get_price_with_fallback(env: &Env, asset: Symbol, fallback_rate: i64) -> PriceResult {
+    let oracle_result = mock_oracle_price(env, asset.clone());
+    match oracle_result {
+        Ok(price) => PriceResult::Live(price),
+        Err(_) => {
+            // Emit a warning event for observability.
+            env.events().publish(
+                (symbol_short!("FallbackW"), asset),
+                (fallback_rate, WARNING_ORACLE_OFFLINE),
+            );
+            PriceResult::Fallback(fallback_rate, WARNING_ORACLE_OFFLINE)
         }
-        values[j] = key;
     }
+}
 
-    let mid = n / 2;
-    if n % 2 == 0 {
-        let sum = (values[mid - 1] as u64) + (values[mid] as u64);
-        Ok((sum / 2) as u32)
+/// Mock function representing the external oracle price lookup.
+/// Uses temporary storage to allow tests to configure success/failure paths.
+pub fn mock_oracle_price(env: &Env, _asset: Symbol) -> Result<i64, ContractError> {
+    let key = symbol_short!("mock_prc");
+    if env.storage().temporary().has(&key) {
+        let val: i64 = env.storage().temporary().get(&key).unwrap();
+        if val >= 0 {
+            Ok(val)
+        } else {
+            Err(ContractError::NotRegistered)
+        }
     } else {
-        Ok(values[mid])
+        Err(ContractError::NotRegistered)
     }
 }
 
@@ -174,6 +184,7 @@ pub fn median_of(values: &mut [u32; 11], count: usize) -> Result<u32, ContractEr
 mod tests {
     use super::*;
     use soroban_sdk::Env;
+    use soroban_sdk::testutils::Address as _;
 
     fn make_entries(env: &Env, pairs: &[(u64, u64)]) -> Vec<WeightedEntry> {
         let mut v = Vec::new(env);
@@ -351,99 +362,52 @@ mod tests {
         assert_eq!(result, Err(ContractError::Overflow));
     }
 
-    // --- median_of ---
+    // --- get_price_with_fallback tests ---
 
     #[test]
-    fn test_median_odd_count() {
-        let mut buf = [0u32; 11];
-        buf[..5].copy_from_slice(&[100, 40, 80, 20, 60]);
-        assert_eq!(median_of(&mut buf, 5).unwrap(), 60);
+    fn test_get_price_with_fallback_success() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
+
+        env.as_contract(&contract_id, || {
+            let asset = symbol_short!("BTC");
+            // Configure the mock price to return 50000
+            env.storage().temporary().set(&symbol_short!("mock_prc"), &50000i64);
+
+            let result = get_price_with_fallback(&env, asset, 45000);
+            assert_eq!(result, PriceResult::Live(50000));
+        });
     }
 
     #[test]
-    fn test_median_even_count() {
-        let mut buf = [0u32; 11];
-        buf[..4].copy_from_slice(&[10, 30, 20, 40]);
-        // sorted: [10, 20, 30, 40] → (20+30)/2 = 25
-        assert_eq!(median_of(&mut buf, 4).unwrap(), 25);
+    fn test_get_price_with_fallback_failure() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
+
+        env.as_contract(&contract_id, || {
+            let asset = symbol_short!("BTC");
+            // No mock price configured (or set to negative to trigger failure)
+            env.storage().temporary().set(&symbol_short!("mock_prc"), &-1i64);
+
+            let result = get_price_with_fallback(&env, asset, 45000);
+            assert_eq!(result, PriceResult::Fallback(45000, WARNING_ORACLE_OFFLINE));
+        });
     }
 
     #[test]
-    fn test_median_single_element() {
-        let mut buf = [0u32; 11];
-        buf[0] = 42;
-        assert_eq!(median_of(&mut buf, 1).unwrap(), 42);
-    }
+    fn test_get_price_with_fallback_failure_emits_event() {
+        use soroban_sdk::testutils::Events;
+        let env = Env::default();
+        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
 
-    #[test]
-    fn test_median_full_array_odd() {
-        let mut buf = [0u32; 11];
-        buf.copy_from_slice(&[99, 11, 77, 33, 55, 22, 88, 44, 66, 0, 110]);
-        // sorted: [0, 11, 22, 33, 44, 55, 66, 77, 88, 99, 110]
-        assert_eq!(median_of(&mut buf, 11).unwrap(), 55);
-    }
+        env.as_contract(&contract_id, || {
+            let asset = symbol_short!("BTC");
 
-    #[test]
-    fn test_median_full_array_even_truncated() {
-        let mut buf = [0u32; 11];
-        buf[..10].copy_from_slice(&[100, 200, 50, 150, 75, 175, 25, 125, 60, 90]);
-        // sorted top-10: [25, 50, 60, 75, 90, 100, 125, 150, 175, 200]
-        // median of 10: (90+100)/2 = 95
-        assert_eq!(median_of(&mut buf, 10).unwrap(), 95);
-    }
+            let result = get_price_with_fallback(&env, asset.clone(), 45000);
+            assert_eq!(result, PriceResult::Fallback(45000, WARNING_ORACLE_OFFLINE));
 
-    #[test]
-    fn test_median_already_sorted() {
-        let mut buf = [0u32; 11];
-        buf[..5].copy_from_slice(&[10, 20, 30, 40, 50]);
-        assert_eq!(median_of(&mut buf, 5).unwrap(), 30);
-    }
-
-    #[test]
-    fn test_median_reverse_sorted() {
-        let mut buf = [0u32; 11];
-        buf[..6].copy_from_slice(&[60, 50, 40, 30, 20, 10]);
-        // sorted: [10, 20, 30, 40, 50, 60]
-        // median of 6: (30+40)/2 = 35
-        assert_eq!(median_of(&mut buf, 6).unwrap(), 35);
-    }
-
-    #[test]
-    fn test_median_duplicates() {
-        let mut buf = [0u32; 11];
-        buf[..7].copy_from_slice(&[50, 50, 30, 40, 40, 40, 30]);
-        // sorted: [30, 30, 40, 40, 40, 50, 50]
-        assert_eq!(median_of(&mut buf, 7).unwrap(), 40);
-    }
-
-    #[test]
-    fn test_median_empty_returns_error() {
-        let mut buf = [0u32; 11];
-        assert_eq!(
-            median_of(&mut buf, 0),
-            Err(ContractError::EmptyMedianInput)
-        );
-    }
-
-    #[test]
-    fn test_median_count_clamped_to_11() {
-        let mut buf = [0u32; 11];
-        buf.copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-        // passing count=20 still only sorts 11
-        assert_eq!(median_of(&mut buf, 20).unwrap(), 6);
-    }
-
-    #[test]
-    fn test_median_zero_values() {
-        let mut buf = [0u32; 11];
-        buf[..3].copy_from_slice(&[0, 0, 1]);
-        assert_eq!(median_of(&mut buf, 3).unwrap(), 0);
-    }
-
-    #[test]
-    fn test_median_max_values() {
-        let mut buf = [0u32; 11];
-        buf[..3].copy_from_slice(&[u32::MAX, u32::MAX - 1, u32::MAX - 2]);
-        assert_eq!(median_of(&mut buf, 3).unwrap(), u32::MAX - 1);
+            let events = env.events().all();
+            assert!(events.len() > 0);
+        });
     }
 }

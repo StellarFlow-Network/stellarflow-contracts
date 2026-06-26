@@ -1,6 +1,10 @@
 #![no_std]
 
+mod math;
+
 use soroban_sdk::{contract, contractimpl, contracttype, Env};
+
+use crate::math::compute_smoothed_value;
 
 /// Compact 4-byte asset identifier replacing verbose Symbol keys for storage.
 #[contracttype]
@@ -49,8 +53,7 @@ impl AnalyticsEngine {
         let key = DataKey::EmaRecord(asset);
         
         let new_ema = if let Some(record) = env.storage().persistent().get::<_, EmaRecord>(&key) {
-            // Calculate new EMA: (Price * alpha + Old_EMA * (1 - alpha))
-            (price * alpha + record.value * (ALPHA_SCALE - alpha)) / ALPHA_SCALE
+            compute_smoothed_value(price, record.value, alpha)
         } else {
             // First price submission becomes the initial EMA
             price
