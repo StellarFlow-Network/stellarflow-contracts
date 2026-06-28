@@ -1166,3 +1166,38 @@ fn test_replacement_signer_promoted_on_revocation() {
     let result = client.try_vote_emergency_revocation(&replacement, &u64::MAX);
     assert_eq!(result, Err(Ok(ContractError::NoActiveEmergencyRevocation)));
 }
+
+#[test]
+fn test_emergency_halt_circuit_breaker() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarFlow);
+    let client = StellarFlowClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let signer_a = Address::generate(&env);
+    
+    client.initialize(&admin);
+    client.register_signer(&signer_a, &admin);
+
+    // Initial state: not paused
+    assert!(!client.is_paused());
+
+    // 1. Signer A (coordinator) can pause the contract
+    client.set_paused(&signer_a, &true);
+    assert!(client.is_paused());
+
+    // 2. Data tracking must halt when paused
+    // update_heartbeat should fail with ContractPaused
+    let heartbeat_result = client.try_update_heartbeat(&0, &admin);
+    assert_eq!(heartbeat_result, Err(Ok(ContractError::ContractPaused)));
+
+    // 3. Admin can unpause the contract
+    client.set_paused(&admin, &false);
+    assert!(!client.is_paused());
+
+    // 4. Random address cannot pause the contract
+    let rando = Address::generate(&env);
+    let pause_result = client.try_set_paused(&rando, &true);
+    assert_eq!(pause_result, Err(Ok(ContractError::Unauthorized)));
+}

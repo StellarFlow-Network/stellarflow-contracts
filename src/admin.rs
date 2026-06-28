@@ -306,8 +306,15 @@ pub fn set_paused(env: &Env, caller: Address, paused: bool) -> Result<(), Contra
         .get(&DATA_KEY)
         .ok_or(ContractError::NotInitialized)?;
 
-    if data.admin != caller {
-        return Err(ContractError::NotAdmin);
+    let signers: Map<Address, ()> = env
+        .storage()
+        .instance()
+        .get(&SIGNERS_KEY)
+        .unwrap_or_else(|| Map::new(env));
+    let is_signer = signers.contains_key(caller.clone());
+
+    if data.admin != caller && !is_signer {
+        return Err(ContractError::Unauthorized);
     }
     caller.require_auth();
 

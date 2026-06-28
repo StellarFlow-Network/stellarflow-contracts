@@ -341,6 +341,7 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn set_value(env: Env, new_value: u64, caller: Address, nonce: u64, salt: Bytes, signature: BytesN<32>, sig_expires_at: u64) -> Result<(), ContractError> {
+        Self::assert_contract_is_active(&env)?;
         if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
         let mut data = Self::get_data(env.clone())?;
         if data.admin != caller { return Err(ContractError::NotAdmin); }
@@ -392,6 +393,7 @@ impl TimeLockedUpgradeContract {
         node: Address,
         pool: Symbol,
     ) -> Result<(), ContractError> {
+        Self::assert_contract_is_active(&env)?;
         node.require_auth();
         check_bond_capacity(&env, &node, &pool)?;
         Self::_record_heartbeat(&env, symbol_to_asset_id(&pool));
@@ -399,6 +401,7 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn update_heartbeat(env: Env, asset: AssetId, updater: Address) -> Result<(), ContractError> {
+        Self::assert_contract_is_active(&env)?;
         let data = Self::get_data(env.clone())?;
         if data.admin != updater { return Err(ContractError::NotAdmin); }
         updater.require_auth();
@@ -652,9 +655,11 @@ impl TimeLockedUpgradeContract {
         env.storage().instance().set(&PLATFORM_CAPITAL_KEY, &capital);
     }
 
-    pub fn finalize_consensus(env: Env) {
+    pub fn finalize_consensus(env: Env) -> Result<(), ContractError> {
+        Self::assert_contract_is_active(&env)?;
         env.storage().temporary().remove(&CONSENSUS_CACHE_KEY);
         env.storage().temporary().remove(&HEARTBEAT_KEY);
+        Ok(())
     }
 
     pub fn register_signer(env: Env, signer: Address, caller: Address) -> Result<(), ContractError> {
