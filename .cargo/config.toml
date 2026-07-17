@@ -1,0 +1,5 @@
+[target.x86_64-pc-windows-gnu]
+rustflags = ["-L", "C:/Users/olani/OneDrive/Desktop/drips/stellarflow-contracts/lib_dummy"]
+
+[host]
+rustflags = ["-L", "C:/Users/olani/OneDrive/Desktop/drips/stellarflow-contracts/lib_dummy"]

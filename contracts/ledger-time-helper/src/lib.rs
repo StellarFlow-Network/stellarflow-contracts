@@ -11,4 +11,9 @@ pub fn current_ledger_timestamp(env: &Env) -> u64 {
     env.ledger().timestamp()
 }
 
+/// Returns the current ledger sequence number.
+pub fn current_ledger_sequence(env: &Env) -> u32 {
+    env.ledger().sequence()
+}
+
 mod test;

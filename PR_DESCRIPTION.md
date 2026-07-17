@@ -101,3 +101,51 @@ let price = oracle.get_price(&asset, &true)?;
 cargo test --manifest-path contracts/price-oracle/Cargo.toml
 # 135 passed; 0 failed
 ```
+
+---
+
+## PR 3 — feat/relayer-gas-compensation-tank
+
+**Branch:** `feat/relayer-gas-compensation-tank`
+**Base:** `main` (or previous feature branches)
+
+### Summary
+
+Implements a centralized gas tank escrow contract where third-party consumers can pre-fund gas allowances and configures the Price Oracle to automatically trigger relayer payouts right after price updates hit the ledger.
+
+### Motivation
+
+Relayers incur on-chain network transaction fees to continuously upload price updates, which can quickly drain their operation accounts. By introducing a centralized gas tank, third-party consumers of the oracle's price feeds can pre-fund fee allowances, ensuring sustainable decentralized relayer operations.
+
+### Changes
+
+**`Cargo.toml`**
+- Registered the new `"contracts/gas-tank"` crate as a member of the cargo workspace.
+
+**`contracts/gas-tank` [NEW]**
+- Implemented `deposit` and `withdraw` entrypoints allowing consumers to pre-fund and reclaim token assets.
+- Implemented `set_allowance` and `get_allowance` to let consumers set per-update limits for individual relayers.
+- Implemented the `reimburse` loop, callable only by the authorized Price Oracle, which iterates through active funders and transfers funds (up to the consumer's available balance and allowance) to the relayer.
+- Structured with a custom `#[contracterror]` enum, returning `Result<(), Error>` from all entrypoints to support clean error propagation and test assertion without causing host aborts.
+
+**`contracts/price-oracle/src/types.rs`**
+- Added the `GasTank` storage slot to the `DataKey` enum to persist the registered Gas Tank address.
+
+**`contracts/price-oracle/src/lib.rs`**
+- Added `set_gas_tank` and `get_gas_tank` admin functions.
+- Modified `update_price` to check if a Gas Tank address is configured, and if so, automatically trigger the Gas Tank's `reimburse` loop for the calling provider.
+
+**`contracts/gas-tank/src/test.rs` [NEW]**
+- Implemented a suite of 10 tests covering:
+  - Token deposits and withdrawals.
+  - Allowance configurations.
+  - Multi-consumer allowances and balance-capped reimbursement payouts.
+  - Unauthorized access rejection.
+
+### Testing
+
+```bash
+cargo test -p gas-tank
+# 10 passed; 0 failed
+```
+

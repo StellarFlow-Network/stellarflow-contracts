@@ -52,6 +52,11 @@
               "key": {
                 "vec": [
                   {
+                    "symbol": "PriceData"
+                  }
+                ]
+              },
+              "durability": "persistent",
                     "symbol": "VerifiedPrice"
                   },
                   {
@@ -64,6 +69,59 @@
                 "map": [
                   {
                     "key": {
+                      "symbol": "ZAR"
+                    },
+                    "val": {
+                      "map": [
+                        {
+                          "key": {
+                            "symbol": "confidence_score"
+                          },
+                          "val": {
+                            "u32": 0
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "decimals"
+                          },
+                          "val": {
+                            "u32": 0
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "price"
+                          },
+                          "val": {
+                            "i128": "0"
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "provider"
+                          },
+                          "val": {
+                            "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM"
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "timestamp"
+                          },
+                          "val": {
+                            "u64": "0"
+                          }
+                        },
+                        {
+                          "key": {
+                            "symbol": "ttl"
+                          },
+                          "val": {
+                            "u64": "0"
+                          }
+                        }
+                      ]
                       "symbol": "confidence_score"
                     },
                     "val": {
@@ -116,6 +174,7 @@
           },
           "ext": "v0"
         },
+        "live_until": 4095
         "live_until": 15
       },
       {

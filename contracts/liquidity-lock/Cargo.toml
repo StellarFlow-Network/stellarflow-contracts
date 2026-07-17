@@ -1,0 +1,16 @@
+[package]
+name = "liquidity-lock"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+soroban-token-sdk = "20.0.0"
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }

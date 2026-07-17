@@ -58,14 +58,16 @@ contract.initialize(&admin_address);
 
 // Propose upgrade (starts 48-hour timelock)
 let new_wasm_hash = BytesN::from_array(&env, &[1u8; 32]);
-contract.propose_upgrade(&new_wasm_hash, &admin_address);
+let (salt, signature) = nonce_proof(&env, 0, b"upgrade-proposal");
+contract.propose_upgrade(&new_wasm_hash, &admin_address, &0, &salt, &signature, &u64::MAX);
 
 // Check timelock status
 let remaining = contract.get_upgrade_timelock_remaining();
 println!("Time remaining: {} seconds", remaining.unwrap());
 
 // After 48 hours, execute upgrade
-contract.execute_upgrade(&admin_address);
+let (exec_salt, exec_signature) = nonce_proof(&env, 1, b"execute-upgrade");
+contract.execute_upgrade(&admin_address, &1, &exec_salt, &exec_signature, &u64::MAX);
 ```
 
 ## Testing
