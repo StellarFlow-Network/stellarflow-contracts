@@ -1,29 +1,16 @@
-use soroban_sdk::{contracttype, symbol_short, Address, Env, Symbol};
+use soroban_sdk::{contracttype, symbol_short, Address, Env, Symbol, TryFromVal, Val, Vec};
 use crate::{ContractData, ContractError, DATA_KEY, SIGNERS_KEY, REVOKED_SIGNER_KEY};
 use crate::storage::{SignerKey, RevokedSignerKey};
-use crate::{ContractData, ContractError, DATA_KEY, REVOKED_SIGNER_KEY, SIGNERS_KEY};
 use crate::temp_governance::{
     store_temp_proposal, get_temp_proposal, has_temp_proposal, remove_temp_proposal,
-    extend_temp_proposal_ttl, EMERGENCY_REVOCATION_TEMP_KEY,
-    DEFAULT_PROPOSAL_TTL, EXTENDED_PROPOSAL_TTL
+    EMERGENCY_REVOCATION_TEMP_KEY, DEFAULT_PROPOSAL_TTL, EXTENDED_PROPOSAL_TTL,
 };
-use soroban_sdk::{contracttype, symbol_short, Address, Env, Map, Symbol, TryFromVal, Val};
-use crate::{ContractData, ContractError, DATA_KEY, SIGNERS_KEY};
-
-fn get_signers(env: &Env) -> Map<Address, ()> {
-    env.storage()
-        .instance()
-        .get(&SIGNERS_KEY)
-        .unwrap_or_else(|| Map::new(env))
-}
-
-fn revocation_threshold(env: &Env) -> u32 {
-    let n = get_signers(env).len();
-    if n == 0 { 1 } else { n / 2 + 1 }
-}
 
 pub(crate) const PENDING_OWNER_KEY: Symbol = symbol_short!("PNDOWN");
 pub(crate) const PENDING_ADMIN_KEY: Symbol = symbol_short!("PADMIN");
+pub(crate) const PAUSED_KEY: Symbol = symbol_short!("PAUSED");
+
+const ADMIN_CHANGE_TIMELOCK_SECONDS: u64 = 24 * 60 * 60;
 
 // ── Per-action admin nonce map ────────────────────────────────────────────────
 
@@ -78,11 +65,25 @@ fn consume_admin_nonce(
     Ok(())
 }
 
-// ── Emergency key revocation ─────────────────────────────────────────────
-// NOTE: Emergency revocation proposals are now stored in temporary storage
-// via EMERGENCY_REVOCATION_TEMP_KEY. The persistent EMERGENCY_REVOCATION_KEY
-// is kept for backward compatibility but is no longer used for new proposals.
+/// Helper function to check if an address is a registered signer.
+fn _is_signer(env: &Env, addr: &Address) -> bool {
+    let signer_key = SignerKey::SignerByAddress(addr.clone());
+    env.storage().instance().has(&signer_key)
+}
 
+/// Helper function to calculate the revocation threshold.
+fn _revocation_threshold(env: &Env) -> u32 {
+    let signer_count: u32 = env.storage().instance().get(&SIGNERS_KEY).unwrap_or(0u32);
+    if signer_count == 0 { 1 } else { signer_count / 2 + 1 }
+}
+
+// ── Emergency key revocation ─────────────────────────────────────────────
+// NOTE: Emergency revocation proposals are stored in Temporary storage via
+// EMERGENCY_REVOCATION_TEMP_KEY so that failed/abandoned proposals auto-purge
+// via TTL instead of lingering in persistent state forever.
+
+/// Kept for the Issue #410 typed storage-key symbol audit; no longer used to
+/// read/write proposals directly (see `EMERGENCY_REVOCATION_TEMP_KEY`).
 pub(crate) const EMERGENCY_REVOCATION_KEY: Symbol = symbol_short!("EMERREV");
 
 /// Proposal raised by the multi-sig coordinator group to revoke a hot-wallet key.
@@ -116,20 +117,14 @@ pub struct PendingOwner {
     pub proposed_by: Address,
 }
 
-fn get_signers(env: &Env) -> Map<Address, ()> {
-    env.storage()
-        .instance()
-        .get(&SIGNERS_KEY)
-        .unwrap_or_else(|| Map::new(env))
-}
-
-fn revocation_threshold(env: &Env) -> u32 {
-    let n = get_signers(env).len();
-    if n == 0 {
-        1
-    } else {
-        n / 2 + 1
-    }
+/// Pending two-phase admin key change record.
+/// Cleared when either the cosigner approves (instant) or the timelock elapses.
+#[contracttype]
+#[derive(Clone)]
+pub struct AdminChangeProposal {
+    pub new_admin: Address,
+    pub proposer: Address,
+    pub proposed_at: u64,
 }
 
 fn execute_emergency_revocation(
@@ -137,20 +132,15 @@ fn execute_emergency_revocation(
     data: ContractData,
     proposal: EmergencyRevocationProposal,
 ) {
-    let mut revoked: Map<Address, ()> = env
-        .storage()
-        .instance()
-        .get(&REVOKED_SIGNER_KEY)
-        .unwrap_or_else(|| Map::new(env));
-    revoked.set(proposal.target.clone(), ());
-    env.storage().instance().set(&REVOKED_SIGNER_KEY, &revoked);
+    let revoked_key = RevokedSignerKey::RevokedByAddress(proposal.target.clone());
+    env.storage().instance().set(&revoked_key, &true);
 
-    let mut signers = get_signers(env);
-    signers.remove(proposal.target.clone());
+    let signer_key = SignerKey::SignerByAddress(proposal.target.clone());
+    env.storage().instance().remove(&signer_key);
     if proposal.replacement != proposal.target {
-        signers.set(proposal.replacement.clone(), ());
+        let replacement_key = SignerKey::SignerByAddress(proposal.replacement.clone());
+        env.storage().instance().set(&replacement_key, &true);
     }
-    env.storage().instance().set(&SIGNERS_KEY, &signers);
 
     let mut contract_data = data;
     if contract_data.admin == proposal.target {
@@ -158,18 +148,23 @@ fn execute_emergency_revocation(
         env.storage().instance().set(&DATA_KEY, &contract_data);
     }
 
-    // ── CHANGED: Remove from temporary storage instead of persistent ──
     remove_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY);
 }
 
-// ─── Issue #429: Two-phase ownership transfer ────────────────────────────────
+// ── Emergency revocation — Phase 1: open a proposal ──────────────────────
 
-/// Phase 1: current admin nominates a new owner.
-/// Stores the nominee under `PNDOWN`; does not transfer ownership yet.
-pub fn propose_ownership_transfer(
+/// Any registered signer **or** the current admin may open an emergency
+/// revocation proposal against a compromised hot-wallet address.
+///
+/// Only one proposal may be active at a time.  The caller must not be the
+/// target of the proposal (a compromised key must not be able to propose its
+/// own revocation to stall the process with a self-serving replacement).
+pub fn propose_emergency_revocation(
     env: &Env,
-    current_admin: Address,
-    nominee: Address,
+    proposer: Address,
+    target: Address,
+    replacement: Address,
+    nonce: u64,
 ) -> Result<(), ContractError> {
     let data: ContractData = env
         .storage()
@@ -177,40 +172,29 @@ pub fn propose_ownership_transfer(
         .get(&DATA_KEY)
         .ok_or(ContractError::NotInitialized)?;
 
-    if data.admin != current_admin {
-        return Err(ContractError::NotAdmin);
+    // The target must not open its own revocation proposal.
+    if proposer == target {
+        return Err(ContractError::Unauthorized);
     }
-    current_admin.require_auth();
 
     // Only the admin or a registered signer may open a proposal.
     let is_signer = _is_signer(env, &proposer);
-    let is_signer = get_signers(env).contains_key(proposer.clone());
     if data.admin != proposer && !is_signer {
         return Err(ContractError::Unauthorized);
-    if env.storage().instance().has(&PENDING_OWNER_KEY) {
-        return Err(ContractError::TransferAlreadyPending);
     }
+    proposer.require_auth();
+    consume_admin_nonce(env, &proposer, AdminAction::ProposeEmergencyRevocation, nonce)?;
 
     // Guard: only one active emergency proposal at a time.
-    // ── CHANGED: Check temporary storage instead of persistent ──
     if has_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY) {
         return Err(ContractError::EmergencyRevocationAlreadyActive);
     }
 
     // The target must currently be a signer or the admin.
     let target_is_signer = _is_signer(env, &target);
-    let target_is_signer = get_signers(env).contains_key(target.clone());
     if data.admin != target && !target_is_signer {
         return Err(ContractError::TargetNotAdmin);
     }
-/// Phase 2: nominee claims ownership, proving key access.
-/// Only succeeds when a pending transfer exists and caller is the nominee.
-pub fn claim_ownership(env: &Env, claimer: Address) -> Result<(), ContractError> {
-    let pending: PendingOwner = env
-        .storage()
-        .instance()
-        .get(&PENDING_OWNER_KEY)
-        .ok_or(ContractError::NoPendingOwner)?;
 
     let mut votes: Vec<Address> = Vec::new(env);
     // The proposer's opening of the proposal counts as their vote.
@@ -224,13 +208,197 @@ pub fn claim_ownership(env: &Env, claimer: Address) -> Result<(), ContractError>
         votes,
     };
 
-    if proposal.votes.len() >= revocation_threshold(env) {
+    if proposal.votes.len() >= _revocation_threshold(env) {
         execute_emergency_revocation(env, data, proposal);
     } else {
-        // ── CHANGED: Store in temporary storage instead of persistent ──
         store_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY, &proposal, DEFAULT_PROPOSAL_TTL);
     }
+
+    Ok(())
+}
+
+// ── Emergency revocation — Phase 2: cast a vote ───────────────────────────
+
+/// A registered signer or the admin casts an `aye` vote on the active
+/// emergency revocation proposal.
+///
+/// When the vote count reaches the majority threshold the function
+/// **immediately**:
+/// 1. Writes the target address into `REVOKED_SIGNER_KEY` storage so that
+///    every downstream guard (`assert_not_revoked`) blocks it instantly.
+/// 2. Removes the target from the active signer set.
+/// 3. Optionally promotes `replacement` into the signer set.
+/// 4. If the target is the current admin, transfers admin rights to
+///    `replacement`.
+/// 5. Clears the proposal from storage.
+pub fn vote_emergency_revocation(
+    env: &Env,
+    voter: Address,
+    sig_expires_at: u64,
+    nonce: u64,
+) -> Result<(), ContractError> {
+    // Reject stale signatures up-front.
+    if env.ledger().timestamp() > sig_expires_at {
+        return Err(ContractError::SignatureExpired);
+    }
+
+    voter.require_auth();
+
+    let data: ContractData = env
+        .storage()
+        .instance()
+        .get(&DATA_KEY)
+        .ok_or(ContractError::NotInitialized)?;
+
+    // Only the admin or a registered signer may vote.
+    let is_signer = _is_signer(env, &voter);
+    if data.admin != voter && !is_signer {
+        return Err(ContractError::Unauthorized);
+    }
+    consume_admin_nonce(env, &voter, AdminAction::VoteEmergencyRevocation, nonce)?;
+
+    let mut proposal: EmergencyRevocationProposal = get_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY)
+        .ok_or(ContractError::NoActiveEmergencyRevocation)?;
+
+    // Prevent double-voting.
+    for i in 0..proposal.votes.len() {
+        if proposal.votes.get(i).unwrap() == voter {
+            return Err(ContractError::AlreadyVoted);
+        }
+    }
+
+    // The compromised key must never be allowed to vote on its own revocation.
+    if voter == proposal.target {
+        return Err(ContractError::Unauthorized);
+    }
+
+    proposal.votes.push_back(voter);
+
+    let threshold = _revocation_threshold(env);
+
+    if proposal.votes.len() >= threshold {
+        execute_emergency_revocation(env, data, proposal);
+    } else {
+        // Threshold not yet reached — persist the updated vote tally.
+        store_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY, &proposal, EXTENDED_PROPOSAL_TTL);
+    }
+
+    Ok(())
+}
+
+// ── Emergency revocation — query ─────────────────────────────────────────
+
+/// Returns the active emergency revocation proposal, if one exists.
+/// Proposals are stored in temporary storage and will auto-purge after TTL.
+pub fn get_emergency_revocation_proposal(env: &Env) -> Option<EmergencyRevocationProposal> {
+    get_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY)
+}
+
+/// Returns `true` if `addr` has been stamped as revoked.
+///
+/// This is intentionally a pure read — callers that need to *enforce* the
+/// check should call `assert_not_revoked` instead.
+pub fn is_revoked(env: &Env, addr: &Address) -> bool {
+    let revoked_key = RevokedSignerKey::RevokedByAddress(addr.clone());
+    env.storage().instance().has(&revoked_key)
+}
+
+/// Enforcing guard — returns `RevokedAddress` if `addr` is in the revocation
+/// list.  Call this at the top of every sensitive function.
+pub fn assert_not_revoked(env: &Env, addr: &Address) -> Result<(), ContractError> {
+    if is_revoked(env, addr) {
+        Err(ContractError::RevokedAddress)
+    } else {
+        Ok(())
+    }
+}
+
+// ── Proposal cleanup and lifecycle management ────────────────────────────
+
+/// Explicitly purge an expired or stale emergency revocation proposal from temporary storage.
+///
+/// This function allows the admin or any authorized party to proactively clean up
+/// proposals that have failed to reach quorum or have become stale. While the Soroban
+/// network will eventually auto-purge these via TTL expiration, explicit removal:
+/// - Frees storage resources sooner
+/// - Allows reinitiating a new proposal immediately
+/// - Provides audit trail of cleanup actions
+///
+/// The proposal must exist and no threshold check is performed — this is purely
+/// a cleanup operation for failed or expired voting attempts.
+pub fn purge_emergency_revocation_proposal(env: &Env) -> Result<(), ContractError> {
+    // Verify the contract is initialized
+    let _data: ContractData = env
+        .storage()
+        .instance()
+        .get(&DATA_KEY)
+        .ok_or(ContractError::NotInitialized)?;
+
+    if has_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY) {
+        remove_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY);
+    }
+
+    Ok(())
+}
+
+/// Check if an emergency revocation proposal is currently active (stored in temp storage).
+///
+/// Returns true only if the proposal exists in temporary storage and hasn't expired
+/// according to Soroban's TTL mechanism.
+pub fn has_active_emergency_revocation(env: &Env) -> bool {
+    has_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY)
+}
+
+// ─── Issue #429: Two-phase ownership transfer ────────────────────────────────
+
+/// Phase 1: current admin nominates a new owner.
+/// Stores the nominee under `PNDOWN`; does not transfer ownership yet.
+pub fn propose_ownership_transfer(
+    env: &Env,
+    current_admin: Address,
+    nominee: Address,
+    nonce: u64,
+) -> Result<(), ContractError> {
+    let data: ContractData = env
+        .storage()
+        .instance()
+        .get(&DATA_KEY)
+        .ok_or(ContractError::NotInitialized)?;
+
+    if data.admin != current_admin {
+        return Err(ContractError::NotAdmin);
+    }
+    current_admin.require_auth();
+    consume_admin_nonce(env, &current_admin, AdminAction::ProposeOwnershipTransfer, nonce)?;
+
+    if env.storage().instance().has(&PENDING_OWNER_KEY) {
+        return Err(ContractError::TransferAlreadyPending);
+    }
+
+    env.storage().instance().set(
+        &PENDING_OWNER_KEY,
+        &PendingOwner {
+            nominee,
+            proposed_by: current_admin,
+        },
+    );
+    Ok(())
+}
+
+/// Phase 2: nominee claims ownership, proving key access.
+/// Only succeeds when a pending transfer exists and caller is the nominee.
+pub fn claim_ownership(env: &Env, claimer: Address, nonce: u64) -> Result<(), ContractError> {
+    let pending: PendingOwner = env
+        .storage()
+        .instance()
+        .get(&PENDING_OWNER_KEY)
+        .ok_or(ContractError::NoPendingOwner)?;
+
+    if pending.nominee != claimer {
+        return Err(ContractError::NotAdmin);
+    }
     claimer.require_auth();
+    consume_admin_nonce(env, &claimer, AdminAction::ClaimOwnership, nonce)?;
 
     let mut data: ContractData = env
         .storage()
@@ -267,78 +435,11 @@ pub fn propose_admin_change(
         .get(&DATA_KEY)
         .ok_or(ContractError::NotInitialized)?;
 
-    // Only the admin or a registered signer may vote.
-    let is_signer = _is_signer(env, &voter);
-    let is_signer = get_signers(env).contains_key(voter.clone());
-    if data.admin != voter && !is_signer {
-        return Err(ContractError::Unauthorized);
+    if data.admin != current_admin {
+        return Err(ContractError::NotAdmin);
     }
-    consume_admin_nonce(env, &voter, AdminAction::VoteEmergencyRevocation, nonce)?;
-
-    // ── CHANGED: Retrieve from temporary storage instead of persistent ──
-    let mut proposal: EmergencyRevocationProposal = get_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY)
-        .ok_or(ContractError::NoActiveEmergencyRevocation)?;
-
-    // Prevent double-voting.
-    for i in 0..proposal.votes.len() {
-        if proposal.votes.get(i).unwrap() == voter {
-            return Err(ContractError::AlreadyVoted);
-        }
-    }
-
-    // The compromised key must never be allowed to vote on its own revocation.
-    if voter == proposal.target {
-        return Err(ContractError::Unauthorized);
-    }
-
-    proposal.votes.push_back(voter);
-
-    let threshold = revocation_threshold(env);
-
-    if proposal.votes.len() >= threshold {
-        // ── Threshold reached: execute revocation immediately ────────────
-
-        // 1. Stamp the target as revoked in persistent storage.
-        //    This is the flag that `assert_not_revoked` checks before every
-        //    sensitive operation.
-        let revoked_key = RevokedSignerKey(proposal.target.clone());
-        env.storage().instance().set(&revoked_key, &true);
-
-        // 2. Remove the target from the active signer set.
-        let signer_key = SignerKey(proposal.target.clone());
-        env.storage().instance().remove(&signer_key);
-        let mut revoked: Map<Address, ()> = env
-            .storage()
-            .instance()
-            .get(&REVOKED_SIGNER_KEY)
-            .unwrap_or_else(|| Map::new(env));
-        revoked.set(proposal.target.clone(), ());
-        env.storage().instance().set(&REVOKED_SIGNER_KEY, &revoked);
-
-        // 2. Remove the target from the active signer set.
-        let mut signers = get_signers(env);
-        signers.remove(proposal.target.clone());
-
-        // 3. Promote the replacement into the signer set (unless it is the
-        //    target itself, which would be a no-op replacement).
-        if proposal.replacement != proposal.target {
-            let replacement_key = SignerKey(proposal.replacement.clone());
-            env.storage().instance().set(&replacement_key, &true);
-        }
-
-        // 4. If the compromised key was the admin, transfer admin rights.
-        let mut contract_data = data;
-        if contract_data.admin == proposal.target {
-            contract_data.admin = proposal.replacement.clone();
-            env.storage().instance().set(&DATA_KEY, &contract_data);
-        }
-
-        // 5. ── CHANGED: Wipe from temporary storage instead of persistent ──
-        remove_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY);
-    } else {
-        // Threshold not yet reached — persist the updated vote tally.
-        // ── CHANGED: Store in temporary storage with extended TTL ──
-        store_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY, &proposal, EXTENDED_PROPOSAL_TTL);
+    if env.storage().instance().has(&PENDING_ADMIN_KEY) {
+        return Err(ContractError::AdminChangePending);
     }
     current_admin.require_auth();
 
@@ -353,23 +454,14 @@ pub fn propose_admin_change(
     Ok(())
 }
 
-// ── Emergency revocation — query ─────────────────────────────────────────
-
-/// Returns the active emergency revocation proposal, if one exists.
-/// ── NOTE: Proposals are now stored in temporary storage and will auto-purge after TTL ──
-pub fn get_emergency_revocation_proposal(env: &Env) -> Option<EmergencyRevocationProposal> {
-    get_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY)
-}
-
-/// Returns `true` if `addr` has been stamped as revoked.
-///
-/// This is intentionally a pure read — callers that need to *enforce* the
-/// check should call `assert_not_revoked` instead.
-pub fn is_revoked(env: &Env, addr: &Address) -> bool {
-    let revoked_key = RevokedSignerKey(addr.clone());
-    env.storage().instance().has(&revoked_key)
-}
-    let revoked: Map<Address, ()> = env
+/// Phase 2 — path A: a registered cosigner independently approves the change.
+/// Executes the admin key change immediately without waiting for the timelock.
+/// The cosigner must be distinct from the proposer.
+pub fn countersign_admin_change(
+    env: &Env,
+    cosigner: Address,
+) -> Result<(), ContractError> {
+    let proposal: AdminChangeProposal = env
         .storage()
         .instance()
         .get(&PENDING_ADMIN_KEY)
@@ -379,19 +471,13 @@ pub fn is_revoked(env: &Env, addr: &Address) -> bool {
         return Err(ContractError::CosignerCannotBeProposer);
     }
 
-    let authorized_signers: Map<Address, ()> = env
-        .storage()
-        .instance()
-        .get(&SIGNERS_KEY)
-        .unwrap_or_else(|| Map::new(env));
     let data: ContractData = env
         .storage()
         .instance()
         .get(&DATA_KEY)
         .ok_or(ContractError::NotInitialized)?;
 
-    let is_authorized =
-        authorized_signers.contains_key(cosigner.clone()) || data.admin == cosigner;
+    let is_authorized = _is_signer(env, &cosigner) || data.admin == cosigner;
     if !is_authorized {
         return Err(ContractError::Unauthorized);
     }
@@ -436,6 +522,7 @@ pub fn execute_admin_change_by_timelock(
     contract_data.admin = proposal.new_admin;
     env.storage().instance().set(&DATA_KEY, &contract_data);
     env.storage().instance().remove(&PENDING_ADMIN_KEY);
+    crate::recovery::update_admin_activity(env);
     Ok(())
 }
 
@@ -463,6 +550,7 @@ pub fn cancel_admin_change(
     canceller.require_auth();
 
     env.storage().instance().remove(&PENDING_ADMIN_KEY);
+    crate::recovery::update_admin_activity(env);
     Ok(())
 }
 
@@ -471,53 +559,31 @@ pub fn get_pending_admin_change(env: &Env) -> Option<AdminChangeProposal> {
     env.storage().instance().get(&PENDING_ADMIN_KEY)
 }
 
-// ── Proposal cleanup and lifecycle management ────────────────────────────
+// ── Emergency pause ───────────────────────────────────────────────────────
 
-/// Explicitly purge an expired or stale emergency revocation proposal from temporary storage.
-///
-/// This function allows the admin or any authorized party to proactively clean up
-/// proposals that have failed to reach quorum or have become stale. While the Soroban
-/// network will eventually auto-purge these via TTL expiration, explicit removal:
-/// - Frees storage resources sooner
-/// - Allows reinitiating a new proposal immediately
-/// - Provides audit trail of cleanup actions
-///
-/// The proposal must exist and no threshold check is performed — this is purely
-/// a cleanup operation for failed or expired voting attempts.
-pub fn purge_emergency_revocation_proposal(env: &Env) -> Result<(), ContractError> {
-    // Verify the contract is initialized
-    let _data: ContractData = env
+/// Emergency stop: verified admin sets the global is_paused flag.
+pub fn set_paused(env: &Env, caller: Address, paused: bool, nonce: u64) -> Result<(), ContractError> {
+    let data: ContractData = env
         .storage()
         .instance()
         .get(&DATA_KEY)
         .ok_or(ContractError::NotInitialized)?;
 
-    // Purge the proposal from temporary storage if it exists
-    if has_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY) {
-        remove_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY);
+    if data.admin != caller {
+        return Err(ContractError::NotAdmin);
     }
+    caller.require_auth();
+    consume_admin_nonce(env, &caller, AdminAction::SetPaused, nonce)?;
 
+    env.storage().instance().set(&PAUSED_KEY, &paused);
     Ok(())
 }
 
-/// Check if an emergency revocation proposal is currently active (stored in temp storage).
-///
-/// Returns true only if the proposal exists in temporary storage and hasn't expired
-/// according to Soroban's TTL mechanism.
-pub fn has_active_emergency_revocation(env: &Env) -> bool {
-    has_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY)
+/// Returns true when the contract is in emergency-paused state.
+pub fn is_paused(env: &Env) -> bool {
+    env.storage().instance().get(&PAUSED_KEY).unwrap_or(false)
 }
 
-/// Helper function to check if an address is a registered signer.
-fn _is_signer(env: &Env, addr: &Address) -> bool {
-    let signer_key = SignerKey(addr.clone());
-    env.storage().instance().has(&signer_key)
-}
-
-/// Helper function to calculate the revocation threshold.
-fn _revocation_threshold(env: &Env) -> u32 {
-    let signer_count: u32 = env.storage().instance().get(&SIGNERS_KEY).unwrap_or(0u32);
-    if signer_count == 0 { 1 } else { signer_count / 2 + 1 }
 // ─── Issue #410: Admin Storage Isolation via Contextual Instance Storage ──
 //
 // Issue #410 is a state-isolation hardening request: admin configuration
@@ -624,8 +690,8 @@ where
 // ─── Issue #410: tests ────────────────────────────────────────────────────
 //
 // These tests are intentionally self-contained: they only exercise the
-// additions above and do not depend on the broken pre-existing function
-// bodies elsewhere in `admin.rs` (e.g. `propose_ownership_transfer`).
+// additions above and do not depend on the other function bodies elsewhere
+// in `admin.rs`.
 
 #[cfg(test)]
 mod issue_410_tests {
@@ -660,14 +726,17 @@ mod issue_410_tests {
         let env = Env::default();
         env.mock_all_auths();
         let admin = Address::generate(&env);
+        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
 
-        let slot_value: Option<u64> = load_admin_slot_with_auth(
-            &env,
-            &admin,
-            AdminStorageKey::ContractData,
-        )
-        .expect("helper should not error on empty slot");
-        assert_eq!(slot_value, None);
+        env.as_contract(&contract_id, || {
+            let slot_value: Option<u64> = load_admin_slot_with_auth(
+                &env,
+                &admin,
+                AdminStorageKey::ContractData,
+            )
+            .expect("helper should not error on empty slot");
+            assert_eq!(slot_value, None);
+        });
     }
 
     #[test]
@@ -675,20 +744,23 @@ mod issue_410_tests {
         let env = Env::default();
         env.mock_all_auths();
         let admin = Address::generate(&env);
+        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
 
-        // Populate the slot through the same enum path that downstream
-        // code would use, proving the helper reads what it predicts to read.
-        env.storage()
-            .instance()
-            .set(&AdminStorageKey::PendingAdmin.symbol(), &7u64);
+        env.as_contract(&contract_id, || {
+            // Populate the slot through the same enum path that downstream
+            // code would use, proving the helper reads what it predicts to read.
+            env.storage()
+                .instance()
+                .set(&AdminStorageKey::PendingAdmin.symbol(), &7u64);
 
-        let value: Option<u64> = load_admin_slot_with_auth(
-            &env,
-            &admin,
-            AdminStorageKey::PendingAdmin,
-        )
-        .expect("helper should not error on populated slot");
-        assert_eq!(value, Some(7u64));
+            let value: Option<u64> = load_admin_slot_with_auth(
+                &env,
+                &admin,
+                AdminStorageKey::PendingAdmin,
+            )
+            .expect("helper should not error on populated slot");
+            assert_eq!(value, Some(7u64));
+        });
     }
 
     #[test]

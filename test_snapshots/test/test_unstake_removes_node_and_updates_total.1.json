@@ -118,7 +118,7 @@
             },
             "ext": "v0"
           },
-          17280
+          15
         ]
       ],
       [
@@ -156,14 +156,6 @@
                               },
                               "val": {
                                 "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                              }
-                            },
-                            {
-                              "key": {
-                                "symbol": "max_fee_ceiling"
-                              },
-                              "val": {
-                                "u64": 1000000000
                               }
                             },
                             {

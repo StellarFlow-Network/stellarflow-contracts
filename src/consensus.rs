@@ -1,11 +1,71 @@
-use soroban_sdk::{contracttype, symbol_short, Address, Env, Symbol, Vec};
-use crate::ContractError;
-use crate::storage::SequenceKey;
-use crate::ContractError;
 use soroban_sdk::{contracttype, symbol_short, Address, Env, Map, Symbol, Vec};
+use crate::ContractError;
+
+pub const MAX_VALIDATORS: usize = 16;
+
+/// Perform a binary search on a sorted stack-allocated array of validator IDs.
+/// Returns Ok(index) if found, Err(index) if not found (where index is the insertion point).
+pub fn binary_search_validator(validators: &[u32; MAX_VALIDATORS], id: u32, len: usize) -> Result<usize, usize> {
+    let mut low = 0;
+    let mut high = len;
+    
+    while low < high {
+        let mid = low + (high - low) / 2;
+        if validators[mid] == id {
+            return Ok(mid);
+        } else if validators[mid] < id {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    Err(low)
+}
+
+/// Refactored consensus depth check using stack-allocated array.
+pub fn check_consensus_depth_stack(_env: &Env, _validators: &[u32; MAX_VALIDATORS], len: usize) -> Result<(), ContractError> {
+    if len < 3 {
+        return Err(ContractError::IncompleteQuorum);
+    }
+    Ok(())
+}
 
 /// Basis-point denominator used when converting a BPS fraction to a multiplier.
 pub const BPS_DENOMINATOR: u64 = 10_000;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// State-isolation storage keys
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Per-asset composite key for the **active** epoch sequence checkpoint.
+///
+/// Replaces the monolithic `Map<Symbol, u32>` stored under the flat `"SEQ_TRK"`
+/// key. Each asset's live sequence counter now occupies its own isolated
+/// instance-storage slot, so a single-asset lookup never deserializes sequence
+/// data for every other tracked asset.
+///
+/// Layout: `ConsensusSeq(asset_symbol)` → `u32`
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ConsensusStorageKey {
+    /// Active epoch sequence checkpoint for a single asset.
+    ///
+    /// Written on every accepted ingestion event; read on every incoming
+    /// submission to enforce the monotone-sequence invariant.
+    ConsensusSeq(Symbol),
+
+    /// Archival ingestion-history record for a single asset.
+    ///
+    /// Stores the *previous* accepted sequence number immediately before it is
+    /// overwritten by a new checkpoint. This offloads past validation metadata
+    /// to a dedicated archival key so it is never touched by the hot-path
+    /// `verify_and_update_sequence` read, minimising ledger fee overhead during
+    /// dynamic configuration lookups.
+    ///
+    /// Consumers that need audit trails or replay protection for past epochs
+    /// read from this key; active consensus logic reads only `ConsensusSeq`.
+    EpochSeqArchive(Symbol),
+}
 
 /// Minimum safety threshold for block height gaps between consecutive submissions.
 /// Prevents ledger bloat from rapid telemetry updates within the same block window.
@@ -222,12 +282,25 @@ pub fn verify_epoch_window(
 }
 
 /// Validate and register the sequence of the latest asset update.
-/// Rejects incoming price updates instantly if the incoming tracking sequence
-/// is less than or equal to the active stored checkpoint value.
-pub fn verify_and_update_sequence(env: &Env, asset: Symbol, incoming_sequence: u32) -> Result<(), ContractError> {
-    let seq_key = SequenceKey(asset.clone());
-    
-    if let Some(active_sequence) = env.storage().instance().get(&seq_key) {
+///
+/// # State-isolation model
+///
+/// Uses per-asset composite storage keys instead of a flat `Map<Symbol, u32>`:
+///
+/// - **`ConsensusStorageKey::ConsensusSeq(asset)`** — the active epoch sequence
+///   checkpoint for the asset being validated.  Only this single slot is read or
+///   written on every call, keeping the hot-path memory footprint O(1) per asset.
+///
+/// - **`ConsensusStorageKey::EpochSeqArchive(asset)`** — receives the *previous*
+///   accepted sequence value immediately before the checkpoint is advanced.  Past
+///   validation history is thus offloaded to a dedicated archival key that the
+///   active consensus path never touches.
+///
+/// # Behaviour
+///
+/// Rejects `incoming_sequence` if it is ≤ the active stored checkpoint
+/// (`ContractError::StaleSequence`).  On acceptance, the old checkpoint is
+/// archived before the new one is committed.
 pub fn verify_and_update_sequence(
     env: &Env,
     asset: Symbol,
@@ -249,12 +322,30 @@ pub fn verify_and_update_sequence(
         let archive_key = ConsensusStorageKey::EpochSeqArchive(asset.clone());
         env.storage().instance().set(&archive_key, &current);
     }
-    
-    env.storage().instance().set(&seq_key, &incoming_sequence);
 
     // ── Write the new active checkpoint (isolated from archival history) ──────
     env.storage().instance().set(&active_key, &incoming_sequence);
     Ok(())
+}
+
+/// Read the current active epoch sequence checkpoint for an asset.
+///
+/// Returns `None` when no submission has been accepted yet for `asset`.
+/// Reads only the `ConsensusSeq(asset)` slot — never touches archival history.
+pub fn get_active_sequence(env: &Env, asset: Symbol) -> Option<u32> {
+    env.storage()
+        .instance()
+        .get(&ConsensusStorageKey::ConsensusSeq(asset))
+}
+
+/// Read the most recently archived (previous epoch) sequence checkpoint for an asset.
+///
+/// Returns `None` when the asset has never had more than one accepted ingestion
+/// event (i.e. the archive has not been written yet).
+pub fn get_archived_sequence(env: &Env, asset: Symbol) -> Option<u32> {
+    env.storage()
+        .instance()
+        .get(&ConsensusStorageKey::EpochSeqArchive(asset))
 }
 
 /// Validate and enforce minimum block height gap between consecutive submissions.
@@ -298,6 +389,34 @@ mod tests {
             v.push_back(WeightedEntry { value, weight });
         }
         v
+    }
+
+    // --- binary_search_validator & check_consensus_depth_stack ---
+    
+    #[test]
+    fn test_binary_search_validator() {
+        let mut validators = [0u32; MAX_VALIDATORS];
+        validators[0] = 10;
+        validators[1] = 20;
+        validators[2] = 30;
+        let len = 3;
+        
+        assert_eq!(binary_search_validator(&validators, 20, len), Ok(1));
+        assert_eq!(binary_search_validator(&validators, 15, len), Err(1));
+    }
+
+    #[test]
+    fn test_check_consensus_depth_stack_success() {
+        let env = Env::default();
+        let validators = [0u32; MAX_VALIDATORS];
+        assert!(check_consensus_depth_stack(&env, &validators, 5).is_ok());
+    }
+
+    #[test]
+    fn test_check_consensus_depth_stack_failure() {
+        let env = Env::default();
+        let validators = [0u32; MAX_VALIDATORS];
+        assert_eq!(check_consensus_depth_stack(&env, &validators, 2), Err(ContractError::IncompleteQuorum));
     }
 
     // --- apply_weight ---

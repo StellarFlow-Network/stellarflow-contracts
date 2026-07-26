@@ -79,14 +79,6 @@
                             },
                             {
                               "key": {
-                                "symbol": "max_fee_ceiling"
-                              },
-                              "val": {
-                                "u64": 1000000000
-                              }
-                            },
-                            {
-                              "key": {
                                 "symbol": "value"
                               },
                               "val": {
@@ -276,14 +268,6 @@
                 },
                 {
                   "key": {
-                    "symbol": "max_fee_ceiling"
-                  },
-                  "val": {
-                    "u64": 1000000000
-                  }
-                },
-                {
-                  "key": {
                     "symbol": "value"
                   },
                   "val": {
@@ -316,7 +300,7 @@
               }
             ],
             "data": {
-              "u32": 2654435761
+              "u32": 3418146798
             }
           }
         }
@@ -393,14 +377,6 @@
                   },
                   "val": {
                     "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "max_fee_ceiling"
-                  },
-                  "val": {
-                    "u64": 1000000000
                   }
                 },
                 {

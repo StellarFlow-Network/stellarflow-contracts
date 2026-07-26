@@ -14,19 +14,20 @@ members = [
     "contracts/price-oracle",
     "contracts/reward-splitter",
     "contracts/gas-tank",
+    "tests/benchmarks",
 ]
 resolver = "2"
 
 [workspace.dependencies]
-soroban-sdk = { version = "=20.0.0", features = ["testutils"] }
+soroban-sdk = { version = "=20.0.0", default-features = false, features = ["testutils"] }
 
 [dependencies]
-soroban-sdk = { version = "=20.0.0", features = ["testutils"] }
-soroban-token-sdk = "=20.0.0"
+soroban-sdk = { version = "=20.0.0", default-features = false, features = ["testutils"] }
+soroban-token-sdk = { version = "=20.0.0", default-features = false }
 ledger-time-helper = { path = "contracts/ledger-time-helper" }
 
 [dev-dependencies]
-soroban-sdk = { version = "=20.0.0", features = ["testutils"] }
+soroban-sdk = { version = "=20.0.0", default-features = false, features = ["testutils"] }
 
 [lib]
 crate-type = ["cdylib"]
