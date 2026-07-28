@@ -423,6 +423,41 @@ impl TimeLockedUpgradeContract {
         governance::get_ballot(&env, REVOCATION_KEY)
     }
 
+    /// Return the active governance configuration (quorum threshold).
+    pub fn get_governance_config(env: Env) -> governance::GovernanceConfig {
+        governance::get_governance_config(&env)
+    }
+
+    /// Set the governance quorum threshold for WASM upgrade proposals.
+    /// Requires admin authorization.
+    pub fn set_governance_config(
+        env: Env,
+        admin: Address,
+        config: governance::GovernanceConfig,
+    ) -> Result<(), ContractError> {
+        let data = Self::_load_data(&env)?;
+        if data.admin != admin {
+            return Err(ContractError::NotAdmin);
+        }
+        admin.require_auth();
+        governance::set_governance_config(&env, &config);
+        env.events().publish(
+            (symbol_short!("GVN_CFG_UPD"),),
+            (admin, config.quorum_threshold),
+        );
+        Self::_extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Return the active governance upgrade proposal, if one exists.
+    pub fn get_governance_upgrade_proposal(env: Env) -> Option<governance::GovernanceUpgradeProposal> {
+        env.storage()
+            .instance()
+            .get(&crate::governance::GOVERNANCE_UPGRADE_KEY)
+    }
+
+    // --- Core Logic Boilerplate ---
+
     fn _load_data(env: &Env) -> Result<ContractData, ContractError> {
         let _ = ensure_schema_version(env);
         env.storage().instance().get(&DATA_KEY).ok_or(ContractError::NotInitialized)
@@ -432,6 +467,11 @@ impl TimeLockedUpgradeContract {
         Self::_load_data(&env)
     }
 
+    fn _load_data(env: &Env) -> Result<ContractData, ContractError> {
+        env.storage().instance().get(&DATA_KEY).ok_or(ContractError::NotInitialized)
+    }
+
+    pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>, proposer: Address, signers: Vec<Address>, nonce: u64, salt: Bytes, salt_signature: BytesN<32>, sig_expires_at: u64) -> Result<(), ContractError> {
     pub fn propose_upgrade(
         env: Env, new_wasm_hash: BytesN<32>, proposer: Address,
         nonce: u64, salt: Bytes, salt_signature: BytesN<32>, sig_expires_at: u64,
@@ -443,6 +483,23 @@ impl TimeLockedUpgradeContract {
         if data.admin != proposer { return Err(ContractError::NotAdmin); }
         proposer.require_auth();
         consume_nonce(&env, &proposer, nonce, salt, salt_signature)?;
+        verify_upgrade_quorum(&env, &signers)?;
+        let proposal = GovernanceUpgradeProposal {
+            new_wasm_hash: new_wasm_hash.clone(),
+            proposer: proposer.clone(),
+            staged_at: env.ledger().timestamp(),
+            signers: signers.clone(),
+        };
+        env.storage().instance().set(&crate::governance::GOVERNANCE_UPGRADE_KEY, &proposal);
+        env.events().publish(
+            (symbol_short!("GV_UPG_PROPOSED"),),
+            (new_wasm_hash, proposer, signers, env.ledger().timestamp()),
+        );
+        let staged = StagedUpgrade {
+            new_wasm_hash,
+            proposer,
+            staged_at: env.ledger().timestamp(),
+        };
         let staged = StagedUpgrade { new_wasm_hash, proposer, staged_at: env.ledger().timestamp() };
         env.storage().instance().set(&PENDING_UPGRADE_KEY, &staged);
         Ok(())
@@ -458,6 +515,12 @@ impl TimeLockedUpgradeContract {
         if data.admin != executor { return Err(ContractError::NotAdmin); }
         executor.require_auth();
         consume_nonce(&env, &executor, nonce, salt, signature)?;
+        let proposal: GovernanceUpgradeProposal = env
+            .storage()
+            .instance()
+            .get(&crate::governance::GOVERNANCE_UPGRADE_KEY)
+            .ok_or(ContractError::NoPendingUpgrade)?;
+        verify_upgrade_quorum(&env, &proposal.signers)?;
         let pending: StagedUpgrade = env.storage().instance()
         let pending: StagedUpgrade = env
             .storage()
@@ -473,6 +536,8 @@ impl TimeLockedUpgradeContract {
         // Run post-upgrade diagnostic health checks
         Self::_run_post_upgrade_health_check(&env, pre_upgrade_data)?;
         env.storage().instance().remove(&PENDING_UPGRADE_KEY);
+        env.storage().instance().remove(&crate::governance::GOVERNANCE_UPGRADE_KEY);
+        Self::_extend_instance_ttl(&env);
         crate::core::instance::bump_instance_ttl(&env);
         Ok(())
     }

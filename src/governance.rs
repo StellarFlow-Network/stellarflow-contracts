@@ -104,6 +104,16 @@ pub fn verify_upgrade_quorum(env: &Env, signers: &Vec<Address>) -> Result<(), Co
         .get(&SIGNERS_KEY)
         .unwrap_or_else(|| Map::new(env));
 
+    let mut valid_count: u32 = 0;
+    for signer in signers.iter() {
+        if signer == data.admin || authorized_signers.contains_key(signer.clone()) {
+            valid_count += 1;
+        }
+    }
+
+    if valid_count < config.quorum_threshold {
+        return Err(ContractError::ThresholdNotReached);
+    }
     // Check both legacy count-based and new weight-based quorum
     let config = get_governance_config(env);
     let multisig_config = get_multisig_config(env);
