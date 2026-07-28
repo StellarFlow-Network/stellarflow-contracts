@@ -187,11 +187,11 @@ pub fn add_corridor_fees(
     pool.collected = pool
         .collected
         .checked_add(collected)
-        .ok_or(ContractError::Overflow)?;
+        .ok_or(ContractError::MathOverflow)?;
     pool.variable_pool = pool
         .variable_pool
         .checked_add(variable_fee)
-        .ok_or(ContractError::Overflow)?;
+        .ok_or(ContractError::MathOverflow)?;
     env.storage().instance().set(&key, &pool);
     Ok(pool)
 }
@@ -251,7 +251,7 @@ pub fn distribute_variable_fee_pool(
         .iter()
         .try_fold(0_i128, |acc, weight| {
             acc.checked_add(weight as i128)
-                .ok_or(ContractError::Overflow)
+                .ok_or(ContractError::MathOverflow)
         })?;
 
     let mut profiles = Vec::new(env);
@@ -261,10 +261,10 @@ pub fn distribute_variable_fee_pool(
 
     let pool_profile = (variable_pool as i128)
         .checked_mul(STANDARD_FIXED_POINT_SCALE)
-        .ok_or(ContractError::Overflow)?;
+        .ok_or(ContractError::MathOverflow)?;
     let interior_pool_profile = pool_profile
         .checked_mul(INTERIOR_FEE_PRECISION_SCALE)
-        .ok_or(ContractError::Overflow)?;
+        .ok_or(ContractError::MathOverflow)?;
 
     let last_index = relayer_weights.len() - 1;
     let mut assigned_profile = 0_i128;
@@ -273,14 +273,14 @@ pub fn distribute_variable_fee_pool(
         let profile = if index == last_index {
             pool_profile
                 .checked_sub(assigned_profile)
-                .ok_or(ContractError::Overflow)?
+                .ok_or(ContractError::MathOverflow)?
         } else {
             let weight = relayer_weights
                 .get(index)
-                .ok_or(ContractError::Overflow)? as i128;
+                .ok_or(ContractError::MathOverflow)? as i128;
             let interior_share = interior_pool_profile
                 .checked_mul(weight)
-                .ok_or(ContractError::Overflow)?
+                .ok_or(ContractError::MathOverflow)?
                 .checked_div(total_weight)
                 .ok_or(ContractError::DivisionByZero)?;
             interior_share
@@ -290,8 +290,8 @@ pub fn distribute_variable_fee_pool(
 
         assigned_profile = assigned_profile
             .checked_add(profile)
-            .ok_or(ContractError::Overflow)?;
-        profiles.push_back(profile.try_into().map_err(|_| ContractError::Overflow)?);
+            .ok_or(ContractError::MathOverflow)?;
+        profiles.push_back(profile.try_into().map_err(|_| ContractError::MathOverflow)?);
     }
 
     Ok(profiles)

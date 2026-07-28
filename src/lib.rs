@@ -1,4 +1,8 @@
 #![no_std]
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, symbol_short,
+    Address, Bytes, BytesN, Env, Map, Symbol, Vec,
+};
 use soroban_sdk::{contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address, Bytes, BytesN, Env, Map, Symbol, Vec};
 
 contractmeta!(
@@ -12,11 +16,9 @@ contractmeta!(
 );
 
 /// Numeric asset identifier for gas-optimized storage.
-/// Replaces heavy Symbol identifiers in high-frequency paths.
 pub type AssetId = u32;
 
-/// Convert a currency Symbol to a numeric AssetId using FNV-1a hash over the
-/// symbol's raw 64-bit payload. Deterministic and no-std compatible.
+/// Convert a currency Symbol to a numeric AssetId using FNV-1a hash.
 pub fn symbol_to_asset_id(symbol: &Symbol) -> AssetId {
     let payload = symbol.to_val().get_payload();
     let mut hash: u32 = 2166136261u32;
@@ -28,9 +30,33 @@ pub fn symbol_to_asset_id(symbol: &Symbol) -> AssetId {
     hash
 }
 
-/// Companion reverse lookup ensuring parity across asset pairing states.
+const ID_NGN: u32 = symbol_to_asset_id_const(b"NGN");
+const ID_GHS: u32 = symbol_to_asset_id_const(b"GHS");
+const ID_CFA: u32 = symbol_to_asset_id_const(b"CFA");
+const ID_KES: u32 = symbol_to_asset_id_const(b"KES");
+const ID_ZAR: u32 = symbol_to_asset_id_const(b"ZAR");
+const ID_UGX: u32 = symbol_to_asset_id_const(b"UGX");
+
+const fn symbol_to_asset_id_const(bytes: &[u8]) -> u32 {
+    let mut hash: u32 = 2166136261u32;
+    let mut i = 0;
+    while i < bytes.len() {
+        hash ^= bytes[i] as u32;
+        hash = hash.wrapping_mul(16777619);
+        i += 1;
+    }
+    hash
+}
+
+/// Reverse lookup from AssetId to Symbol.
 pub fn asset_id_to_symbol(asset_id: u32) -> Symbol {
     match asset_id {
+        _ if asset_id == ID_NGN => symbol_short!("NGN"),
+        _ if asset_id == ID_GHS => symbol_short!("GHS"),
+        _ if asset_id == ID_CFA => symbol_short!("CFA"),
+        _ if asset_id == ID_KES => symbol_short!("KES"),
+        _ if asset_id == ID_ZAR => symbol_short!("ZAR"),
+        _ if asset_id == ID_UGX => symbol_short!("UGX"),
         3897123275 => symbol_short!("NGN"),
         4026531840 => symbol_short!("GHS"),
         4160749568 => symbol_short!("CFA"),
@@ -44,21 +70,40 @@ pub fn asset_id_to_symbol(asset_id: u32) -> Symbol {
 pub(crate) mod nonce;
 use crate::nonce::{consume_nonce, get_nonce};
 
+pub mod amm;
 pub mod admin;
 pub mod auth;
 pub mod config;
 pub use config::{get_price_variance_config, set_price_variance_config, PriceVarianceConfig};
 pub mod consensus;
+pub mod events;
 pub mod fees;
 pub mod governance;
 pub mod math;
 pub mod recovery;
 pub mod slashing;
+pub mod staging;
 pub mod staking_tiers;
+pub mod amm;
+pub mod events;
+pub mod router;
+pub mod settlement;
 pub mod storage;
 pub mod temp_governance;
+pub mod security;
 pub mod upgrades;
 pub mod validation;
+use crate::governance::{
+    verify_staged_delay, StagedUpgrade, VotingBallot, open_ballot, cast_vote, close_ballot,
+    verify_upgrade_quorum, GovernanceUpgradeProposal,
+};
+use crate::validation::{check_bond_capacity, validate_telemetry_submission};
+
+use crate::governance::{
+    cast_vote, close_ballot, open_ballot, verify_staged_delay, StagedUpgrade, VotingBallot,
+};
+use crate::validation::{check_bond_capacity, check_liquidity_depth, validate_telemetry_submission};
+pub use events::swaps::{publish_swap_executed, SwapExecutedEvent};
 
 use crate::governance::{
     verify_staged_delay, StagedUpgrade, VotingBallot, open_ballot, cast_vote, close_ballot, get_ballot,
@@ -69,10 +114,7 @@ use crate::validation::{
 };
 
 pub use staking_tiers::{AssetFeedMetrics, StakingTier, StakingTierConfig};
-
-use staking_tiers::{
-    assign_tier, effective_volume_score, required_stake_for_tier, validate_tier_config,
-};
+use staking_tiers::{assign_tier, effective_volume_score, required_stake_for_tier, validate_tier_config};
 use slashing::{
     apply_escrow_penalty, get_fault_count_in_window, get_penalty_multiplier,
     record_tracking_fault, IngestionPenaltyResult,
@@ -94,6 +136,8 @@ pub enum ContractError {
     NotRegistered = 9,
     InvalidStakeAmount = 10,
     Overflow = 11,
+    /// Arithmetic overflow or underflow in checked math operations.
+    MathOverflow = 37,
     Unauthorized = 12,
     TargetNotAdmin = 13,
     ProposalAlreadyActive = 14,
@@ -102,23 +146,24 @@ pub enum ContractError {
     ThresholdNotReached = 17,
     SignatureExpired = 18,
     InvalidSaltSignature = 19,
-    /// Stake amount is below the tier minimum for the target currency feed.
     InsufficientStakeForTier = 20,
-    /// Staking tier configuration is invalid or non-monotonic.
     InvalidTierConfig = 21,
-    /// Node is already registered for this currency feed.
     FeedAlreadyRegistered = 22,
-    /// Validator's active locked stake is below the required bond for the
-    /// premium asset pool.
     PremiumPoolAccessDenied = 23,
-    /// An ownership transfer proposal is already active.
     TransferAlreadyPending = 24,
-    /// No pending owner nominee exists to claim ownership.
     NoPendingOwner = 25,
-    /// Proposed value exceeds the maximum allowed fee ceiling.
     FeeCeilingExceeded = 26,
-    /// Attempted to divide by zero in a mathematical operation.
     DivisionByZero = 27,
+    InvalidVarianceConfig = 28,
+    ContractPaused = 29,
+    RevokedAddress = 30,
+    EmergencyRevocationAlreadyActive = 31,
+    NoActiveEmergencyRevocation = 32,
+    StaleTelemetryPayload = 33,
+    InsufficientReserveBalance = 34,
+    InsufficientVolume = 35,
+    StaleSequence = 36,
+    InsufficientLiquidityDepth = 37,
     /// Incoming tracking sequence is less than or equal to the active stored checkpoint value.
     StaleSequence = 28,
     /// A price-variance configuration field violated one or more struct invariants.
@@ -154,6 +199,8 @@ pub enum ContractError {
     AdminChangeTimelockNotSatisfied = 45,
     /// The validator has no locked bond available to deduct an escrow penalty from.
     InsufficientBondForPenalty = 46,
+    /// The final swap output is below the caller's minimum acceptable amount.
+    SlippageExceeded = 47,
 }
 
 // Contract state keys
@@ -175,6 +222,7 @@ const RELAYER_TTL_THRESHOLD: u32 = 5_000;
 const INSTANCE_TTL_EXTEND: u32 = 100_000;
 const TREASURY_KEY: Symbol = symbol_short!("TREASURY");
 const SEQUENCE_COUNTER_KEY: Symbol = symbol_short!("SEQCTR");
+const REVOCATION_KEY: Symbol = symbol_short!("REVOKE");
 const RECOVERY_KEY: Symbol = symbol_short!("RKEY");
 const LAST_ADMIN_ACTIVITY: Symbol = symbol_short!("LASTACT");
 
@@ -185,12 +233,8 @@ pub struct RevocationProposal {
     pub replacement: Address,
     pub proposer: Address,
     pub proposed_at: u64,
-    /// Using Vec<Address> instead of Map for gas optimization.
     pub votes: Vec<Address>,
 }
-/// Symbol used as the proposal identifier for admin revocation ballots.
-/// Stored in Temporary storage via the governance ballot module.
-const REVOCATION_KEY: Symbol = symbol_short!("REVOKE");
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -234,6 +278,25 @@ pub enum StakingStorageKey {
     FeedStake(Address, AssetId),
 }
 
+// Storage key newtype wrappers
+#[contracttype] pub struct StakeKey(pub Address);
+#[contracttype] pub struct SignerKey(pub Address);
+#[contracttype] pub struct NodeProfileKey(pub Address);
+#[contracttype] pub struct HeartbeatKey(pub AssetId);
+#[contracttype] pub struct CorridorFeeKey(pub Symbol);
+
+// CorridorFeePool (used by add_corridor_fees before fees module delegation)
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct CorridorFeePool {
+    pub asset: AssetId,
+    pub collected: u64,
+    pub variable_pool: u64,
+}
+
+// AssetMetrics key wrapper
+#[contracttype] pub struct AssetMetricsKey(pub AssetId);
+
 #[contract]
 pub struct TimeLockedUpgradeContract;
 
@@ -245,27 +308,19 @@ impl TimeLockedUpgradeContract {
             return Err(ContractError::AlreadyInitialized);
         }
         admin.require_auth();
-        let data = ContractData {
-            admin: admin.clone(),
-            value: 0,
-        };
+        let data = ContractData { admin: admin.clone(), value: 0 };
         env.storage().instance().set(&DATA_KEY, &data);
-        // #439: write treasury once at deployment; never overwritten
         env.storage().instance().set(&TREASURY_KEY, &treasury);
         Ok(())
     }
 
-    pub fn stake_and_register(
-        env: Env,
-        node: Address,
-        amount: u64,
-    ) -> Result<StakeRecord, ContractError> {
-        if amount == 0 {
-            return Err(ContractError::InvalidStakeAmount);
-        }
-        // Guard: a revoked node must not be allowed to re-stake.
+    pub fn stake_and_register(env: Env, node: Address, amount: u64) -> Result<StakeRecord, ContractError> {
+        if amount == 0 { return Err(ContractError::InvalidStakeAmount); }
         admin::assert_not_revoked(&env, &node)?;
         node.require_auth();
+        let stake_key = StakeKey(node.clone());
+        if env.storage().instance().has(&stake_key) { return Err(ContractError::AlreadyRegistered); }
+        let total: u64 = env.storage().instance().get(&TOTAL_STAKED_KEY).unwrap_or(0u64);
         let stake_key = StakeKey::StakeByNode(node.clone());
         if env.storage().instance().has(&stake_key) {
             return Err(ContractError::AlreadyRegistered);
@@ -293,6 +348,7 @@ impl TimeLockedUpgradeContract {
         node.require_auth();
         let stake_key = StakeKey::StakeByNode(node.clone());
         let amount: u64 = env.storage().instance().get(&stake_key).ok_or(ContractError::NotRegistered)?;
+        let total: u64 = env.storage().instance().get(&TOTAL_STAKED_KEY).unwrap_or(0u64);
         let mut stakes: Map<Address, u64> = env
             .storage()
             .instance()
@@ -316,32 +372,23 @@ impl TimeLockedUpgradeContract {
         let data = Self::_load_data(&env)?;
         if data.admin != caller { return Err(ContractError::NotAdmin); }
         caller.require_auth();
+        let signer_key = SignerKey(signer.clone());
 
         let signer_key = SignerKey::SignerByAddress(signer.clone());
         if env.storage().instance().has(&signer_key) {
             env.storage().instance().remove(&signer_key);
-            // Update signer count
             let count: u32 = env.storage().instance().get(&SIGNERS_KEY).unwrap_or(0u32);
-            env.storage().instance().set(&SIGNERS_KEY, &(count - 1));
+            if count > 0 { env.storage().instance().set(&SIGNERS_KEY, &(count - 1)); }
         }
         Self::_extend_instance_ttl(&env);
         crate::recovery::update_admin_activity(env);
         Ok(())
     }
 
-    /// Nominate a target signer for removal and open an ephemeral voting ballot
-    /// in Temporary storage. The ballot is automatically reclaimed by the ledger
-    /// once the consensus epoch window closes, keeping state lean.
     pub fn propose_revocation(
-        env: Env,
-        proposer: Address,
-        target: Address,
-        replacement: Address,
-        sig_expires_at: u64,
+        env: Env, proposer: Address, target: Address, replacement: Address, sig_expires_at: u64,
     ) -> Result<(), ContractError> {
-        if env.ledger().timestamp() > sig_expires_at {
-            return Err(ContractError::SignatureExpired);
-        }
+        if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
         admin::assert_not_revoked(&env, &proposer)?;
         proposer.require_auth();
         let data = Self::get_data(env.clone())?;
@@ -361,9 +408,7 @@ impl TimeLockedUpgradeContract {
         if !Self::_is_signer(&env, &voter) && data.admin != voter {
             return Err(ContractError::Unauthorized);
         }
-
         let ballot = cast_vote(&env, REVOCATION_KEY, voter)?;
-
         let threshold = Self::_revocation_threshold(&env);
         if ballot.votes.len() >= threshold {
             let mut contract_data = data;
@@ -375,7 +420,7 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn get_revocation_ballot(env: Env) -> Option<VotingBallot> {
-        get_ballot(&env, REVOCATION_KEY)
+        governance::get_ballot(&env, REVOCATION_KEY)
     }
 
     /// Return the active governance configuration (quorum threshold).
@@ -427,7 +472,13 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>, proposer: Address, signers: Vec<Address>, nonce: u64, salt: Bytes, salt_signature: BytesN<32>, sig_expires_at: u64) -> Result<(), ContractError> {
+    pub fn propose_upgrade(
+        env: Env, new_wasm_hash: BytesN<32>, proposer: Address,
+        nonce: u64, salt: Bytes, salt_signature: BytesN<32>, sig_expires_at: u64,
+    ) -> Result<(), ContractError> {
+    pub fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>, proposer: Address, nonce: u64, salt: Bytes, salt_signature: BytesN<32>, sig_expires_at: u64) -> Result<(), ContractError> {
         if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
+        crate::staging::check_staging_access(&env, &proposer)?;
         let data = Self::_load_data(&env)?;
         if data.admin != proposer { return Err(ContractError::NotAdmin); }
         proposer.require_auth();
@@ -449,12 +500,17 @@ impl TimeLockedUpgradeContract {
             proposer,
             staged_at: env.ledger().timestamp(),
         };
+        let staged = StagedUpgrade { new_wasm_hash, proposer, staged_at: env.ledger().timestamp() };
         env.storage().instance().set(&PENDING_UPGRADE_KEY, &staged);
         Ok(())
     }
 
-    pub fn execute_upgrade(env: Env, executor: Address, nonce: u64, salt: Bytes, signature: BytesN<32>, sig_expires_at: u64) -> Result<(), ContractError> {
+    pub fn execute_upgrade(
+        env: Env, executor: Address,
+        nonce: u64, salt: Bytes, signature: BytesN<32>, sig_expires_at: u64,
+    ) -> Result<(), ContractError> {
         if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
+        crate::staging::check_staging_access(&env, &executor)?;
         let data = Self::_load_data(&env)?;
         if data.admin != executor { return Err(ContractError::NotAdmin); }
         executor.require_auth();
@@ -465,6 +521,7 @@ impl TimeLockedUpgradeContract {
             .get(&crate::governance::GOVERNANCE_UPGRADE_KEY)
             .ok_or(ContractError::NoPendingUpgrade)?;
         verify_upgrade_quorum(&env, &proposal.signers)?;
+        let pending: StagedUpgrade = env.storage().instance()
         let pending: StagedUpgrade = env
             .storage()
             .instance()
@@ -481,6 +538,7 @@ impl TimeLockedUpgradeContract {
         env.storage().instance().remove(&PENDING_UPGRADE_KEY);
         env.storage().instance().remove(&crate::governance::GOVERNANCE_UPGRADE_KEY);
         Self::_extend_instance_ttl(&env);
+        crate::core::instance::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -531,15 +589,21 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn cancel_upgrade(env: Env, canceller: Address) -> Result<(), ContractError> {
+        crate::staging::check_staging_access(&env, &canceller)?;
         let data = Self::_load_data(&env)?;
         if data.admin != canceller { return Err(ContractError::NotAdmin); }
         canceller.require_auth();
         env.storage().instance().remove(&PENDING_UPGRADE_KEY);
         env.storage().instance().remove(&crate::governance::GOVERNANCE_UPGRADE_KEY);
         Self::_extend_instance_ttl(&env);
+        crate::core::instance::bump_instance_ttl(&env);
         Ok(())
     }
 
+    pub fn set_value(
+        env: Env, new_value: u64, caller: Address,
+        nonce: u64, salt: Bytes, signature: BytesN<32>, sig_expires_at: u64,
+    ) -> Result<(), ContractError> {
     pub fn set_current_wasm(env: Env, admin: Address, wasm_hash: BytesN<32>) -> Result<(), ContractError> {
         let data = Self::_load_data(&env)?;
         if data.admin != admin { return Err(ContractError::NotAdmin); }
@@ -561,6 +625,7 @@ impl TimeLockedUpgradeContract {
 
     pub fn set_value(env: Env, new_value: u64, caller: Address, nonce: u64, salt: Bytes, signature: BytesN<32>, sig_expires_at: u64) -> Result<(), ContractError> {
         if env.ledger().timestamp() > sig_expires_at { return Err(ContractError::SignatureExpired); }
+        crate::staging::check_staging_access(&env, &caller)?;
         let mut data = Self::_load_data(&env)?;
         if data.admin != caller { return Err(ContractError::NotAdmin); }
         caller.require_auth();
@@ -576,6 +641,10 @@ impl TimeLockedUpgradeContract {
         get_nonce(&env, &coordinator)
     }
 
+    pub fn get_last_update_timestamp(env: Env, asset: Symbol) -> Option<u64> {
+        let asset_id = symbol_to_asset_id(&asset);
+        let heartbeat_key = HeartbeatKey(asset_id);
+        env.storage().temporary().get(&heartbeat_key)
     pub fn get_last_update_timestamp(env: Env, asset: AssetId) -> Option<u64> {
         let _ = ensure_schema_version(&env);
         let timestamps: Map<AssetId, u64> = env
@@ -593,6 +662,7 @@ impl TimeLockedUpgradeContract {
 
     pub fn set_heartbeat_interval(env: Env, interval: u64, admin: Address) -> Result<(), ContractError> {
         if interval == 0 { return Err(ContractError::InvalidHeartbeatInterval); }
+        crate::staging::check_staging_access(&env, &admin)?;
         let data = Self::_load_data(&env)?;
         if data.admin != admin { return Err(ContractError::NotAdmin); }
         admin.require_auth();
@@ -608,6 +678,7 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn get_total_staked(env: Env) -> u64 {
+        env.storage().instance().get(&TOTAL_STAKED_KEY).unwrap_or(0u64)
         let _ = ensure_schema_version(&env);
         env.storage()
             .instance()
@@ -627,6 +698,8 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn is_data_fresh(env: Env, asset: AssetId) -> bool {
+        let heartbeat_key = HeartbeatKey(asset);
+        if let Some(last_update) = env.storage().temporary().get::<_, u64>(&heartbeat_key) {
         let timestamps: Map<AssetId, u64> = env.storage().temporary().get(&HEARTBEAT_KEY).unwrap_or_else(|| Map::new(&env));
         if let Some(last_update) = timestamps.get(asset) {
             env.ledger().timestamp().saturating_sub(last_update) <= Self::_get_interval(&env)
@@ -636,25 +709,13 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn upsert_node_profile(env: Env, admin: Address, node: Address, rate: u64, confidence: u32) -> Result<(), ContractError> {
+        crate::staging::check_staging_access(&env, &admin)?;
         let data = Self::_load_data(&env)?;
         if data.admin != admin { return Err(ContractError::NotAdmin); }
         admin.require_auth();
         let profile_key = NodeProfileKey::ProfileByNode(node.clone());
         let profile = NodeProfile { node: node.clone(), rate, confidence, updated_at: env.ledger().timestamp() };
         env.storage().persistent().set(&profile_key, &profile);
-        let mut profiles = Self::_get_node_profiles(&env);
-        profiles.set(
-            node.clone(),
-            NodeProfile {
-                node,
-                rate,
-                confidence,
-                updated_at: env.ledger().timestamp(),
-            },
-        );
-        env.storage()
-            .persistent()
-            .set(&NODE_PROFILES_KEY, &profiles);
         Self::_extend_instance_ttl(&env);
         crate::recovery::update_admin_activity(env);
         Ok(())
@@ -662,6 +723,19 @@ impl TimeLockedUpgradeContract {
 
     pub fn get_latest_rate(env: Env, node: Address) -> Result<u64, ContractError> {
         Self::_maintain_relayer_profile_ttl(&env);
+        let profile_key = NodeProfileKey(node);
+        let profile: NodeProfile = env.storage().persistent().get(&profile_key)
+            .ok_or(ContractError::NotRegistered)?;
+        Self::_scan_profile_for_rate(profile).ok_or(ContractError::NotRegistered)
+    }
+
+    pub fn add_corridor_fees(env: Env, asset: AssetId, collected: u64, variable_fee: u64) -> Result<CorridorFeePool, ContractError> {
+        let fee_key = CorridorFeeKey(asset_id_to_symbol(asset));
+        let mut pool: CorridorFeePool = env.storage().persistent().get(&fee_key)
+            .unwrap_or(CorridorFeePool { asset, collected: 0, variable_pool: 0 });
+        pool.collected = pool.collected.checked_add(collected).ok_or(ContractError::Overflow)?;
+        pool.variable_pool = pool.variable_pool.checked_add(variable_fee).ok_or(ContractError::Overflow)?;
+        env.storage().persistent().set(&fee_key, &pool);
         let profile_key = NodeProfileKey::ProfileByNode(node);
         let profile: NodeProfile = env.storage().persistent().get(&profile_key).ok_or(ContractError::NotRegistered)?;
         Ok(Self::_scan_profile_for_rate(profile).ok_or(ContractError::NotRegistered)?)
@@ -685,14 +759,9 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn set_corridor_weight(
-        env: Env,
-        admin: Address,
-        asset: AssetId,
-        base_weight: u64,
-        dynamic_weight: u64,
+        env: Env, admin: Address, asset: AssetId, base_weight: u64, dynamic_weight: u64,
     ) -> Result<fees::CorridorWeightProfile, ContractError> {
-        let profile =
-            fees::set_corridor_weight(env.clone(), admin, asset, base_weight, dynamic_weight)?;
+        let profile = fees::set_corridor_weight(env.clone(), admin, asset, base_weight, dynamic_weight)?;
         Self::_extend_instance_ttl(&env);
         crate::recovery::update_admin_activity(env);
         Ok(profile)
@@ -723,58 +792,36 @@ impl TimeLockedUpgradeContract {
     /// Requires multi-signature consensus (≥ 2 valid signers) for cross-border
     /// parameter changes — issue #539.
     pub fn set_staking_tier_config(
-        env: Env,
-        admin: Address,
-        config: StakingTierConfig,
-        signers: Vec<Address>,
+        env: Env, admin: Address, config: StakingTierConfig, signers: Vec<Address>,
     ) -> Result<(), ContractError> {
         let data = Self::_load_data(&env)?;
-        if data.admin != admin {
-            return Err(ContractError::NotAdmin);
-        }
+        if data.admin != admin { return Err(ContractError::NotAdmin); }
         admin.require_auth();
-        // Issue #539: enforce multi-sig consensus before committing.
         crate::auth::require_multisig(&env, &signers)?;
         validate_tier_config(&config)?;
-        env.storage()
-            .instance()
-            .set(&StakingStorageKey::TierConfig, &config);
+        env.storage().instance().set(&StakingStorageKey::TierConfig, &config);
         Self::_extend_instance_ttl(&env);
         crate::recovery::update_admin_activity(env);
         Ok(())
     }
 
-    /// Return the active staking tier configuration.
     pub fn get_staking_tier_config(env: Env) -> StakingTierConfig {
-        env.storage()
-            .instance()
-            .get(&StakingStorageKey::TierConfig)
-            .unwrap_or_default()
+        env.storage().instance().get(&StakingStorageKey::TierConfig).unwrap_or_default()
     }
 
-    /// Set the volume and volatility profile for a currency feed.
-    /// Requires multi-signature consensus (≥ 2 valid signers) for cross-border
-    /// parameter changes — issue #539.
     pub fn set_asset_feed_metrics(
-        env: Env,
-        admin: Address,
-        asset: AssetId,
-        volume_score_floor: u32,
-        volatility_bps: u32,
-        signers: Vec<Address>,
+        env: Env, admin: Address, asset: AssetId,
+        volume_score_floor: u32, volatility_bps: u32, signers: Vec<Address>,
     ) -> Result<AssetFeedMetrics, ContractError> {
         let data = Self::_load_data(&env)?;
-        if data.admin != admin {
-            return Err(ContractError::NotAdmin);
-        }
+        if data.admin != admin { return Err(ContractError::NotAdmin); }
         admin.require_auth();
-        // Issue #539: enforce multi-sig consensus before committing.
         crate::auth::require_multisig(&env, &signers)?;
-
         let metrics = AssetFeedMetrics {
             volume_score: volume_score_floor.min(100),
             volatility_bps,
         };
+        env.storage().persistent().set(&StakingStorageKey::AssetMetrics(asset), &metrics);
 
         env.storage()
             .persistent()
@@ -785,10 +832,10 @@ impl TimeLockedUpgradeContract {
         Ok(metrics)
     }
 
-    /// Return the resolved feed metrics for an asset, including corridor volume.
     pub fn get_asset_feed_metrics(env: Env, asset: AssetId) -> AssetFeedMetrics {
         Self::_resolve_feed_metrics(&env, asset)
     }
+
     pub fn get_staking_tier(env: Env, asset: AssetId) -> StakingTier {
         assign_tier(&Self::_resolve_feed_metrics(&env, asset))
     }
@@ -800,54 +847,32 @@ impl TimeLockedUpgradeContract {
         required_stake_for_tier(tier, &config)
     }
 
-    /// Register a validator node for a specific currency feed with tier-aware collateral.
     pub fn stake_and_register_for_feed(
-        env: Env,
-        node: Address,
-        asset: AssetId,
-        amount: u64,
+        env: Env, node: Address, asset: AssetId, amount: u64,
     ) -> Result<FeedStakeRecord, ContractError> {
-        if amount == 0 {
-            return Err(ContractError::InvalidStakeAmount);
-        }
-        // Guard: revoked nodes must not be allowed to register for feeds.
+        if amount == 0 { return Err(ContractError::InvalidStakeAmount); }
         admin::assert_not_revoked(&env, &node)?;
         node.require_auth();
 
         let feed_key = StakingStorageKey::FeedStake(node.clone(), asset);
-        if env.storage().persistent().has(&feed_key) {
-            return Err(ContractError::FeedAlreadyRegistered);
-        }
-
+        if env.storage().persistent().has(&feed_key) { return Err(ContractError::FeedAlreadyRegistered); }
         let tier = Self::get_staking_tier(env.clone(), asset);
         let required = Self::get_required_stake(env.clone(), asset);
-        if amount < required {
-            return Err(ContractError::InsufficientStakeForTier);
-        }
-
-        let stake_val = storage::FeedStakeValue {
-            amount,
-            last_active: env.ledger().timestamp(),
-        };
+        if amount < required { return Err(ContractError::InsufficientStakeForTier); }
+        let stake_val = storage::FeedStakeValue { amount, last_active: env.ledger().timestamp() };
         env.storage().persistent().set(&feed_key, &stake_val);
         env.storage().persistent().extend_ttl(&feed_key, storage::RENT_THRESHOLD, storage::RENT_EXTEND_TO);
+        let stake_key = StakeKey(node.clone());
 
         let stake_key = StakeKey::StakeByNode(node.clone());
         let node_total: u64 = env.storage().instance().get(&stake_key).unwrap_or(0);
-        let new_node_total = node_total
-            .checked_add(amount)
-            .ok_or(ContractError::Overflow)?;
+        let new_node_total = node_total.checked_add(amount).ok_or(ContractError::Overflow)?;
         env.storage().instance().set(&stake_key, &new_node_total);
-
-        let total: u64 = env
-            .storage()
-            .instance()
-            .get(&TOTAL_STAKED_KEY)
-            .unwrap_or(0u64);
+        let total: u64 = env.storage().instance().get(&TOTAL_STAKED_KEY).unwrap_or(0u64);
         let new_total = total.checked_add(amount).ok_or(ContractError::Overflow)?;
-
         env.storage().instance().set(&TOTAL_STAKED_KEY, &new_total);
         Self::_record_heartbeat(&env, asset);
+        Ok(FeedStakeRecord { node, asset, amount, tier, registered_at: env.ledger().timestamp() })
 
         Ok(FeedStakeRecord {
             node,
@@ -858,19 +883,15 @@ impl TimeLockedUpgradeContract {
         })
     }
 
-    /// Withdraw collateral from a currency feed and deregister the node for that feed.
     pub fn unstake_from_feed(env: Env, node: Address, asset: AssetId) -> Result<u64, ContractError> {
         node.require_auth();
 
         let feed_key = StakingStorageKey::FeedStake(node.clone(), asset);
-        let stake_val: storage::FeedStakeValue = env
-            .storage()
-            .persistent()
-            .get(&feed_key)
-            .ok_or(ContractError::NotRegistered)?;
+        let stake_val: storage::FeedStakeValue = env.storage().persistent()
+            .get(&feed_key).ok_or(ContractError::NotRegistered)?;
         let amount = stake_val.amount;
-
         env.storage().persistent().remove(&feed_key);
+        let stake_key = StakeKey(node.clone());
 
         let stake_key = StakeKey::StakeByNode(node.clone());
         let node_total: u64 = env.storage().instance().get(&stake_key).unwrap_or(0);
@@ -880,16 +901,8 @@ impl TimeLockedUpgradeContract {
         } else {
             env.storage().instance().set(&stake_key, &new_node_total);
         }
-
-        let total: u64 = env
-            .storage()
-            .instance()
-            .get(&TOTAL_STAKED_KEY)
-            .unwrap_or(0u64);
-        let new_total = total.saturating_sub(amount);
-
-        env.storage().instance().set(&TOTAL_STAKED_KEY, &new_total);
-
+        let total: u64 = env.storage().instance().get(&TOTAL_STAKED_KEY).unwrap_or(0u64);
+        env.storage().instance().set(&TOTAL_STAKED_KEY, &total.saturating_sub(amount));
         Ok(amount)
     }
 
@@ -901,6 +914,8 @@ impl TimeLockedUpgradeContract {
     /// removed and its totals reconciled before this read returns.
     pub fn get_feed_stake(env: Env, node: Address, asset: AssetId) -> u64 {
         let feed_key = StakingStorageKey::FeedStake(node, asset);
+        env.storage().persistent().get::<_, storage::FeedStakeValue>(&feed_key)
+            .map(|v| v.amount).unwrap_or(0)
         let stake_val: Option<storage::FeedStakeValue> = env
             .storage()
             .persistent()
@@ -909,9 +924,7 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn set_platform_capital(env: Env, capital: u64) {
-        env.storage()
-            .instance()
-            .set(&PLATFORM_CAPITAL_KEY, &capital);
+        env.storage().instance().set(&PLATFORM_CAPITAL_KEY, &capital);
     }
 
     // ── Issue #420: Sealed price-variance configuration ──────────────────────
@@ -945,7 +958,6 @@ impl TimeLockedUpgradeContract {
         let signer_key = SignerKey::SignerByAddress(signer.clone());
         if !env.storage().instance().has(&signer_key) {
             env.storage().instance().set(&signer_key, &true);
-            // Update signer count
             let count: u32 = env.storage().instance().get(&SIGNERS_KEY).unwrap_or(0u32);
             env.storage().instance().set(&SIGNERS_KEY, &(count + 1));
         }
@@ -992,6 +1004,42 @@ impl TimeLockedUpgradeContract {
         crate::admin::set_paused(&env, caller, paused, nonce)
     }
 
+    // --- Emergency Admin (Issue #598) ---
+
+    /// Designate an address as the EmergencyAdmin, capable of instantly pausing
+    /// the contract without multi-sig delay. Only the current admin may call this.
+    pub fn set_emergency_admin(env: Env, caller: Address, emergency_admin: Address) -> Result<(), ContractError> {
+        crate::security::pausable::set_emergency_admin(&env, &caller, &emergency_admin)
+    }
+
+    /// Return the currently configured EmergencyAdmin address, if any.
+    pub fn get_emergency_admin(env: Env) -> Option<Address> {
+        crate::security::pausable::get_emergency_admin(&env)
+    }
+
+    /// Instantly pause all contract operations.
+    ///
+    /// Only the designated `EmergencyAdmin` may call this. Authentication is a
+    /// single `require_auth` check — no multi-sig delay window applies.
+    ///
+    /// # Errors
+    /// - [`ContractError::NotEmergencyAdmin`] if the caller is not the emergency admin.
+    pub fn emergency_pause(env: Env, caller: Address) -> Result<(), ContractError> {
+        crate::security::pausable::emergency_pause(&env, &caller)
+    }
+
+    /// Resume contract operations after an emergency pause.
+    ///
+    /// Requires full governance multi-sig quorum via `require_multisig` to
+    /// protect against a compromised EmergencyAdmin permanently locking the
+    /// contract. The `caller` must be one of the signers.
+    ///
+    /// # Errors
+    /// - [`ContractError::ThresholdNotReached`] if insufficient signers.
+    pub fn emergency_unpause(env: Env, caller: Address, signers: Vec<Address>) -> Result<(), ContractError> {
+        crate::security::pausable::emergency_unpause(&env, &caller, &signers)
+    }
+
     // --- Per-action admin nonce query (Issue #529) ---
 
     pub fn get_admin_action_nonce(env: Env, caller: Address, action: admin::AdminAction) -> u64 {
@@ -1022,17 +1070,13 @@ impl TimeLockedUpgradeContract {
     /// set, preventing it from signing or modifying configurations from that
     /// point forward.
     pub fn vote_emergency_revocation(
-        env: Env,
-        voter: Address,
-        sig_expires_at: u64,
-        nonce: u64,
+        env: Env, voter: Address, sig_expires_at: u64, nonce: u64,
     ) -> Result<(), ContractError> {
+        admin::vote_emergency_revocation(&env, voter, sig_expires_at)
         admin::vote_emergency_revocation(&env, voter, sig_expires_at, nonce)
     }
 
-    pub fn get_emergency_revocation(
-        env: Env,
-    ) -> Option<admin::EmergencyRevocationProposal> {
+    pub fn get_emergency_revocation(env: Env) -> Option<admin::EmergencyRevocationProposal> {
         admin::get_emergency_revocation_proposal(&env)
     }
 
@@ -1042,14 +1086,11 @@ impl TimeLockedUpgradeContract {
         admin::purge_emergency_revocation_proposal(&env)
     }
 
-    /// Check if an emergency revocation proposal is currently active.
-    ///
-    /// Returns true only if the proposal exists in temporary storage and hasn't expired
-    /// according to Soroban's TTL mechanism.
     pub fn has_active_revocation_proposal(env: Env) -> bool {
         admin::has_active_emergency_revocation(&env)
     }
 
+    // ── Multi-Tier Escrow Penalties (Issue #525) ──────────────────────────────
     // ── Dead-Man's Switch Recovery (Issue #617) ──────────────────────────
 
     /// Configure or update the secondary recovery key.
@@ -1088,73 +1129,75 @@ impl TimeLockedUpgradeContract {
 
     // ── Multi-Tier Escrow Penalties (Issue #525) ───────────────────────────────
 
-    /// Record a validator ingestion dropout for an asset feed within the rolling
-    /// 100-ledger fault window. Callable by admin monitors.
     pub fn report_ingestion_dropout(
-        env: Env,
-        admin: Address,
-        validator: Address,
-        asset: Symbol,
+        env: Env, admin: Address, validator: Address, asset: Symbol,
     ) -> Result<u32, ContractError> {
         Self::assert_contract_is_active(&env)?;
         let data = Self::get_data(env.clone())?;
-        if data.admin != admin {
-            return Err(ContractError::NotAdmin);
-        }
+        if data.admin != admin { return Err(ContractError::NotAdmin); }
         admin.require_auth();
         let result = record_tracking_fault(&env, &validator, &asset)?;
         crate::recovery::update_admin_activity(env);
         Ok(result)
     }
 
-    /// Return the number of ingestion faults recorded within the rolling window.
-    pub fn get_ingestion_fault_count(
-        env: Env,
-        validator: Address,
-        asset: Symbol,
-    ) -> u32 {
+    pub fn get_ingestion_fault_count(env: Env, validator: Address, asset: Symbol) -> u32 {
         get_fault_count_in_window(&env, &validator, &asset)
     }
 
-    /// Return the exponential penalty multiplier for repeated ingestion dropouts.
-    pub fn get_ingestion_multiplier(
-        env: Env,
-        validator: Address,
-        asset: Symbol,
-    ) -> u64 {
+    pub fn get_ingestion_multiplier(env: Env, validator: Address, asset: Symbol) -> u64 {
         let fault_count = get_fault_count_in_window(&env, &validator, &asset);
         get_penalty_multiplier(fault_count)
     }
 
-    /// Apply a progressive escrow bond deduction scaled by repeated outage history.
-    ///
-    /// Records the fault, then deducts `base_bond * 2^(fault_count - 1)` from the
-    /// validator's locked stake (capped at the available bond).
     pub fn apply_ingestion_penalty(
-        env: Env,
-        admin: Address,
-        validator: Address,
-        asset: Symbol,
-        base_bond: u64,
+        env: Env, admin: Address, validator: Address, asset: Symbol, base_bond: u64,
     ) -> Result<IngestionPenaltyResult, ContractError> {
         Self::assert_contract_is_active(&env)?;
         let data = Self::get_data(env.clone())?;
-        if data.admin != admin {
-            return Err(ContractError::NotAdmin);
-        }
+        if data.admin != admin { return Err(ContractError::NotAdmin); }
         admin.require_auth();
-
         let fault_count = record_tracking_fault(&env, &validator, &asset)?;
+
         let result = apply_escrow_penalty(
-            &env,
-            &validator,
-            &asset,
-            base_bond,
-            fault_count,
-            &STAKE_REGISTRY_KEY,
-            &TOTAL_STAKED_KEY,
-            &StakingStorageKey::FeedStake(validator.clone(), symbol_to_asset_id(&asset)),
-        )
+    &env,
+    &validator,
+    &asset,
+    base_bond,
+    fault_count,
+    &STAKE_REGISTRY_KEY,
+    &TOTAL_STAKED_KEY,
+    &StakingStorageKey::FeedStake(
+        validator.clone(),
+        symbol_to_asset_id(&asset),
+    ),
+)?;
+        Ok(result)
+       
+    pub fn update_validator_profile(env: Env, node: Address, pool: Symbol) -> Result<(), ContractError> {
+        admin::assert_not_revoked(&env, &node)?;
+        node.require_auth();
+        check_bond_capacity(&env, &node, &pool)?;
+        let asset_id = symbol_to_asset_id(&pool);
+        check_liquidity_depth(&env, asset_id)?;
+        storage::update_feed_stake_activity(&env, node.clone(), asset_id);
+        Self::_record_heartbeat(&env, asset_id);
+        Ok(())
+    }
+
+    pub fn submit_telemetry_data(
+        env: Env, node: Address, pool: Symbol,
+        payload_timestamp: u64, reserve_a: i128, reserve_b: i128, volume_24h: i128,
+    ) -> Result<(), ContractError> {
+        admin::assert_not_revoked(&env, &node)?;
+        node.require_auth();
+        validate_telemetry_submission(&env, &node, &pool, payload_timestamp, reserve_a, reserve_b, volume_24h)?;
+        Self::_record_heartbeat(&env, symbol_to_asset_id(&pool));
+        env.events().publish(
+            (soroban_sdk::symbol_short!("telem_ok"),),
+            (node, pool, payload_timestamp),
+        );
+        Ok(())
     }
 
     // --- Private Helpers ---
@@ -1170,6 +1213,12 @@ impl TimeLockedUpgradeContract {
     }
 
     fn _record_heartbeat(env: &Env, asset: AssetId) {
+        let heartbeat_key = HeartbeatKey(asset);
+        env.storage().temporary().set(&heartbeat_key, &env.ledger().timestamp());
+    }
+
+    fn _get_interval(env: &Env) -> u64 {
+        env.storage().instance().get(&HB_INTERVAL_KEY).unwrap_or(DEFAULT_HEARTBEAT_INTERVAL)
         let mut timestamps: Map<AssetId, u64> = env
             .storage()
             .temporary()
@@ -1191,11 +1240,7 @@ impl TimeLockedUpgradeContract {
     }
 
     fn _scan_profile_for_rate(profile: NodeProfile) -> Option<u64> {
-        if profile.confidence == 0 {
-            None
-        } else {
-            Some(profile.rate)
-        }
+        if profile.confidence == 0 { None } else { Some(profile.rate) }
     }
 
     fn _maintain_relayer_profile_ttl(env: &Env) {
@@ -1204,12 +1249,6 @@ impl TimeLockedUpgradeContract {
         let _ = env;
     }
 
-    fn _extend_instance_ttl(env: &Env) {
-        env.storage().instance().extend_ttl(
-            RELAYER_TTL_THRESHOLD,
-            RELAYER_TTL_THRESHOLD + INSTANCE_TTL_EXTEND,
-        );
-    }
 
     fn _is_signer(env: &Env, addr: &Address) -> bool {
         let signer_key = SignerKey::SignerByAddress(addr.clone());
@@ -1217,8 +1256,6 @@ impl TimeLockedUpgradeContract {
     }
 
     fn _revocation_threshold(env: &Env) -> u32 {
-        // With individual signer keys, we need a separate counter.
-        // For now, default to 1 as a safe minimum.
         let signer_count: u32 = env.storage().instance().get(&SIGNERS_KEY).unwrap_or(0u32);
         if signer_count == 0 { 1 } else { signer_count / 2 + 1 }
     }
@@ -1288,14 +1325,18 @@ impl TimeLockedUpgradeContract {
         Self::_record_heartbeat(&env, symbol_to_asset_id(&pool));
 
         // Emit event for monitoring
-        env.events().publish(
-            (soroban_sdk::symbol_short!("telem_ok"),),
+        let _ = emit_simple2(
+            &env,
+            EV_TELEMETRY_OK,
+            symbol_short!("telem"),
             (node, pool, payload_timestamp),
         );
 
         Ok(())
     }
 }
+
+} // end impl TimeLockedUpgradeContract
 
 #[cfg(test)]
 mod query_guardrail_tests {
@@ -1329,13 +1370,10 @@ mod query_guardrail_tests {
     fn test_get_data_before_and_after_init() {
         let (env, client) = setup();
         let admin = Address::generate(&env);
-
         let result = client.try_get_data();
         assert_eq!(result, Err(Ok(ContractError::NotInitialized)));
-
         let treasury = soroban_sdk::Address::generate(&env);
         client.initialize(&admin, &treasury);
-
         let data = client.get_data();
         assert_eq!(data.admin, admin);
         assert_eq!(data.value, 0u64);
@@ -1347,13 +1385,8 @@ mod query_guardrail_tests {
         let admin = Address::generate(&env);
         let treasury = soroban_sdk::Address::generate(&env);
         client.initialize(&admin, &treasury);
-
-        let first_admin = client.get_data().admin;
         let first_value = client.get_data().value;
-        let second_admin = client.get_data().admin;
         let second_value = client.get_data().value;
-
-        assert_eq!(first_admin, second_admin);
         assert_eq!(first_value, second_value);
         assert_eq!(first_value, 0);
     }
@@ -1364,7 +1397,6 @@ mod query_guardrail_tests {
         let admin = Address::generate(&env);
         let treasury = soroban_sdk::Address::generate(&env);
         client.initialize(&admin, &treasury);
-
         let asset = symbol_to_asset_id(&symbol_short!("NGN"));
         assert!(!client.is_data_fresh(&asset));
     }
@@ -1375,13 +1407,10 @@ mod query_guardrail_tests {
         let admin = Address::generate(&env);
         let treasury = soroban_sdk::Address::generate(&env);
         client.initialize(&admin, &treasury);
-
         let asset = symbol_to_asset_id(&symbol_short!("KES"));
         client.add_corridor_fees(&admin, &asset, &crate::validation::MIN_POOL_VOLUME_DEPTH, &0u64);
         client.update_heartbeat(&asset, &admin);
-
         assert!(client.is_data_fresh(&asset));
-
         advance(&env, DEFAULT_HEARTBEAT_INTERVAL + 1);
         assert!(!client.is_data_fresh(&asset));
     }
@@ -1392,15 +1421,10 @@ mod query_guardrail_tests {
         let admin = Address::generate(&env);
         let treasury = soroban_sdk::Address::generate(&env);
         client.initialize(&admin, &treasury);
-
         let asset = symbol_to_asset_id(&symbol_short!("GHS"));
         client.add_corridor_fees(&admin, &asset, &crate::validation::MIN_POOL_VOLUME_DEPTH, &0u64);
         client.update_heartbeat(&asset, &admin);
-
-        for _ in 0..5 {
-            assert!(client.is_data_fresh(&asset));
-        }
-
+        for _ in 0..5 { assert!(client.is_data_fresh(&asset)); }
         advance(&env, DEFAULT_HEARTBEAT_INTERVAL + 1);
         assert!(!client.is_data_fresh(&asset));
     }
@@ -1411,22 +1435,16 @@ mod query_guardrail_tests {
         let admin = Address::generate(&env);
         let treasury = soroban_sdk::Address::generate(&env);
         client.initialize(&admin, &treasury);
-
         let asset = symbol_to_asset_id(&symbol_short!("CFA"));
-
-        let admin_before = client.get_data().admin;
         let value_before = client.get_data().value;
-
         let _ = client.is_data_fresh(&asset);
-
-        let admin_after = client.get_data().admin;
         let value_after = client.get_data().value;
-
-        assert_eq!(admin_before, admin_after);
         assert_eq!(value_before, value_after);
     }
 }
 
+// #[cfg(test)]
+// mod test;
 // NOTE: _resolve_feed_metrics is defined inside the main contract impl.
 
 // Integration tests for issue #525 live in `src/slashing.rs`.

@@ -39,9 +39,11 @@ pub fn consume_nonce(
         salt_signature,
     };
 
+    let key = NonceKey::State(coordinator.clone());
     env.storage()
         .persistent()
-        .set(&NonceKey::State(coordinator.clone()), &next_state);
+        .set(&key, &next_state);
+    crate::storage::extend_persistent_ttl(env, &key);
     Ok(())
 }
 

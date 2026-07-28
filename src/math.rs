@@ -8,12 +8,12 @@ use crate::ContractError;
 
 /// Compute the checked sum of a slice of `i128` values.
 ///
-/// Returns `ContractError::Overflow` if any intermediate addition
-/// exceeds `i128::MAX`.
+/// Returns `ContractError::MathOverflow` if any intermediate addition
+/// exceeds the `i128` bounds.
 pub fn compute_sum(values: &[i128]) -> Result<i128, ContractError> {
     values
         .iter()
-        .try_fold(0_i128, |acc, &v| acc.checked_add(v).ok_or(ContractError::Overflow))
+        .try_fold(0_i128, |acc, &v| acc.checked_add(v).ok_or(ContractError::MathOverflow))
 }
 
 /// Compute the integer arithmetic mean (floor) of a slice of `i128` values.
@@ -39,9 +39,9 @@ pub fn compute_sum_squared_deviations(values: &[i128], mean: i128) -> Result<i12
     values.iter().try_fold(0_i128, |acc, &v| {
         let dev = v
             .checked_sub(mean)
-            .ok_or(ContractError::Overflow)?;
-        let sq = dev.checked_mul(dev).ok_or(ContractError::Overflow)?;
-        acc.checked_add(sq).ok_or(ContractError::Overflow)
+            .ok_or(ContractError::MathOverflow)?;
+        let sq = dev.checked_mul(dev).ok_or(ContractError::MathOverflow)?;
+        acc.checked_add(sq).ok_or(ContractError::MathOverflow)
     })
 }
 
@@ -93,14 +93,14 @@ pub fn calculate_spread_bps(rate_a: i128, rate_b: i128) -> Result<i128, Contract
 
     let delta = rate_a
         .checked_sub(rate_b)
-        .ok_or(ContractError::Overflow)?;
+        .ok_or(ContractError::MathOverflow)?;
 
     let delta = delta
         .checked_abs()
-        .ok_or(ContractError::Overflow)?;
+        .ok_or(ContractError::MathOverflow)?;
     let numerator = delta
         .checked_mul(10_000)
-        .ok_or(ContractError::Overflow)?;
+        .ok_or(ContractError::MathOverflow)?;
 
     // `rate_a` is confirmed non-zero, so this division is safe.
     numerator
@@ -127,7 +127,7 @@ pub fn multiply_and_scale_down(a: i128, b: i128, scale_factor: i128) -> Result<i
         return Err(ContractError::DivisionByZero);
     }
 
-    let product = a.checked_mul(b).ok_or(ContractError::Overflow)?;
+    let product = a.checked_mul(b).ok_or(ContractError::MathOverflow)?;
 
     // The division performs the scale-down.
     product
@@ -151,18 +151,18 @@ pub fn compute_cema(
     if scale_factor == 0 {
         return Err(ContractError::DivisionByZero);
     }
-    
+
     // The complement of the scaling factor
-    let inv_alpha = scale_factor.checked_sub(alpha).ok_or(ContractError::Overflow)?;
-    
+    let inv_alpha = scale_factor.checked_sub(alpha).ok_or(ContractError::MathOverflow)?;
+
     // Intermediate scaling rules: scale down the individual terms *before* addition.
-    // This prevents the sum of products (value * alpha + cema_prev * inv_alpha) 
+    // This prevents the sum of products (value * alpha + cema_prev * inv_alpha)
     // from exceeding the 128-bit limit when processing large transaction volumes.
     let scaled_new_value = multiply_and_scale_down(value, alpha, scale_factor)?;
     let scaled_prev_cema = multiply_and_scale_down(cema_prev, inv_alpha, scale_factor)?;
-    
+
     // Safely combine the scaled terms
-    scaled_new_value.checked_add(scaled_prev_cema).ok_or(ContractError::Overflow)
+    scaled_new_value.checked_add(scaled_prev_cema).ok_or(ContractError::MathOverflow)
 }
 
 #[cfg(test)]
@@ -190,7 +190,7 @@ mod tests {
     fn test_sum_overflow() {
         assert_eq!(
             compute_sum(&[i128::MAX, 1]),
-            Err(ContractError::Overflow)
+            Err(ContractError::MathOverflow)
         );
     }
 
@@ -239,7 +239,7 @@ mod tests {
         let values = &[i128::MAX, 0];
         assert_eq!(
             compute_sum_squared_deviations(values, 0),
-            Err(ContractError::Overflow)
+            Err(ContractError::MathOverflow)
         );
     }
 
@@ -355,7 +355,7 @@ mod tests {
         let rate_b = i128::MAX; // Creates a large delta
         assert_eq!(
             calculate_spread_bps(rate_a, rate_b),
-            Err(ContractError::Overflow)
+            Err(ContractError::MathOverflow)
         );
     }
 
@@ -393,7 +393,7 @@ mod tests {
     fn test_multiply_and_scale_down_overflow() {
         assert_eq!(
             multiply_and_scale_down(i128::MAX, 2, 10_000_000),
-            Err(ContractError::Overflow)
+            Err(ContractError::MathOverflow)
         );
     }
 

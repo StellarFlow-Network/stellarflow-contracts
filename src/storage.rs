@@ -110,12 +110,19 @@ pub const ASSET_TTL_EXTEND_TO: u32 = 100_000;
 
 pub const PROFILE_TTL_THRESHOLD: u32 = 10_000;
 
+/// Default TTL renewal threshold for persistent entries: 31 days (535,680 ledgers).
+///
+/// Soroban persistent entries have a maximum TTL. This threshold ensures entries
+/// are renewed well before expiration so state mutations never cause silent
+/// storage expiry during normal contract operation.
+///
+/// Calculation: 31 days × 24 hours × 60 minutes × 60 seconds / 5-second ledger ≈ 535,680
+pub const PERSISTENT_TTL_THRESHOLD: u32 = 535_680;
+
 pub fn get_node_profiles(env: &Env) -> Map<Address, NodeProfile> {
     let key = Symbol::new(env, "NODES");
     if env.storage().persistent().has(&key) {
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, PROFILE_TTL_THRESHOLD, env.storage().max_ttl());
+        extend_persistent_ttl(env, &key);
     }
     env.storage()
         .persistent()
@@ -125,7 +132,7 @@ pub fn get_node_profiles(env: &Env) -> Map<Address, NodeProfile> {
 
 pub fn extend_subscription_rent(env: &Env, consumer_id: Address) {
     let key = DataKey::Subscription(consumer_id);
-    env.storage().persistent().extend_ttl(&key, RENT_THRESHOLD, RENT_EXTEND_TO);
+    extend_persistent_ttl(env, &key);
 }
 
 pub fn check_subscription(env: &Env, consumer_id: Address) -> bool {
@@ -141,7 +148,7 @@ pub fn check_subscription(env: &Env, consumer_id: Address) -> bool {
 pub fn extend_asset_rent(env: &Env, asset: Symbol) -> bool {
     let key = DataKey::AssetPrice(asset);
     if env.storage().persistent().has(&key) {
-        env.storage().persistent().extend_ttl(&key, ASSET_TTL_THRESHOLD, ASSET_TTL_EXTEND_TO);
+        extend_persistent_ttl(env, &key);
         true
     } else {
         false

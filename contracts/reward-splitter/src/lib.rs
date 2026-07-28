@@ -1,7 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, panic_with_error, token, Address, Env, String, Vec,
+    contract, contracterror, contractimpl, panic_with_error, symbol_short, token, Address, Env,
+    String, Symbol, Vec,
 };
 
 #[derive(Clone)]
@@ -37,7 +38,7 @@ pub struct CooldownAction {
 pub struct CooldownStage {
     pub stage_number: u32,
     pub cooldown_seconds: u64,
-    pub description: soroban_sdk::String,
+    pub description: Symbol,
 }
 
 #[derive(Clone)]
@@ -111,17 +112,17 @@ impl RewardSplitter {
         let stage1 = CooldownStage {
             stage_number: 1,
             cooldown_seconds: STAGE_1_COOLDOWN,
-            description: String::from_str(env, "Initial proposal stage - 1 hour cooldown"),
+            description: symbol_short!("INIT"),
         };
         let stage2 = CooldownStage {
             stage_number: 2,
             cooldown_seconds: STAGE_2_COOLDOWN,
-            description: String::from_str(env, "Review stage - 8 hour cooldown"),
+            description: symbol_short!("REVIEW"),
         };
         let stage3 = CooldownStage {
             stage_number: 3,
             cooldown_seconds: STAGE_3_COOLDOWN,
-            description: String::from_str(env, "Final approval stage - 24 hour cooldown"),
+            description: symbol_short!("APPROVE"),
         };
 
         env.storage()
@@ -602,7 +603,7 @@ impl RewardSplitter {
         admin: Address,
         stage_number: u32,
         cooldown_seconds: u64,
-        description: String,
+        description: Symbol,
     ) {
         Self::require_admin(&env, &admin);
 

@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{Address, Env};
+use soroban_sdk::{symbol_short, Address, Env, String, Symbol};
 
 #[test]
 fn test_initialize() {
@@ -531,7 +531,7 @@ fn test_configure_cooldown_stage() {
 
     client.initialize(&admin, &token);
 
-    client.configure_cooldown_stage(&admin, &1, &7200, &String::from_str(&env, "Custom stage 1"));
+    client.configure_cooldown_stage(&admin, &1, &7200, &symbol_short!("CUSTOM"));
 
     let stage = client.get_cooldown_stage(&1).unwrap();
     assert_eq!(stage.cooldown_seconds, 7200);
@@ -549,5 +549,5 @@ fn test_configure_cooldown_stage_invalid() {
 
     client.initialize(&admin, &token);
 
-    client.configure_cooldown_stage(&admin, &5, &7200, &String::from_str(&env, "Invalid stage"));
+    client.configure_cooldown_stage(&admin, &5, &7200, &symbol_short!("INVALID"));
 }
