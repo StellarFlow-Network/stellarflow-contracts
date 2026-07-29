@@ -48,7 +48,7 @@ pub const MIN_TRADING_VOLUME: i128 = 100_000_000_000;
 pub const MIN_POOL_VOLUME_DEPTH: u64 = 2_000_000_000;
 
 /// Minimum volume score threshold used in liquidity depth checks.
-pub const MIN_POOL_VOLUME_SCORE: u64 = 2_000_000_000;
+pub const MIN_POOL_VOLUME_SCORE: u32 = 33;
 
 /// Return the current locked stake for `node`, or 0 if unregistered.
 pub fn get_locked_stake(env: &Env, node: &Address) -> u64 {
@@ -71,17 +71,6 @@ pub fn check_bond_capacity(env: &Env, node: &Address, _pool: &Symbol) -> Result<
     Ok(())
 }
 
-/// Ensure corridor fee pool depth meets the minimum before mutating feed telemetry.
-pub fn check_liquidity_depth(env: &Env, asset: AssetId) -> Result<(), ContractError> {
-    let pool = crate::fees::get_corridor_fee_pool(env.clone(), asset);
-    if pool.collected < MIN_POOL_VOLUME_DEPTH {
-        return Err(ContractError::InsufficientLiquidityDepth);
-    }
-    Ok(())
-}
-
-/// Validate that an incoming telemetry payload's ledger timestamp is not
-/// too far behind the current ledger block time.
 ///
 /// Returns `ContractError::StaleTelemetryPayload` when the payload timestamp
 /// lags the current time by more than `MAX_TELEMETRY_AGE_SECS` (60 seconds).
@@ -92,14 +81,6 @@ pub fn verify_payload_freshness(env: &Env, payload_timestamp: u64) -> Result<(),
     }
     Ok(())
 }
-
-/// Minimum cumulative pool/corridor volume required before telemetry derived
-/// from an AMM pool may update downstream exchange metrics.
-pub const MIN_POOL_VOLUME_DEPTH: u64 = 1_000_000;
-
-/// Minimum normalized volume score for explicitly configured feed metrics.
-pub const MIN_POOL_VOLUME_SCORE: u32 = 33;
-
 /// Evaluate whether an asset's underlying AMM/corridor has sufficient economic
 /// depth to safely accept telemetry updates.
 ///

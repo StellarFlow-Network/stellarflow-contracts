@@ -10,10 +10,10 @@ pub(crate) const LAST_ADMIN_ACTIVITY: Symbol = symbol_short!("LASTACT");
 pub const RECOVERY_INACTIVITY_THRESHOLD_SECONDS: u64 = 180 * 24 * 60 * 60;
 
 /// Event identifier published when a recovery key is configured or updated.
-pub const RECOVERY_CONFIGURED_EVENT: Symbol = symbol_short!("RECOVER_CFG");
+pub const RECOVERY_CONFIGURED_EVENT: Symbol = symbol_short!("RECVR_CFG");
 
 /// Event identifier published when a recovery operation succeeds.
-pub const RECOVERY_COMPLETED_EVENT: Symbol = symbol_short!("RECOVER_DONE");
+pub const RECOVERY_COMPLETED_EVENT: Symbol = symbol_short!("RVR_DONE");
 
 /// Stores or updates the secondary recovery key.
 ///

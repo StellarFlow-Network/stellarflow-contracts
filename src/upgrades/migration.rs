@@ -36,9 +36,9 @@ fn migrate_from_version(env: &Env, from_version: u32) -> Result<(), ContractErro
 
     let legacy_node_profiles_key = Symbol::new(env, "NODES");
     if env.storage().instance().has(&legacy_node_profiles_key) {
-        if let Some(profiles: Map<Address, NodeProfile>) = env.storage().instance().get(&legacy_node_profiles_key) {
+        if let Some(profiles) = env.storage().instance().get(&legacy_node_profiles_key) {
             for (address, profile) in profiles.iter() {
-                let key = NodeProfileKey(address.clone());
+                let key = NodeProfileKey::ProfileByNode(address.clone());
                 env.storage().persistent().set(&key, &profile);
             }
         }
@@ -47,9 +47,9 @@ fn migrate_from_version(env: &Env, from_version: u32) -> Result<(), ContractErro
 
     let legacy_signers_key = Symbol::new(env, "SIGNERS");
     if env.storage().instance().has(&legacy_signers_key) {
-        if let Some(signers: Map<Address, bool>) = env.storage().instance().get(&legacy_signers_key) {
+        if let Some(signers) = env.storage().instance().get(&legacy_signers_key) {
             for (address, _) in signers.iter() {
-                let key = SignerKey(address.clone());
+                let key = SignerKey::SignerByAddress(address.clone());
                 env.storage().instance().set(&key, &true);
             }
         }
@@ -58,9 +58,9 @@ fn migrate_from_version(env: &Env, from_version: u32) -> Result<(), ContractErro
 
     let legacy_stake_registry_key = Symbol::new(env, "STAKES");
     if env.storage().instance().has(&legacy_stake_registry_key) {
-        if let Some(stakes: Map<Address, u64>) = env.storage().instance().get(&legacy_stake_registry_key) {
+        if let Some(stakes) = env.storage().instance().get(&legacy_stake_registry_key) {
             for (address, amount) in stakes.iter() {
-                let key = StakeKey(address.clone());
+                let key = StakeKey::StakeByNode(address.clone());
                 env.storage().instance().set(&key, &amount);
             }
         }
@@ -76,9 +76,9 @@ fn migrate_from_version(env: &Env, from_version: u32) -> Result<(), ContractErro
 
     let legacy_heartbeat_key = Symbol::new(env, "HBEAT");
     if env.storage().instance().has(&legacy_heartbeat_key) {
-        if let Some(heartbeats: Map<u32, u64>) = env.storage().instance().get(&legacy_heartbeat_key) {
+        if let Some(heartbeats) = env.storage().instance().get(&legacy_heartbeat_key) {
             for (asset_id, timestamp) in heartbeats.iter() {
-                let key = HeartbeatKey(asset_id);
+                let key = HeartbeatKey::HeartbeatByAsset(asset_id);
                 env.storage().temporary().set(&key, &timestamp);
             }
         }
@@ -89,13 +89,13 @@ fn migrate_from_version(env: &Env, from_version: u32) -> Result<(), ContractErro
 }
 
 pub fn migrate_feed_metrics(env: &Env, asset: u32) -> AssetFeedMetrics {
-    let metrics_key = crate::storage::AssetMetricsKey(asset.into());
+    let metrics_key = crate::storage::AssetMetricsKey::MetricsByAsset(crate::asset_id_to_symbol(asset));
     if let Some(existing) = env.storage().persistent().get(&metrics_key) {
         return existing;
     }
 
     let legacy_key = Symbol::new(env, "METRICS");
-    if let Some(legacy: AssetFeedMetrics) = env.storage().instance().get(&legacy_key) {
+    if let Some(legacy) = env.storage().instance().get(&legacy_key) {
         env.storage().persistent().set(&metrics_key, &legacy);
         return legacy;
     }

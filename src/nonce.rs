@@ -2,6 +2,7 @@ use crate::ContractError;
 use soroban_sdk::{contracttype, Address, Bytes, BytesN, Env};
 
 #[contracttype]
+#[derive(Clone)]
 pub enum NonceKey {
     State(Address),
 }

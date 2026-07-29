@@ -48,13 +48,13 @@ pub const EV_PRICE_UPDATE: Symbol = symbol_short!("price_up");
 pub const EV_PRICE_FLOOR_SET: Symbol = symbol_short!("floor_set");
 
 /// Price oracle: a price floor was rolled back.
-pub const EV_PRICE_FLOOR_ROLL: Symbol = symbol_short!("floor_roll");
+pub const EV_PRICE_FLOOR_ROLL: Symbol = symbol_short!("flr_roll");
 
 /// Price oracle: price bounds were configured.
-pub const EV_PRICE_BOUNDS_SET: Symbol = symbol_short!("bounds_set");
+pub const EV_PRICE_BOUNDS_SET: Symbol = symbol_short!("bnd_set");
 
 /// Price oracle: price bounds were rolled back.
-pub const EV_PRICE_BOUNDS_ROLL: Symbol = symbol_short!("bounds_roll");
+pub const EV_PRICE_BOUNDS_ROLL: Symbol = symbol_short!("bnd_roll");
 
 /// Price oracle: max deviation percentage was updated.
 pub const EV_MAX_DEV_SET: Symbol = symbol_short!("dev_set");

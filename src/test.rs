@@ -250,7 +250,9 @@ fn test_execute_upgrade_post_health_check() {
     let new_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[1u8; 32]);
     let (salt, signature) = nonce_proof(&env, 0, b"propose-upgrade-health");
 
-    client.propose_upgrade(&new_wasm_hash, &admin, &0, &salt, &signature, &u64::MAX);
+    let signers = soroban_sdk::vec![&env, admin.clone()];
+    client.register_signer(&admin, &admin);
+    client.propose_upgrade(&new_wasm_hash, &admin, &signers, &0, &salt, &signature, &u64::MAX);
 
     // Fast forward time by 48 hours
     advance_ledger_timestamp(&env, UPGRADE_DELAY_SECONDS);

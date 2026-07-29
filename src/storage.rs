@@ -162,11 +162,11 @@ pub fn preflight_rent_check(env: &Env) {
     env.storage().instance().extend_ttl(0, ASSET_TTL_THRESHOLD);
 }
 
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FeedStakeValue {
-    pub amount: u64,
-    pub last_active: u64,
+pub fn extend_persistent_ttl<K>(env: &Env, key: &K)
+where
+    K: soroban_sdk::IntoVal<Env, soroban_sdk::Val> + Clone,
+{
+    env.storage().persistent().extend_ttl(key, PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_THRESHOLD + 100_000);
 }
 
 /// Prune a feed stake entry that has gone stale (issue #522: storage-rent
