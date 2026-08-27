@@ -1,6 +1,6 @@
 {
   "generators": {
-    "address": 2,
+    "address": 3,
     "nonce": 0
   },
   "auth": [
@@ -15,6 +15,9 @@
               "args": [
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 }
               ]
             }
@@ -132,7 +135,7 @@
                   "map": [
                     {
                       "key": {
-                        "symbol": "VALUE"
+                        "u32": 2166136261
                       },
                       "val": {
                         "u64": 301
@@ -255,6 +258,14 @@
                               }
                             }
                           ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "TREASURY"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                         }
                       }
                     ]
@@ -409,7 +420,14 @@
               }
             ],
             "data": {
-              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+              "vec": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                }
+              ]
             }
           }
         }
@@ -456,7 +474,7 @@
               }
             ],
             "data": {
-              "symbol": "VALUE"
+              "u32": 2166136261
             }
           }
         }
@@ -571,7 +589,7 @@
               }
             ],
             "data": {
-              "symbol": "VALUE"
+              "u32": 2166136261
             }
           }
         }
@@ -620,7 +638,7 @@
               }
             ],
             "data": {
-              "symbol": "VALUE"
+              "u32": 2166136261
             }
           }
         }
@@ -669,7 +687,7 @@
               }
             ],
             "data": {
-              "symbol": "VALUE"
+              "u32": 2166136261
             }
           }
         }
@@ -784,7 +802,7 @@
               }
             ],
             "data": {
-              "symbol": "VALUE"
+              "u32": 2166136261
             }
           }
         }

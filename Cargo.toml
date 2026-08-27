@@ -8,6 +8,7 @@ description = "StellarFlow smart contracts with time-locked upgrade mechanism"
 [workspace]
 members = [
     "contracts/analytics-engine",
+    "contracts/flash-loan",
     "contracts/hello-world",
     "contracts/ledger-time-helper",
     "contracts/liquidity-lock",

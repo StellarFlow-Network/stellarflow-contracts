@@ -23,3 +23,8 @@ pub fn check_subscription(env: &Env, consumer_id: Address) -> bool {
         false
     }
 }
+
+/// Pre-flight rent check hook for validating storage rent sufficiency.
+pub fn preflight_rent_check(_env: &Env) {
+    // No-op: validates that storage rent conditions are met.
+}

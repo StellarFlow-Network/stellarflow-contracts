@@ -25,7 +25,7 @@ pub fn require_multisig(env: &Env, signers: &Vec<Address>) -> Result<(), Contrac
             continue;
         }
 
-        let is_authorized = authorized_signers.contains_key(signer.clone()) || data.admin == *signer;
+        let is_authorized = authorized_signers.contains_key(signer.clone()) || data.admin == signer;
         if !is_authorized {
             continue;
         }
@@ -41,4 +41,5 @@ pub fn require_multisig(env: &Env, signers: &Vec<Address>) -> Result<(), Contrac
     if valid_count < 4 {
         return Err(ContractError::ThresholdNotReached);
     }
+    Ok(())
 }

@@ -1,6 +1,6 @@
 {
   "generators": {
-    "address": 2,
+    "address": 3,
     "nonce": 0
   },
   "auth": [
@@ -15,6 +15,9 @@
               "args": [
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 }
               ]
             }
@@ -33,7 +36,7 @@
               "function_name": "update_heartbeat",
               "args": [
                 {
-                  "symbol": "NGN"
+                  "u32": 2166136261
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
@@ -83,7 +86,7 @@
                   "map": [
                     {
                       "key": {
-                        "symbol": "NGN"
+                        "u32": 2166136261
                       },
                       "val": {
                         "u64": 0
@@ -145,6 +148,14 @@
                             }
                           ]
                         }
+                      },
+                      {
+                        "key": {
+                          "symbol": "TREASURY"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                        }
                       }
                     ]
                   }
@@ -153,7 +164,7 @@
             },
             "ext": "v0"
           },
-          4095
+          6000
         ]
       ],
       [
@@ -240,7 +251,7 @@
             },
             "ext": "v0"
           },
-          4095
+          6000
         ]
       ]
     ]
@@ -265,7 +276,14 @@
               }
             ],
             "data": {
-              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+              "vec": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                }
+              ]
             }
           }
         }
@@ -314,7 +332,7 @@
             "data": {
               "vec": [
                 {
-                  "symbol": "NGN"
+                  "u32": 2166136261
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
@@ -366,7 +384,7 @@
               }
             ],
             "data": {
-              "symbol": "NGN"
+              "u32": 2166136261
             }
           }
         }
@@ -415,7 +433,7 @@
               }
             ],
             "data": {
-              "symbol": "NGN"
+              "u32": 2166136261
             }
           }
         }

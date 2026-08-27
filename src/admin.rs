@@ -1,5 +1,5 @@
 use soroban_sdk::{contracttype, symbol_short, Address, Env, Map, Symbol};
-use crate::{ContractData, ContractError, DATA_KEY, SIGNERS_KEY, REVOKED_SIGNER_KEY};
+use crate::{ContractData, ContractError, DATA_KEY, SIGNERS_KEY, REVOKED_SIGNER_KEY, _get_signers, _revocation_threshold};
 
 pub(crate) const PENDING_OWNER_KEY: Symbol = symbol_short!("PNDOWN");
 pub(crate) const PAUSED_KEY: Symbol = symbol_short!("PAUSED");
@@ -209,7 +209,7 @@ pub fn vote_emergency_revocation(
 // ── Emergency revocation — query ─────────────────────────────────────────
 
 /// Returns the active emergency revocation proposal, if one exists.
-pub fn get_emergency_revocation_proposal(
+pub fn get_revocation_proposal(
     env: &Env,
 ) -> Option<EmergencyRevocationProposal> {
     env.storage().instance().get(&EMERGENCY_REVOCATION_KEY)

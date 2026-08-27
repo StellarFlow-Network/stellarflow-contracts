@@ -12,18 +12,16 @@ pub type AssetId = u32;
 /// Convert a currency Symbol to a numeric AssetId using FNV-1a hash.
 /// This provides deterministic mapping while minimizing gas costs.
 pub fn symbol_to_asset_id(symbol: &Symbol) -> AssetId {
-    // Simple FNV-1a hash for deterministic conversion
+    // Simple FNV-1a hash for deterministic conversion.
+    // Hash the raw Val representation of the Symbol.
     let mut hash: u32 = 2166136261u32;
-    // A Symbol is internally a u64, so we can hash its bytes directly
-    // without string allocation.
-    // Convert the symbol to a string, then iterate over its bytes for hashing.
-    // Extract the raw characters from the symbol natively without allocations
-    for character in (*symbol).into_iter() {
-        let byte = character as u8;
-        if byte == 0 { break; } // Symbols are null-padded if shorter than maximum length
-        
-        hash ^= byte as u32; // XOR the byte into the hash
-        hash = hash.wrapping_mul(16777619); // Multiply by FNV prime
+    let val: soroban_sdk::Val = symbol.to_val();
+    // Extract the raw u64 from the Val and hash its bytes
+    let raw: u64 = unsafe { core::mem::transmute(val) };
+    for byte in raw.to_be_bytes() {
+        if byte == 0 { break; }
+        hash ^= byte as u32;
+        hash = hash.wrapping_mul(16777619);
     }
     hash
 }
@@ -62,9 +60,9 @@ pub mod staking_tiers;
 pub mod validation;
 use crate::validation::check_bond_capacity;
 pub mod governance;
+pub mod storage;
 use crate::governance::{verify_staged_delay, StagedUpgrade};
 
-pub mod validation;
 pub use staking_tiers::{AssetFeedMetrics, StakingTier, StakingTierConfig};
 use staking_tiers::{
     assign_tier, effective_volume_score, required_stake_for_tier, validate_tier_config,
@@ -111,7 +109,17 @@ pub enum ContractError {
     /// The proposed fee exceeds the maximum allowed ceiling.
     FeeCeilingExceeded = 27,
     /// Incoming tracking sequence is less than or equal to the active stored checkpoint value.
-    StaleSequence = 26,
+    StaleSequence = 28,
+    /// Contract is in emergency-paused state.
+    ContractPaused = 29,
+    /// Address has been revoked by the multi-sig coordinator group.
+    RevokedAddress = 30,
+    /// An emergency revocation proposal is already active.
+    EmergencyRevocationAlreadyActive = 31,
+    /// No active emergency revocation proposal to vote on.
+    NoActiveEmergencyRevocation = 32,
+    /// Incoming telemetry payload is too old.
+    StaleTelemetryPayload = 33,
 }
 
 // Contract state keys
@@ -132,6 +140,9 @@ const NODE_PROFILES_KEY: Symbol = symbol_short!("NODES");
 const PLATFORM_CAPITAL_KEY: Symbol = symbol_short!("CAPITAL");
 const CONSENSUS_CACHE_KEY: Symbol = symbol_short!("CACHE");
 const RELAYER_TTL_THRESHOLD: u32 = 5_000;
+pub(crate) const TREASURY_KEY: Symbol = symbol_short!("TREASURY");
+pub(crate) const SEQUENCE_COUNTER_KEY: Symbol = symbol_short!("SEQCTR");
+pub(crate) const INSTANCE_TTL_EXTEND: u32 = 1_000;
 
 #[contracttype]
 #[derive(Clone)]
@@ -198,6 +209,15 @@ pub enum StakingStorageKey {
     FeedStake(Address, Symbol),
 }
 
+pub(crate) fn _get_signers(env: &Env) -> Map<Address, ()> {
+    env.storage().instance().get(&SIGNERS_KEY).unwrap_or_else(|| Map::new(env))
+}
+
+pub(crate) fn _revocation_threshold(env: &Env) -> u32 {
+    let n = _get_signers(env).len();
+    if n == 0 { 1 } else { n / 2 + 1 }
+}
+
 #[contract]
 pub struct TimeLockedUpgradeContract;
 
@@ -249,7 +269,7 @@ impl TimeLockedUpgradeContract {
         if data.admin != caller { return Err(ContractError::NotAdmin); }
         caller.require_auth();
 
-        let mut signers = Self::_get_signers(&env);
+        let mut signers = _get_signers(&env);
         signers.remove(signer);
         env.storage().instance().set(&SIGNERS_KEY, &signers);
         Self::_extend_instance_ttl(&env);
@@ -275,7 +295,7 @@ impl TimeLockedUpgradeContract {
 
         proposal.votes.set(voter, ());
 
-        let threshold = Self::_revocation_threshold(&env);
+        let threshold = _revocation_threshold(&env);
         if proposal.votes.len() >= threshold {
             let mut contract_data = data;
             contract_data.admin = proposal.replacement.clone();
@@ -298,7 +318,7 @@ impl TimeLockedUpgradeContract {
         let data = Self::get_data(env.clone())?;
         if data.admin != proposer { return Err(ContractError::NotAdmin); }
         proposer.require_auth();
-        consume_nonce(&env, &proposer, nonce, salt, salt_signature);
+        consume_nonce(&env, &proposer, nonce, salt, salt_signature)?;
         let staged = StagedUpgrade { wasm_hash: new_wasm_hash, staged_at: env.ledger().sequence() };
         env.storage().instance().set(&PENDING_UPGRADE_KEY, &staged);
         Ok(())
@@ -310,8 +330,8 @@ impl TimeLockedUpgradeContract {
         if data.admin != executor { return Err(ContractError::NotAdmin); }
         executor.require_auth();
         consume_nonce(&env, &executor, nonce, salt, signature)?;
-        let pending: PendingUpgrade = env.storage().instance().get(&PENDING_UPGRADE_KEY).ok_or(ContractError::NoPendingUpgrade)?;
-        if env.ledger().timestamp().saturating_sub(pending.proposed_at) < UPGRADE_DELAY_SECONDS {
+        let pending: StagedUpgrade = env.storage().instance().get(&PENDING_UPGRADE_KEY).ok_or(ContractError::NoPendingUpgrade)?;
+        if env.ledger().sequence().saturating_sub(pending.staged_at) < 5000 {
             return Err(ContractError::UpgradeTimelockNotSatisfied);
         }
         env.deployer().update_current_contract_wasm(pending.wasm_hash.to_array());
@@ -320,14 +340,14 @@ impl TimeLockedUpgradeContract {
         Ok(())
     }
 
-    pub fn get_pending_upgrade(env: Env) -> Option<PendingUpgrade> {
+    pub fn get_pending_upgrade(env: Env) -> Option<StagedUpgrade> {
         env.storage().instance().get(&PENDING_UPGRADE_KEY)
     }
 
     pub fn get_upgrade_timelock_remaining(env: Env) -> Option<u64> {
-        env.storage().instance().get(&PENDING_UPGRADE_KEY).map(|pending: PendingUpgrade| {
-            let elapsed = env.ledger().timestamp().saturating_sub(pending.proposed_at);
-            UPGRADE_DELAY_SECONDS.saturating_sub(elapsed)
+        env.storage().instance().get(&PENDING_UPGRADE_KEY).map(|pending: StagedUpgrade| {
+            let elapsed = env.ledger().sequence().saturating_sub(pending.staged_at);
+            5000u32.saturating_sub(elapsed) as u64
         })
     }
 
@@ -345,11 +365,9 @@ impl TimeLockedUpgradeContract {
         let mut data = Self::get_data(env.clone())?;
         if data.admin != caller { return Err(ContractError::NotAdmin); }
         caller.require_auth();
-        let mut seq_map: Map<Address, u64> = env.storage().instance().get(&SEQUENCE_COUNTER_KEY).unwrap_or_else(|| Map::new(&env));
-        seq_map.set(caller, sequence);
-        env.storage().instance().set(&SEQUENCE_COUNTER_KEY, &seq_map);
+        consume_nonce(&env, &caller, nonce, salt, signature)?;
         data.value = new_value;
-        env.storage().instance().set(&DATA_KEY, &data); // This line was missing a semicolon
+        env.storage().instance().set(&DATA_KEY, &data);
         Self::_record_heartbeat(&env, symbol_to_asset_id(&symbol_short!("VALUE")));
         Ok(())
     }
@@ -358,8 +376,8 @@ impl TimeLockedUpgradeContract {
         get_nonce(&env, &coordinator)
     }
 
-    pub fn get_last_update_timestamp(env: Env, asset: Symbol) -> Option<u64> {
-        let timestamps: Map<Symbol, u64> = env.storage().temporary().get(&HEARTBEAT_KEY).unwrap_or_else(|| Map::new(&env));
+    pub fn get_last_update_timestamp(env: Env, asset: AssetId) -> Option<u64> {
+        let timestamps: Map<AssetId, u64> = env.storage().temporary().get(&HEARTBEAT_KEY).unwrap_or_else(|| Map::new(&env));
         timestamps.get(asset)
     }
 
@@ -586,7 +604,7 @@ impl TimeLockedUpgradeContract {
 
         env.storage().instance().set(&STAKE_REGISTRY_KEY, &stakes);
         env.storage().instance().set(&TOTAL_STAKED_KEY, &new_total);
-        Self::_record_heartbeat(&env, asset.clone());
+        Self::_record_heartbeat(&env, symbol_to_asset_id(&asset));
 
         Ok(FeedStakeRecord {
             node,
@@ -661,7 +679,7 @@ impl TimeLockedUpgradeContract {
         let data = Self::get_data(env.clone())?;
         if data.admin != caller { return Err(ContractError::NotAdmin); }
         caller.require_auth();
-        let mut signers = Self::_get_signers(&env);
+        let mut signers = _get_signers(&env);
         if !signers.contains_key(signer.clone()) {
             signers.set(signer, ());
             env.storage().instance().set(&SIGNERS_KEY, &signers);
@@ -700,7 +718,7 @@ impl TimeLockedUpgradeContract {
 
     // #432: pre-flight rent check hook
     pub fn preflight_rent_check(env: Env) {
-        storage::preflight_rent_check(&env)
+        crate::storage::preflight_rent_check(&env)
     }
 
     // ── Emergency Key Revocation (multi-sig coordinator group) ───────────────
@@ -739,10 +757,10 @@ impl TimeLockedUpgradeContract {
     }
 
     /// Returns the active emergency revocation proposal, if one exists.
-    pub fn get_emergency_revocation_proposal(
+    pub fn get_revocation_proposal(
         env: Env,
     ) -> Option<admin::EmergencyRevocationProposal> {
-        admin::get_emergency_revocation_proposal(&env)
+        admin::get_revocation_proposal(&env)
     }
 
     /// Returns `true` if `addr` has been stamped as revoked by the
@@ -773,9 +791,7 @@ impl TimeLockedUpgradeContract {
         env.storage().instance().get(&HB_INTERVAL_KEY).unwrap_or(DEFAULT_HEARTBEAT_INTERVAL)
     }
 
-    fn _get_signers(env: &Env) -> Map<Address, ()> {
-        env.storage().instance().get(&SIGNERS_KEY).unwrap_or_else(|| Map::new(env))
-    }
+
 
     fn _get_node_profiles(env: &Env) -> Map<Address, NodeProfile> {
         env.storage().persistent().get(&NODE_PROFILES_KEY).unwrap_or_else(|| Map::new(env))
@@ -801,43 +817,11 @@ impl TimeLockedUpgradeContract {
     }
 
     fn _is_signer(env: &Env, addr: &Address) -> bool {
-        Self::_get_signers(env).contains_key(addr.clone())
+        _get_signers(env).contains_key(addr.clone())
     }
 
-    fn _revocation_threshold(env: &Env) -> u32 {
-        let n = Self::_get_signers(env).len();
-        if n == 0 { 1 } else { n / 2 + 1 }
-    }
 
-    fn _resolve_feed_metrics(env: &Env, asset: &AssetId) -> AssetFeedMetrics {
-        let pool = Self::get_corridor_fee_pool(env.clone(), asset.clone());
-        let stored: AssetFeedMetrics = env
-            .storage()
-            .persistent()
-            .get(&StakingStorageKey::AssetMetrics(asset.clone()))
-            .unwrap_or(AssetFeedMetrics {
-                volume_score: 0,
-                volatility_bps: 0,
-            });
 
-    pub fn update_validator_profile(env: Env, node: Address, pool: Symbol) -> Result<(), ContractError> {
-        // Guard: revoked node must not be able to update its profile.
-        admin::assert_not_revoked(&env, &node)?;
-        node.require_auth();
-
-        let stake = Self::get_stake(env.clone(), node.clone());
-        if stake < crate::validation::PREMIUM_POOL_MIN_STAKE {
-            return Err(ContractError::PremiumPoolAccessDenied);
-        }
-
-        Self::_record_heartbeat(&env, pool);
-        Ok(())
-    }
-}
-
-pub mod validation {
-    /// Minimum stake required to access the premium asset pool.
-    pub const PREMIUM_POOL_MIN_STAKE: u64 = 1_000;
 }
 
 #[cfg(test)]
@@ -908,7 +892,7 @@ mod query_guardrail_tests {
         let treasury = soroban_sdk::Address::generate(&env);
         client.initialize(&admin, &treasury);
 
-        let asset = symbol_short!("NGN");
+        let asset = crate::symbol_to_asset_id(&symbol_short!("NGN"));
         assert!(!client.is_data_fresh(&asset));
     }
 
@@ -919,7 +903,7 @@ mod query_guardrail_tests {
         let treasury = soroban_sdk::Address::generate(&env);
         client.initialize(&admin, &treasury);
 
-        let asset = symbol_short!("KES");
+        let asset = crate::symbol_to_asset_id(&symbol_short!("KES"));
         client.update_heartbeat(&asset, &admin);
 
         assert!(client.is_data_fresh(&asset));
@@ -935,7 +919,7 @@ mod query_guardrail_tests {
         let treasury = soroban_sdk::Address::generate(&env);
         client.initialize(&admin, &treasury);
 
-        let asset = symbol_short!("GHS");
+        let asset = crate::symbol_to_asset_id(&symbol_short!("GHS"));
         client.update_heartbeat(&asset, &admin);
 
         for _ in 0..5 {
@@ -953,7 +937,7 @@ mod query_guardrail_tests {
         let treasury = soroban_sdk::Address::generate(&env);
         client.initialize(&admin, &treasury);
 
-        let asset = symbol_short!("CFA");
+        let asset = crate::symbol_to_asset_id(&symbol_short!("CFA"));
 
         let admin_before = client.get_data().admin;
         let value_before = client.get_data().value;
