@@ -332,7 +332,7 @@ fn execute_single_hop(
         .ok_or(ContractError::DivisionByZero)?;
 
     let net_out = amount_out
-        .checked_sub(fee_collected as u64)
+        .checked_sub(fee_collected)
         .ok_or(ContractError::Overflow)?;
 
     // Update corridor fee pool accounting.

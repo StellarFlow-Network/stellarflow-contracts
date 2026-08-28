@@ -123,12 +123,6 @@ pub const PROFILE_TTL_THRESHOLD: u32 = 10_000;
 /// Calculation: 31 days × 24 hours × 60 minutes × 60 seconds / 5-second ledger ≈ 535,680
 pub const PERSISTENT_TTL_THRESHOLD: u32 = 535_680;
 
-pub fn extend_persistent_ttl<K: soroban_sdk::IntoVal<Env, soroban_sdk::Val>>(env: &Env, key: &K) {
-    env.storage()
-        .persistent()
-        .extend_ttl(key, PERSISTENT_TTL_THRESHOLD, PERSISTENT_TTL_THRESHOLD);
-}
-
 pub fn get_node_profiles(env: &Env) -> Map<Address, NodeProfile> {
     let key = Symbol::new(env, "NODES");
     if env.storage().persistent().has(&key) {
@@ -170,6 +164,13 @@ pub fn extend_asset_rent(env: &Env, asset: Symbol) -> bool {
 /// trips over an expired instance entry.
 pub fn preflight_rent_check(env: &Env) {
     env.storage().instance().extend_ttl(0, ASSET_TTL_THRESHOLD);
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FeedStakeValue {
+    pub amount: u64,
+    pub last_active: u64,
 }
 
 /// Prune a feed stake entry that has gone stale (issue #522: storage-rent

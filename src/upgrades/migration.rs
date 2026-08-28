@@ -38,7 +38,7 @@ fn migrate_from_version(env: &Env, from_version: u32) -> Result<(), ContractErro
     if env.storage().instance().has(&legacy_node_profiles_key) {
         if let Some(profiles) = env.storage().instance().get::<_, Map<Address, NodeProfile>>(&legacy_node_profiles_key) {
             for (address, profile) in profiles.iter() {
-                let key = NodeProfileKey::ProfileByNode(address.clone());
+                let key = NodeProfileKey(address.clone());
                 env.storage().persistent().set(&key, &profile);
             }
         }
@@ -49,7 +49,7 @@ fn migrate_from_version(env: &Env, from_version: u32) -> Result<(), ContractErro
     if env.storage().instance().has(&legacy_signers_key) {
         if let Some(signers) = env.storage().instance().get::<_, Map<Address, bool>>(&legacy_signers_key) {
             for (address, _) in signers.iter() {
-                let key = SignerKey::SignerByAddress(address.clone());
+                let key = SignerKey(address.clone());
                 env.storage().instance().set(&key, &true);
             }
         }
@@ -60,7 +60,7 @@ fn migrate_from_version(env: &Env, from_version: u32) -> Result<(), ContractErro
     if env.storage().instance().has(&legacy_stake_registry_key) {
         if let Some(stakes) = env.storage().instance().get::<_, Map<Address, u64>>(&legacy_stake_registry_key) {
             for (address, amount) in stakes.iter() {
-                let key = StakeKey::StakeByNode(address.clone());
+                let key = StakeKey(address.clone());
                 env.storage().instance().set(&key, &amount);
             }
         }
@@ -78,7 +78,7 @@ fn migrate_from_version(env: &Env, from_version: u32) -> Result<(), ContractErro
     if env.storage().instance().has(&legacy_heartbeat_key) {
         if let Some(heartbeats) = env.storage().instance().get::<_, Map<u32, u64>>(&legacy_heartbeat_key) {
             for (asset_id, timestamp) in heartbeats.iter() {
-                let key = HeartbeatKey::HeartbeatByAsset(asset_id);
+                let key = HeartbeatKey(asset_id);
                 env.storage().temporary().set(&key, &timestamp);
             }
         }
@@ -89,7 +89,7 @@ fn migrate_from_version(env: &Env, from_version: u32) -> Result<(), ContractErro
 }
 
 pub fn migrate_feed_metrics(env: &Env, asset: u32) -> AssetFeedMetrics {
-    let metrics_key = crate::StakingStorageKey::AssetMetrics(asset);
+    let metrics_key = crate::storage::AssetMetricsKey(asset.into());
     if let Some(existing) = env.storage().persistent().get(&metrics_key) {
         return existing;
     }

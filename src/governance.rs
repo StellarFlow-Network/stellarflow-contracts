@@ -256,7 +256,7 @@ pub fn open_ballot(
     };
     env.storage().temporary().set(&key, &ballot);
     env.storage().temporary().extend_ttl(&key, BALLOT_TTL_THRESHOLD, BALLOT_TTL_LEDGERS);
-    crate::kernel::instance::bump_instance_ttl(env);
+    crate::core::instance::bump_instance_ttl(env);
     Ok(())
 }
 
@@ -277,7 +277,7 @@ pub fn cast_vote(
     ballot.votes.set(voter, ());
     env.storage().temporary().set(&key, &ballot);
     env.storage().temporary().extend_ttl(&key, BALLOT_TTL_THRESHOLD, BALLOT_TTL_LEDGERS);
-    crate::kernel::instance::bump_instance_ttl(env);
+    crate::core::instance::bump_instance_ttl(env);
     Ok(ballot)
 }
 
@@ -287,7 +287,7 @@ pub fn get_ballot(env: &Env, proposal_id: Symbol) -> Option<VotingBallot> {
 
 pub fn close_ballot(env: &Env, proposal_id: Symbol) {
     env.storage().temporary().remove(&BallotKey::Proposal(proposal_id));
-    crate::kernel::instance::bump_instance_ttl(env);
+    crate::core::instance::bump_instance_ttl(env);
 }
 
 pub fn verify_block_height(target_height: u32, active_index: u32) -> bool {
