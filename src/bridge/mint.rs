@@ -182,7 +182,7 @@ pub fn mint(
     save_config(env, &config);
 
     env.events().publish(
-        (symbol_short!("wtok_mnt"), asset_code.clone(), to.clone()),
+        (symbol_short!("wtok_mnt"), asset_code, to.clone()),
         (amount, new_total_supply),
     );
 
@@ -232,7 +232,7 @@ pub fn burn(
     save_config(env, &config);
 
     env.events().publish(
-        (symbol_short!("wtok_brn"), asset_code.clone(), from.clone()),
+        (symbol_short!("wtok_brn"), asset_code, from.clone()),
         (amount, new_total_supply),
     );
 

@@ -50,6 +50,12 @@ pub const MIN_RESERVE_BALANCE: i128 = 1_000_000_000_000;
 /// This is set to 10,000 XLM equivalent (10_000 * 10^7 stroops).
 pub const MIN_TRADING_VOLUME: i128 = 100_000_000_000;
 
+/// Minimum corridor fee pool depth required before heartbeat / telemetry updates.
+pub const MIN_POOL_VOLUME_DEPTH: u64 = 2_000_000_000;
+
+/// Minimum volume score threshold used in liquidity depth checks.
+pub const MIN_POOL_VOLUME_SCORE: u64 = 2_000_000_000;
+
 /// Return the current locked stake for `node`, or 0 if unregistered.
 pub fn get_locked_stake(env: &Env, node: &Address) -> u64 {
     let stakes: Map<Address, u64> = env
@@ -67,6 +73,15 @@ pub fn check_bond_capacity(env: &Env, node: &Address, _pool: &Symbol) -> Result<
     let stake = get_locked_stake(env, node);
     if stake < PREMIUM_POOL_MIN_STAKE {
         return Err(ContractError::PremiumPoolAccessDenied);
+    }
+    Ok(())
+}
+
+/// Ensure corridor fee pool depth meets the minimum before mutating feed telemetry.
+pub fn check_liquidity_depth(env: &Env, asset: AssetId) -> Result<(), ContractError> {
+    let pool = crate::fees::get_corridor_fee_pool(env.clone(), asset);
+    if pool.collected < MIN_POOL_VOLUME_DEPTH {
+        return Err(ContractError::InsufficientLiquidityDepth);
     }
     Ok(())
 }

@@ -169,7 +169,7 @@ pub fn propose_emergency_revocation(
     replacement: Address,
     nonce: u64,
 ) -> Result<(), ContractError> {
-    crate::staging::check_staging_access(env, &proposer)?;
+    crate::staging::check_staging_access(env, &current_admin)?;
     let data: ContractData = env
         .storage()
         .instance()
@@ -191,7 +191,7 @@ pub fn propose_emergency_revocation(
 
     // Guard: only one active emergency proposal at a time.
     if has_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY) {
-        return Err(ContractError::EmergencyRevocAlreadyActive);
+        return Err(ContractError::EmergencyRevocationAlreadyActive);
     }
 
     // The target must currently be a signer or the admin.
@@ -492,7 +492,7 @@ pub fn countersign_admin_change(
     contract_data.admin = proposal.new_admin;
     env.storage().instance().set(&DATA_KEY, &contract_data);
     env.storage().instance().remove(&PENDING_ADMIN_KEY);
-    crate::kernel::instance::bump_instance_ttl(env);
+    crate::core::instance::bump_instance_ttl(env);
     Ok(())
 }
 
@@ -510,7 +510,7 @@ pub fn execute_admin_change_by_timelock(
 
     let elapsed = env.ledger().timestamp().saturating_sub(proposal.proposed_at);
     if elapsed < ADMIN_CHANGE_TIMELOCK_SECONDS {
-        return Err(ContractError::AdminChangeTimelockNotSatis);
+        return Err(ContractError::AdminChangeTimelockNotSatisfied);
     }
 
     let data: ContractData = env

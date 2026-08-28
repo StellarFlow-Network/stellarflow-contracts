@@ -164,7 +164,7 @@ pub fn lock_tokens(
     );
 
     env.events().publish(
-        (symbol_short!("tok_lock"), config.native_token.clone(), depositor),
+        (symbol_short!("tok_lock"), config.native_token, depositor),
         (lock.id, amount, target_chain_id, recipient_address),
     );
 
@@ -206,7 +206,7 @@ pub fn unlock_tokens(
     );
 
     env.events().publish(
-        (symbol_short!("tok_unlk"), config.native_token.clone(), proof.recipient),
+        (symbol_short!("tok_unlk"), config.native_token, proof.recipient),
         (proof.proof_hash, proof.source_chain_id, proof.amount, new_balance),
     );
 

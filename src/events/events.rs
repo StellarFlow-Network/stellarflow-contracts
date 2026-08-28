@@ -48,13 +48,13 @@ pub const EV_PRICE_UPDATE: Symbol = symbol_short!("price_up");
 pub const EV_PRICE_FLOOR_SET: Symbol = symbol_short!("floor_set");
 
 /// Price oracle: a price floor was rolled back.
-pub const EV_PRICE_FLOOR_ROLL: Symbol = symbol_short!("flr_roll");
+pub const EV_PRICE_FLOOR_ROLL: Symbol = symbol_short!("floor_roll");
 
 /// Price oracle: price bounds were configured.
-pub const EV_PRICE_BOUNDS_SET: Symbol = symbol_short!("bnd_set");
+pub const EV_PRICE_BOUNDS_SET: Symbol = symbol_short!("bounds_set");
 
 /// Price oracle: price bounds were rolled back.
-pub const EV_PRICE_BOUNDS_ROLL: Symbol = symbol_short!("bnd_roll");
+pub const EV_PRICE_BOUNDS_ROLL: Symbol = symbol_short!("bounds_roll");
 
 /// Price oracle: max deviation percentage was updated.
 pub const EV_MAX_DEV_SET: Symbol = symbol_short!("dev_set");
@@ -176,25 +176,20 @@ pub fn emit_event<D: soroban_sdk::IntoVal<Env, soroban_sdk::Val>>(
     let t2 = extra_topics.get(1).copied();
     let t3 = extra_topics.get(2).copied();
 
+    // Construct a Vec<Symbol> for the topics.
     let mut topics: Vec<Symbol> = Vec::new(env);
     topics.push_back(t0);
     if let Some(s) = t1 {
-        topics.push_back((*s).clone());
+        topics.push_back(s);
     }
     if let Some(s) = t2 {
-        topics.push_back((*s).clone());
+        topics.push_back(s);
     }
     if let Some(s) = t3 {
-        topics.push_back((*s).clone());
+        topics.push_back(s);
     }
 
-    match topics.len() {
-        1 => env.events().publish((topics.get(0).unwrap(),), data),
-        2 => env.events().publish((topics.get(0).unwrap(), topics.get(1).unwrap()), data),
-        3 => env.events().publish((topics.get(0).unwrap(), topics.get(1).unwrap(), topics.get(2).unwrap()), data),
-        4 => env.events().publish((topics.get(0).unwrap(), topics.get(1).unwrap(), topics.get(2).unwrap(), topics.get(3).unwrap()), data),
-        _ => {}
-    }
+    env.events().publish(topics, data);
     Ok(())
 }
 

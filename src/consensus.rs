@@ -1,6 +1,5 @@
 use soroban_sdk::{contracttype, symbol_short, Address, Env, Map, Symbol, Vec};
 use crate::ContractError;
-use crate::events::events::{emit_simple2, EV_FALLBACK_WARN};
 
 pub const MAX_VALIDATORS: usize = 16;
 
