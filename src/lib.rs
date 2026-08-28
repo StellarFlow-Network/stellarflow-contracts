@@ -177,9 +177,8 @@ pub enum ContractError {
     /// Reentrancy guard detected a reentrant call during execution.
     ReentrancyDetected = 58,
     MerkleTreeFull = 59,
-    NullifierAlreadyUsed = 49,
-    InvalidProof = 50,
-    ReentrancyDetected = 59,
+    InvalidFeeSplitConfig = 60,
+    FeeDistributionMismatch = 61,
 }
 
 impl ContractError {
