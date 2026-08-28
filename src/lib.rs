@@ -95,6 +95,13 @@ use crate::validation::{
 pub use events::swaps::{publish_swap_executed, SwapExecutedEvent};
 
 pub use staking_tiers::{AssetFeedMetrics, StakingTier, StakingTierConfig};
+pub use amm::rebalancing::{
+    RebalanceConfig, VaultStrategy, VaultPosition, RebalanceResult,
+    initialize_rebalancing, update_rebalance_config, get_rebalance_config,
+    authorize_vault_strategy, deauthorize_vault_strategy, is_vault_strategy_authorized,
+    get_vault_strategy, adjust_liquidity_range, execute_rebalance,
+    rebalance_vault_position, get_vault_positions,
+};
 use staking_tiers::{assign_tier, effective_volume_score, required_stake_for_tier, validate_tier_config};
 use slashing::{
     apply_escrow_penalty, get_fault_count_in_window, get_penalty_multiplier,
@@ -155,42 +162,54 @@ pub enum ContractError {
     /// Fewer than the minimum number of independent validator nodes supplied
     /// parameters during the current block round.
     IncompleteQuorum = 40,
+    /// Tick index is outside the allowed bounds.
+    TickOutOfBounds = 41,
+    /// Tick spacing is invalid (zero or negative).
+    InvalidTickSpacing = 42,
+    /// Tick index already exists for this pool.
+    TickIndexAlreadyExists = 43,
+    /// Tick index not found for this pool.
+    TickIndexNotFound = 44,
+    /// Tick is not aligned to the pool's tick spacing.
+    TickNotAligned = 45,
+    /// Too many ticks initialized for this pool.
+    TooManyTicks = 46,
     /// The current ledger sequence falls outside the allowed epoch validation window.
-    EpochClosed = 41,
+    EpochClosed = 47,
     /// A two-phase admin key change is already pending.
-    AdminChangePending = 42,
+    AdminChangePending = 48,
     /// No two-phase admin key change proposal is currently pending.
-    NoAdminChangePending = 43,
+    NoAdminChangePending = 49,
     /// The cosigner approving an admin change cannot be its own proposer.
-    CosignerCannotBeProposer = 44,
+    CosignerCannotBeProposer = 50,
     /// The 24-hour admin-change timelock has not yet elapsed.
-    AdminChangeTimelockNotSatisfied = 45,
+    AdminChangeTimelockNotSatisfied = 51,
     /// The validator has no locked bond available to deduct an escrow penalty from.
-    InsufficientBondForPenalty = 46,
+    InsufficientBondForPenalty = 52,
     /// The final swap output is below the caller's minimum acceptable amount.
-    SlippageExceeded = 47,
+    SlippageExceeded = 53,
     /// Event topic count exceeded maximum allowed.
-    EventTopicLimitExceeded = 48,
+    EventTopicLimitExceeded = 54,
     /// Recovery key has not been configured.
-    RecoveryKeyNotConfigured = 49,
+    RecoveryKeyNotConfigured = 55,
     /// Caller is not the configured recovery key.
-    NotRecoveryKey = 50,
+    NotRecoveryKey = 56,
     /// Recovery is not available yet (inactivity threshold not reached).
-    RecoveryNotAvailableYet = 51,
+    RecoveryNotAvailableYet = 57,
     /// Caller is not authorized during staging mode.
-    StagingNotAuthorized = 52,
+    StagingNotAuthorized = 58,
     /// Swap route is empty.
-    EmptyRoute = 53,
+    EmptyRoute = 59,
     /// Swap route is too long.
-    RouteTooLong = 54,
+    RouteTooLong = 60,
     /// Route execution failed.
-    RouteExecutionFailed = 55,
+    RouteExecutionFailed = 61,
     /// Swap amount is zero.
-    ZeroSwapAmount = 56,
+    ZeroSwapAmount = 62,
     /// Inconsistent assets across swap route hops.
-    InconsistentRouteAssets = 57,
+    InconsistentRouteAssets = 63,
     /// Liquidity pool not found.
-    PoolNotFound = 58,
+    PoolNotFound = 64,
 }
 
 // Contract state keys
@@ -1249,6 +1268,213 @@ impl TimeLockedUpgradeContract {
         );
 
         Ok(())
+    }
+
+    // ── Automated Liquidity Pool Reserve Rebalancing Hook (Issue #771) ───────────
+
+    /// Initialize automated rebalancing for a liquidity pool.
+    ///
+    /// Sets up the rebalancing configuration including target ratio, slippage bounds,
+    /// and minimum rebalance interval. Only the admin can call this.
+    pub fn initialize_rebalancing(
+        env: Env,
+        admin: Address,
+        asset: Symbol,
+        enabled: bool,
+        target_ratio_bps: u32,
+        threshold_bps: u32,
+        max_slippage_bps: u32,
+        rebalance_fee_bps: u32,
+        min_rebalance_interval: u64,
+    ) -> Result<(), ContractError> {
+        let data = Self::_load_data(&env)?;
+        if data.admin != admin { return Err(ContractError::NotAdmin); }
+        admin.require_auth();
+
+        let asset_id = symbol_to_asset_id(&asset);
+        let config = RebalanceConfig {
+            asset: asset_id,
+            enabled,
+            target_ratio_bps,
+            threshold_bps,
+            max_slippage_bps,
+            rebalance_fee_bps,
+            min_rebalance_interval,
+            last_rebalance_at: env.ledger().timestamp(),
+        };
+        initialize_rebalancing(&env, asset_id, &admin, config)
+    }
+
+    /// Update the rebalancing configuration for a pool (admin only).
+    pub fn update_rebalance_config(
+        env: Env,
+        admin: Address,
+        asset: Symbol,
+        enabled: Option<bool>,
+        target_ratio_bps: Option<u32>,
+        threshold_bps: Option<u32>,
+        max_slippage_bps: Option<u32>,
+        rebalance_fee_bps: Option<u32>,
+        min_rebalance_interval: Option<u64>,
+    ) -> Result<RebalanceConfig, ContractError> {
+        let data = Self::_load_data(&env)?;
+        if data.admin != admin { return Err(ContractError::NotAdmin); }
+        admin.require_auth();
+
+        let asset_id = symbol_to_asset_id(&asset);
+        update_rebalance_config(
+            &env,
+            asset_id,
+            &admin,
+            enabled,
+            target_ratio_bps,
+            threshold_bps,
+            max_slippage_bps,
+            rebalance_fee_bps,
+            min_rebalance_interval,
+        )
+    }
+
+    /// Get the current rebalancing configuration for a pool.
+    pub fn get_rebalance_config(env: Env, asset: Symbol) -> Result<RebalanceConfig, ContractError> {
+        let asset_id = symbol_to_asset_id(&asset);
+        get_rebalance_config(&env, asset_id)
+    }
+
+    /// Authorize a vault strategy to manage rebalancing for a pool (admin only).
+    ///
+    /// The vault strategy can then adjust liquidity concentration ranges and
+    /// trigger rebalancing operations within its authorized limits.
+    pub fn authorize_vault_strategy(
+        env: Env,
+        admin: Address,
+        asset: Symbol,
+        strategy: Address,
+        max_tick_range: i32,
+        max_liquidity: u64,
+    ) -> Result<VaultStrategy, ContractError> {
+        let data = Self::_load_data(&env)?;
+        if data.admin != admin { return Err(ContractError::NotAdmin); }
+        admin.require_auth();
+
+        let asset_id = symbol_to_asset_id(&asset);
+        authorize_vault_strategy(&env, asset_id, strategy, max_tick_range, max_liquidity)
+    }
+
+    /// Deauthorize a vault strategy (admin only).
+    pub fn deauthorize_vault_strategy(
+        env: Env,
+        admin: Address,
+        asset: Symbol,
+        strategy: Address,
+    ) -> Result<(), ContractError> {
+        let data = Self::_load_data(&env)?;
+        if data.admin != admin { return Err(ContractError::NotAdmin); }
+        admin.require_auth();
+
+        let asset_id = symbol_to_asset_id(&asset);
+        deauthorize_vault_strategy(&env, asset_id, strategy)
+    }
+
+    /// Check if a vault strategy is authorized for a pool.
+    pub fn is_vault_strategy_authorized(
+        env: Env,
+        asset: Symbol,
+        strategy: Address,
+    ) -> Result<bool, ContractError> {
+        let asset_id = symbol_to_asset_id(&asset);
+        is_vault_strategy_authorized(&env, asset_id, &strategy)
+    }
+
+    /// Get vault strategy authorization details.
+    pub fn get_vault_strategy(
+        env: Env,
+        asset: Symbol,
+        strategy: Address,
+    ) -> Result<VaultStrategy, ContractError> {
+        let asset_id = symbol_to_asset_id(&asset);
+        get_vault_strategy(&env, asset_id, &strategy)
+    }
+
+    /// Adjust the liquidity concentration range for a vault strategy position.
+    ///
+    /// This hook allows designated vault strategies to shift their concentrated
+    /// liquidity to a new tick range, enabling dynamic liquidity management.
+    /// Only authorized vault strategies can call this.
+    pub fn adjust_liquidity_range(
+        env: Env,
+        asset: Symbol,
+        strategy: Address,
+        old_lower_tick: i32,
+        old_upper_tick: i32,
+        new_lower_tick: i32,
+        new_upper_tick: i32,
+    ) -> Result<VaultPosition, ContractError> {
+        strategy.require_auth();
+        let asset_id = symbol_to_asset_id(&asset);
+        adjust_liquidity_range(
+            &env,
+            asset_id,
+            &strategy,
+            old_lower_tick,
+            old_upper_tick,
+            new_lower_tick,
+            new_upper_tick,
+        )
+    }
+
+    /// Execute automated rebalancing to restore the 50/50 target reserve ratio.
+    ///
+    /// This is the main rebalancing hook entry point. It checks if rebalancing is
+    /// needed (deviation exceeds threshold), calculates the required swap amounts,
+    /// and executes the swap with slippage protection. Only authorized vault
+    /// strategies can call this.
+    pub fn execute_rebalance(
+        env: Env,
+        asset: Symbol,
+        strategy: Address,
+        reserve0: u128,
+        reserve1: u128,
+    ) -> Result<RebalanceResult, ContractError> {
+        strategy.require_auth();
+        let asset_id = symbol_to_asset_id(&asset);
+        execute_rebalance(&env, asset_id, &strategy, reserve0, reserve1)
+    }
+
+    /// Rebalance a specific vault position's reserves to the target ratio.
+    ///
+    /// Handles single-sided surplus inventory within a concentrated liquidity
+    /// position, preserving the 50/50 target ratio with slippage bounds checking.
+    pub fn rebalance_vault_position(
+        env: Env,
+        asset: Symbol,
+        strategy: Address,
+        lower_tick: i32,
+        upper_tick: i32,
+        pool_reserve0: u128,
+        pool_reserve1: u128,
+    ) -> Result<RebalanceResult, ContractError> {
+        strategy.require_auth();
+        let asset_id = symbol_to_asset_id(&asset);
+        rebalance_vault_position(
+            &env,
+            asset_id,
+            &strategy,
+            lower_tick,
+            upper_tick,
+            pool_reserve0,
+            pool_reserve1,
+        )
+    }
+
+    /// Get all vault positions for a strategy.
+    pub fn get_vault_positions(
+        env: Env,
+        asset: Symbol,
+        strategy: Address,
+    ) -> Vec<VaultPosition> {
+        let asset_id = symbol_to_asset_id(&asset);
+        get_vault_positions(&env, asset_id, &strategy)
     }
 }
 
