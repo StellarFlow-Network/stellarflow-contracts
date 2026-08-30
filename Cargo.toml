@@ -35,12 +35,15 @@ exclude = ["tests/fuzz/fuzz"]
 resolver = "2"
 
 [workspace.dependencies]
-soroban-sdk = { version = "=20.0.0", default-features = false, features = ["testutils"] }
+soroban-sdk = { version = "=20.0.0", default-features = false }
 
 [dependencies]
-soroban-sdk = { version = "=20.0.0", default-features = false, features = ["testutils"] }
+soroban-sdk = { version = "=20.0.0", default-features = false }
 soroban-token-sdk = { version = "=20.0.0", default-features = false }
 ledger-time-helper = { path = "contracts/ledger-time-helper" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+soroban-sdk = { version = "=20.0.0", default-features = false, features = ["testutils"] }
 
 [dev-dependencies]
 soroban-sdk = { version = "=20.0.0", default-features = false, features = ["testutils"] }
