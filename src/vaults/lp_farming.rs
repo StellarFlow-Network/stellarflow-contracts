@@ -227,7 +227,7 @@ pub fn exit(env: &Env, user: Address) -> Result<(i128, i128), ContractError> {
         write_i128(env, &FarmingStorageKey::Shares(user.clone()), 0);
         write_i128(
             env,
-            &FarmingStorageKey::RewardDebt(user),
+            &FarmingStorageKey::RewardDebt(user.clone()),
             0,
         );
         env.storage().instance().set(

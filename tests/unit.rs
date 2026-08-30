@@ -217,10 +217,9 @@ fn test_deposit_feed_stake_and_unstake() {
 fn test_deposit_set_and_get_staking_tier_config() {
     let (env, client, admin) = setup_env();
     let config = StakingTierConfig {
-        tier1_min: 100,
-        tier2_min: 500,
-        tier3_min: 2000,
-        tier4_min: 10000,
+        regional_min_stake: 100,
+        standard_min_stake: 500,
+        premier_min_stake: 2000,
     };
     let signers: Vec<Address> = Vec::new(&env);
     assert!(client
@@ -236,20 +235,20 @@ fn test_deposit_set_and_get_staking_tier_config() {
 fn test_swap_add_and_get_corridor_fees() {
     let (env, client, admin) = setup_env();
     let asset = stellarflow_contracts::symbol_to_asset_id(&symbol_short!("NGN"));
-    client.add_corridor_fees(&admin, &asset, &5000, &500);
+    client.add_corridor_fees(&admin, &asset, &50_000, &500);
     let pool = client.get_corridor_fee_pool(&asset);
     assert_eq!(pool.asset, asset);
-    assert_eq!(pool.collected, 5000);
+    assert_eq!(pool.collected, 50_000);
 }
 
 #[test]
 fn test_swap_add_corridor_fees_accumulates() {
     let (env, client, admin) = setup_env();
     let asset = stellarflow_contracts::symbol_to_asset_id(&symbol_short!("KES"));
-    client.add_corridor_fees(&admin, &asset, &1000, &100);
-    client.add_corridor_fees(&admin, &asset, &2000, &200);
+    client.add_corridor_fees(&admin, &asset, &100_000, &100);
+    client.add_corridor_fees(&admin, &asset, &200_000, &200);
     let pool = client.get_corridor_fee_pool(&asset);
-    assert_eq!(pool.collected, 3000);
+    assert_eq!(pool.collected, 300_000);
 }
 
 #[test]
@@ -369,6 +368,11 @@ fn test_emergency_revocation_propose_and_check() {
     let (env, client, admin) = setup_env();
     let signer = Address::generate(&env);
     client.register_signer(&signer, &admin);
+    // Raise the revocation threshold above 1 (a single proposer must not
+    // complete the revocation immediately) by registering extra signers.
+    for _ in 0..4 {
+        client.register_signer(&Address::generate(&env), &admin);
+    }
     let replacement = Address::generate(&env);
     client.propose_emergency_revocation(&admin, &signer, &replacement, &0);
     assert!(client.has_active_revocation_proposal());
@@ -379,6 +383,9 @@ fn test_emergency_revocation_get_proposal() {
     let (env, client, admin) = setup_env();
     let signer = Address::generate(&env);
     client.register_signer(&signer, &admin);
+    for _ in 0..4 {
+        client.register_signer(&Address::generate(&env), &admin);
+    }
     let replacement = Address::generate(&env);
     client.propose_emergency_revocation(&admin, &signer, &replacement, &0);
     let proposal = client.get_emergency_revocation();
@@ -395,7 +402,7 @@ fn test_node_profile_upsert_and_get_rate() {
     let node = Address::generate(&env);
     client.upsert_node_profile(&admin, &node, &1000, &80);
     let rate = client.get_latest_rate(&node);
-    assert_eq!(rate, Ok(1000));
+    assert_eq!(rate, 1000);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -412,7 +419,7 @@ fn test_bundle_process_single_asset() {
     updates.push_back(AssetPriceUpdate {
         asset: stellarflow_contracts::symbol_to_asset_id(&symbol_short!("NGN")),
         price: 100_000,
-        timestamp: env.ledger().timestamp() - 30,
+        timestamp: 1000,
     });
     let outcome = client.update_prices_bundle(&node, &updates);
     assert_eq!(outcome.total_assets, 1);

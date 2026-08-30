@@ -151,8 +151,7 @@ impl LinearVestingContract {
     /// Claim vested tokens for a given vesting schedule.
     ///
     /// Panics if cliff has not been reached or nothing is claimable.
-    pub fn claim_vested(env: Env, identifier: Symbol) -> Result<i128, VestingError> {
-        let beneficiary = env.invoker();
+    pub fn claim_vested(env: Env, beneficiary: Address, identifier: Symbol) -> Result<i128, VestingError> {
         beneficiary.require_auth();
 
         let schedule_key = DataKey::Schedule(identifier.clone());
@@ -190,7 +189,7 @@ impl LinearVestingContract {
 
         // Emit event
         env.events().publish(
-            (symbol_short!("vest_claim"),),
+            (Symbol::new(&env, "vest_claim"),),
             (identifier, schedule.beneficiary, claimable),
         );
 
@@ -211,11 +210,12 @@ impl LinearVestingContract {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
     use super::*;
     use soroban_sdk::testutils::{Address as _, Ledger, LedgerInfo};
     use soroban_sdk::{symbol_short, Env};
 
-    fn setup() -> (Env, LinearVestingContractClient<'static>) {
+        fn setup() -> (Env, LinearVestingContractClient<'static>) {
         let env = Env::default();
         env.mock_all_auths();
         let id = env.register_contract(None, LinearVestingContract);
@@ -223,17 +223,35 @@ mod tests {
         (env, client)
     }
 
+    /// Register a real stellar asset contract with `admin` as its admin and
+    /// mint the vesting pool to `admin`.
+    fn stellar_token(env: &Env, admin: &Address, total: i128) -> Address {
+        let issuer = Address::generate(env);
+        let token = env.register_stellar_asset_contract(issuer.clone());
+        soroban_sdk::token::StellarAssetClient::new(env, &token).set_admin(admin);
+        soroban_sdk::token::StellarAssetClient::new(env, &token).mint(admin, &total);
+        token
+    }
+
+    fn token_setup() -> (Env, LinearVestingContractClient<'static>, Address, Address, Address) {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        let beneficiary = Address::generate(&env);
+        let token = stellar_token(&env, &admin, 1000_0000000 * 2);
+        (env, client, admin, beneficiary, token)
+    }
+
     fn advance_ledgers(env: &Env, count: u32) {
         let info = env.ledger().get();
         env.ledger().set(LedgerInfo {
-            sequence: info.sequence + count,
+            sequence_number: info.sequence_number + count,
             timestamp: info.timestamp,
             protocol_version: info.protocol_version,
             network_id: Default::default(),
             base_reserve: 10,
-            min_temp_entry_ttl: 0,
-            min_persistent_entry_ttl: 0,
-            max_entry_ttl: u32::MAX,
+            min_temp_entry_ttl: 4096,
+            min_persistent_entry_ttl: 4096,
+            max_entry_ttl: 6_312_000,
         });
     }
 
@@ -249,10 +267,7 @@ mod tests {
 
     #[test]
     fn test_create_vesting_schedule() {
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-        let beneficiary = Address::generate(&env);
-        let token = Address::generate(&env);
+        let (env, client, admin, beneficiary, token) = token_setup();
 
         client.initialize(&admin, &token);
         let id = symbol_short!("team1");
@@ -276,10 +291,7 @@ mod tests {
 
     #[test]
     fn test_no_claimable_before_cliff() {
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-        let beneficiary = Address::generate(&env);
-        let token = Address::generate(&env);
+        let (env, client, admin, beneficiary, token) = token_setup();
 
         client.initialize(&admin, &token);
         let id = symbol_short!("team1");
@@ -300,10 +312,7 @@ mod tests {
 
     #[test]
     fn test_claimable_after_cliff() {
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-        let beneficiary = Address::generate(&env);
-        let token = Address::generate(&env);
+        let (env, client, admin, beneficiary, token) = token_setup();
 
         client.initialize(&admin, &token);
         let id = symbol_short!("team1");
@@ -327,10 +336,7 @@ mod tests {
 
     #[test]
     fn test_claim_vested_tokens() {
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-        let beneficiary = Address::generate(&env);
-        let token = Address::generate(&env);
+        let (env, client, admin, beneficiary, token) = token_setup();
 
         client.initialize(&admin, &token);
         let id = symbol_short!("team1");
@@ -346,7 +352,7 @@ mod tests {
 
         // Advance fully past vesting
         advance_ledgers(&env, 1000);
-        let claimed = client.claim_vested(&id);
+        let claimed = client.claim_vested(&beneficiary, &id);
         assert_eq!(claimed, 1000_0000000);
 
         let schedule = client.get_schedule(&id).unwrap();
@@ -355,10 +361,7 @@ mod tests {
 
     #[test]
     fn test_cannot_claim_before_cliff() {
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-        let beneficiary = Address::generate(&env);
-        let token = Address::generate(&env);
+        let (env, client, admin, beneficiary, token) = token_setup();
 
         client.initialize(&admin, &token);
         let id = symbol_short!("team1");
@@ -373,7 +376,7 @@ mod tests {
         );
 
         advance_ledgers(&env, 50);
-        let result = client.try_claim_vested(&id);
+        let result = client.try_claim_vested(&beneficiary, &id);
         assert_eq!(result, Err(Ok(VestingError::CliffNotReached)));
     }
 }

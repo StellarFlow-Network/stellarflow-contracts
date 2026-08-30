@@ -74,44 +74,47 @@ mod tests {
     #[test]
     fn test_reentrancy_lock_acquire_and_release() {
         let env = Env::default();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
 
-        assert!(!is_locked(&env));
-        lock(&env).expect("First lock should succeed");
-        assert!(is_locked(&env));
+        assert!(!env.as_contract(&cid, || is_locked(&env)));
+        env.as_contract(&cid, || lock(&env)).expect("First lock should succeed");
+        assert!(env.as_contract(&cid, || is_locked(&env)));
 
-        let reentrant_res = lock(&env);
+        let reentrant_res = env.as_contract(&cid, || lock(&env));
         assert_eq!(reentrant_res, Err(ContractError::ReentrancyDetected));
 
-        unlock(&env);
-        assert!(!is_locked(&env));
+        env.as_contract(&cid, || unlock(&env));
+        assert!(!env.as_contract(&cid, || is_locked(&env)));
 
-        lock(&env).expect("Locking after unlock should succeed");
-        unlock(&env);
+        env.as_contract(&cid, || lock(&env)).expect("Locking after unlock should succeed");
+        env.as_contract(&cid, || unlock(&env));
     }
 
     #[test]
     fn test_reentrancy_guard_raii() {
         let env = Env::default();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
 
-        assert!(!is_locked(&env));
-        {
+        assert!(!env.as_contract(&cid, || is_locked(&env)));
+        env.as_contract(&cid, || {
             let _guard = ReentrancyGuard::new(&env).expect("Guard creation should lock");
             assert!(is_locked(&env));
             assert_eq!(lock(&env), Err(ContractError::ReentrancyDetected));
-        }
-        assert!(!is_locked(&env));
+        });
+        assert!(!env.as_contract(&cid, || is_locked(&env)));
     }
 
     #[test]
     fn test_with_reentrancy_guard_closure() {
         let env = Env::default();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
 
-        let res = with_reentrancy_guard(&env, || {
+        let res = env.as_contract(&cid, || with_reentrancy_guard(&env, || {
             assert!(is_locked(&env));
             Ok(42)
-        });
+        }));
 
         assert_eq!(res, Ok(42));
-        assert!(!is_locked(&env));
+        assert!(!env.as_contract(&cid, || is_locked(&env)));
     }
 }

@@ -7,8 +7,8 @@ pub struct GasLogger;
 impl GasLogger {
     pub fn log_budget(env: &Env, function_name: &str) {
         let budget = env.budget();
-        let cpu = budget.cpu_instruction_count();
-        let mem = budget.memory_allocation();
+        let cpu = budget.cpu_instruction_cost();
+        let mem = budget.memory_bytes_cost();
 
         // Print budget logs
         budget.print();

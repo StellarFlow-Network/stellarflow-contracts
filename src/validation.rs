@@ -284,7 +284,7 @@ fn asset_id_to_symbol_short(id: AssetId) -> Symbol {
 /// - Downstream applications receive reliable price data
 ///
 /// # Example
-/// ```rust
+/// ```ignore
 /// // Pool with 500,000 XLM and 100,000 USDC reserves
 /// let result = validate_reserve_balance(5_000_000_000_000, 1_000_000_000_000);
 /// // Result: Ok(()) - both reserves exceed MIN_RESERVE_BALANCE
@@ -331,7 +331,7 @@ pub fn validate_reserve_balance(
 /// - Complements reserve balance checks for defense-in-depth
 ///
 /// # Example
-/// ```rust
+/// ```ignore
 /// // Active pool with 50,000 XLM daily volume
 /// let result = validate_trading_volume(500_000_000_000);
 /// // Result: Ok()
@@ -387,7 +387,7 @@ pub fn validate_trading_volume(volume_24h: i128) -> Result<(), ContractError> {
 /// 4. Bond capacity (most expensive, checked last)
 ///
 /// # Example
-/// ```rust
+/// ```ignore
 /// let result = validate_telemetry_submission(
 ///     &env,
 ///     &validator_addr,

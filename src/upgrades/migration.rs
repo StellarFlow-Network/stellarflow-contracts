@@ -1,6 +1,6 @@
 use soroban_sdk::{contracttype, Address, Env, Map, Symbol};
 
-use crate::storage::{HeartbeatKey, NodeProfileKey, SignerKey, StakeKey};
+use crate::storage::{NodeProfileKey, SignerKey, StakeKey};
 use crate::{AssetFeedMetrics, ContractError, NodeProfile};
 
 pub const SCHEMA_VERSION: u32 = 2;
@@ -52,8 +52,13 @@ fn migrate_from_version(env: &Env, from_version: u32) -> Result<(), ContractErro
                 let key = SignerKey::SignerByAddress(address.clone());
                 env.storage().instance().set(&key, &true);
             }
+            // The legacy signer Map lives under the same symbol that now holds
+            // the signer *count* (`SIGNERS_KEY`): overwrite it in place rather
+            // than removing it, so the converted multi-sig tally survives.
+            env.storage().instance().set(&crate::SIGNERS_KEY, &(signers.len() as u32));
+        } else {
+            env.storage().instance().remove(&legacy_signers_key);
         }
-        env.storage().instance().remove(&legacy_signers_key);
     }
 
     let legacy_stake_registry_key = Symbol::new(env, "STAKES");
@@ -63,22 +68,26 @@ fn migrate_from_version(env: &Env, from_version: u32) -> Result<(), ContractErro
                 let key = StakeKey::StakeByNode(address.clone());
                 env.storage().instance().set(&key, &amount);
             }
+            // The legacy registry Map shares its symbol with the active
+            // `STAKE_REGISTRY_KEY`; the converted Map supersedes it in place.
+            env.storage().instance().set(&crate::STAKE_REGISTRY_KEY, &stakes);
+        } else {
+            env.storage().instance().remove(&legacy_stake_registry_key);
         }
-        env.storage().instance().remove(&legacy_stake_registry_key);
     }
 
     let legacy_total_staked_key = Symbol::new(env, "TOTAL");
     if env.storage().instance().has(&legacy_total_staked_key) {
         let total_staked: u64 = env.storage().instance().get(&legacy_total_staked_key).unwrap_or(0u64);
+        // Legacy and active keys are the same symbol: overwrite (not remove).
         env.storage().instance().set(&crate::TOTAL_STAKED_KEY, &total_staked);
-        env.storage().instance().remove(&legacy_total_staked_key);
     }
 
     let legacy_heartbeat_key = Symbol::new(env, "HBEAT");
     if env.storage().instance().has(&legacy_heartbeat_key) {
         if let Some(heartbeats) = env.storage().instance().get::<_, Map<u32, u64>>(&legacy_heartbeat_key) {
             for (asset_id, timestamp) in heartbeats.iter() {
-                let key = HeartbeatKey::HeartbeatByAsset(asset_id);
+                let key = crate::HeartbeatKey(asset_id);
                 env.storage().temporary().set(&key, &timestamp);
             }
         }

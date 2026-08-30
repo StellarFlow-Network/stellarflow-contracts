@@ -151,6 +151,16 @@ mod tests {
     fn setup() -> (Env, Address, Address) {
         let env = Env::default();
         env.mock_all_auths();
+        env.ledger().set(LedgerInfo {
+            timestamp: 100_000_000,
+            protocol_version: env.ledger().protocol_version(),
+            sequence_number: env.ledger().sequence(),
+            network_id: Default::default(),
+            base_reserve: 10,
+            min_temp_entry_ttl: 0,
+            min_persistent_entry_ttl: 0,
+            max_entry_ttl: u32::MAX,
+        });
         let admin = Address::generate(&env);
         let recovery_key = Address::generate(&env);
         (env, admin, recovery_key)
@@ -177,7 +187,9 @@ mod tests {
             let data = crate::ContractData {
                 admin: admin.clone(),
                 value: 0,
+                max_fee_ceiling: 0,
             };
+
             env.storage().instance().set(&crate::DATA_KEY, &data);
 
             let non_admin = Address::generate(&env);
@@ -202,6 +214,7 @@ mod tests {
             let data = crate::ContractData {
                 admin: admin.clone(),
                 value: 0,
+                max_fee_ceiling: 0,
             };
             env.storage().instance().set(&crate::DATA_KEY, &data);
 
@@ -253,6 +266,7 @@ mod tests {
             let data = crate::ContractData {
                 admin: Address::generate(&env),
                 value: 0,
+                max_fee_ceiling: 0,
             };
             env.storage().instance().set(&crate::DATA_KEY, &data);
 
@@ -268,6 +282,7 @@ mod tests {
             let data = crate::ContractData {
                 admin: Address::generate(&env),
                 value: 0,
+                max_fee_ceiling: 0,
             };
             env.storage().instance().set(&crate::DATA_KEY, &data);
             env.storage().instance().set(&RECOVERY_KEY, &recovery_key);
@@ -285,6 +300,7 @@ mod tests {
             let data = crate::ContractData {
                 admin: Address::generate(&env),
                 value: 0,
+                max_fee_ceiling: 0,
             };
             env.storage().instance().set(&crate::DATA_KEY, &data);
             env.storage().instance().set(&RECOVERY_KEY, &recovery_key);
@@ -302,6 +318,7 @@ mod tests {
             let data = crate::ContractData {
                 admin: Address::generate(&env),
                 value: 0,
+                max_fee_ceiling: 0,
             };
             env.storage().instance().set(&crate::DATA_KEY, &data);
             env.storage().instance().set(&RECOVERY_KEY, &recovery_key);
@@ -319,6 +336,7 @@ mod tests {
             let data = crate::ContractData {
                 admin: Address::generate(&env),
                 value: 0,
+                max_fee_ceiling: 0,
             };
             env.storage().instance().set(&crate::DATA_KEY, &data);
             env.storage().instance().set(&RECOVERY_KEY, &recovery_key);
@@ -346,6 +364,7 @@ mod tests {
             let data = crate::ContractData {
                 admin: Address::generate(&env),
                 value: 0,
+                max_fee_ceiling: 0,
             };
             env.storage().instance().set(&crate::DATA_KEY, &data);
             env.storage().instance().set(&RECOVERY_KEY, &recovery_key);
@@ -364,10 +383,12 @@ mod tests {
     #[test]
     fn test_recovery_fails_when_already_recovered() {
         let (env, _admin, recovery_key) = setup();
-        env.as_contract(&env.register_contract(None, crate::TimeLockedUpgradeContract), || {
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+        env.as_contract(&cid, || {
             let data = crate::ContractData {
                 admin: recovery_key.clone(),
                 value: 0,
+                max_fee_ceiling: 0,
             };
             env.storage().instance().set(&crate::DATA_KEY, &data);
             env.storage().instance().set(&RECOVERY_KEY, &recovery_key);
@@ -376,9 +397,9 @@ mod tests {
             let past_activity = env.ledger().timestamp().saturating_sub(RECOVERY_INACTIVITY_THRESHOLD_SECONDS + 1);
             env.storage().instance().set(&LAST_ADMIN_ACTIVITY, &past_activity);
             recover_admin(&env, &recovery_key).expect("first recovery should succeed");
-
-            // Second recovery attempt: admin is now recovery_key itself, so inactivity
-            // was just reset to now, meaning recovery is not available yet.
+        });
+        // Second attempt in a fresh scope so the auth frame resets.
+        env.as_contract(&cid, || {
             let result = recover_admin(&env, &recovery_key);
             assert_eq!(result, Err(ContractError::RecoveryNotAvailableYet));
         });
@@ -391,6 +412,7 @@ mod tests {
             let data = crate::ContractData {
                 admin: admin.clone(),
                 value: 0,
+                max_fee_ceiling: 0,
             };
             env.storage().instance().set(&crate::DATA_KEY, &data);
 

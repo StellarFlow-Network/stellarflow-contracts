@@ -146,27 +146,29 @@ mod tests {
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
 
-        env.as_contract(&contract_id, || {
-            let first = initiate_cross_border_payment(
+        let first = env.as_contract(&contract_id, || {
+            initiate_cross_border_payment(
                 &env,
                 sender.clone(),
                 recipient.clone(),
                 100,
                 symbol_short!("GHS"),
                 0,
-            );
-            assert!(first.is_ok());
+            )
+        });
+        assert!(first.is_ok());
 
-            let second = initiate_cross_border_payment(
+        let second = env.as_contract(&contract_id, || {
+            initiate_cross_border_payment(
                 &env,
                 sender,
                 recipient,
                 100,
                 symbol_short!("GHS"),
                 0, // same nonce — replay
-            );
-            assert_eq!(second, Err(ContractError::InvalidNonce));
+            )
         });
+        assert_eq!(second, Err(ContractError::InvalidNonce));
     }
 
     #[test]
@@ -177,27 +179,29 @@ mod tests {
         let sender = Address::generate(&env);
         let recipient = Address::generate(&env);
 
-        env.as_contract(&contract_id, || {
-            let first = initiate_cross_border_payment(
+        let first = env.as_contract(&contract_id, || {
+            initiate_cross_border_payment(
                 &env,
                 sender.clone(),
                 recipient.clone(),
                 200,
                 symbol_short!("CFA"),
                 0,
-            );
-            assert!(first.is_ok());
+            )
+        });
+        assert!(first.is_ok());
 
-            let second = initiate_cross_border_payment(
+        let second = env.as_contract(&contract_id, || {
+            initiate_cross_border_payment(
                 &env,
                 sender,
                 recipient,
                 200,
                 symbol_short!("CFA"),
                 1, // different nonce — should succeed
-            );
-            assert!(second.is_ok());
+            )
         });
+        assert!(second.is_ok());
     }
 
     #[test]
@@ -246,22 +250,24 @@ mod tests {
                 symbol_short!("NGN"),
                 0,
             );
+        });
 
-            let result = initiate_cross_border_payment(
+        let result = env.as_contract(&contract_id, || {
+            initiate_cross_border_payment(
                 &env,
                 sender,
                 recipient,
                 100,
                 symbol_short!("NGN"),
                 0,
-            );
-            assert_eq!(result, Err(ContractError::InvalidNonce));
-
-            let events = env.events().all();
-            assert!(
-                !events.is_empty(),
-                "expected security event for replay detection"
-            );
+            )
         });
+        assert_eq!(result, Err(ContractError::InvalidNonce));
+
+        let events = env.events().all();
+        assert!(
+            !events.is_empty(),
+            "expected security event for replay detection"
+        );
     }
 }

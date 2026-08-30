@@ -56,25 +56,26 @@ pub fn publish_swap_executed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{symbol_short, Env};
+    use soroban_sdk::{symbol_short, testutils::{Address as _, Events}, Env};
 
     #[test]
     fn test_publish_swap_executed() {
         let env = Env::default();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
         let trader = Address::generate(&env);
         let input_asset = symbol_short!("XLM");
         let output_asset = symbol_short!("USDC");
         let execution_price = 1250000i128;
         let slippage = 50i128;
 
-        publish_swap_executed(
+        env.as_contract(&cid, || publish_swap_executed(
             &env,
             &trader,
             &input_asset,
             &output_asset,
             execution_price,
             slippage,
-        );
+        ));
 
         let events = env.events().all();
         assert_eq!(events.len(), 1);

@@ -10,3 +10,5 @@ target
 # generated content so developers run generate-bindings.sh locally.
 packages/*/
 !packages/.gitkeep
+# Host-generated test snapshot artifacts (regenerated on every test run)
+test_snapshots/

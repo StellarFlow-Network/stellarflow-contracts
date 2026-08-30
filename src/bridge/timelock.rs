@@ -76,11 +76,12 @@ mod tests {
     #[test]
     fn timelocks_large_withdrawals() {
         let env = Env::default();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
         let receiver = Address::generate(&env);
-        let w = queue_withdrawal(&env, receiver.clone(), LARGE_TRANSFER_THRESHOLD + 1);
+        let w = env.as_contract(&cid, || queue_withdrawal(&env, receiver.clone(), LARGE_TRANSFER_THRESHOLD + 1));
         assert!(w.execute_after > w.queued_at);
         assert_eq!(
-            execute_withdrawal(&env, &receiver),
+            env.as_contract(&cid, || execute_withdrawal(&env, &receiver)),
             Err(ContractError::UpgradeTimelockNotSatisfied)
         );
     }

@@ -121,7 +121,7 @@ pub fn insert(env: &Env, commitment: BytesN<32>) -> Result<(u64, BytesN<32>), Co
     store_state(env, &state);
 
     env.events().publish(
-        (symbol_short!("merkle_add"),),
+        (soroban_sdk::Symbol::new(env, "merkle_add"),),
         (leaf_index, current.clone()),
     );
     Ok((leaf_index, current))

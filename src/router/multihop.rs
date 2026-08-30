@@ -535,17 +535,19 @@ mod tests {
     #[test]
     fn validate_route_rejects_empty() {
         let env = Env::default();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
         let sender = Address::generate(&env);
         let route = Route {
             sender,
             steps: Vec::new(&env),
         };
-        assert_eq!(validate_route(&env, &route), Err(ContractError::EmptyRoute));
+        assert_eq!(env.as_contract(&cid, || validate_route(&env, &route)), Err(ContractError::EmptyRoute));
     }
 
     #[test]
     fn validate_route_rejects_too_many_hops() {
         let env = Env::default();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
         let sender = Address::generate(&env);
         let pool = Address::generate(&env);
         let mut steps = Vec::new(&env);
@@ -560,7 +562,7 @@ mod tests {
         }
         let route = Route { sender, steps };
         assert_eq!(
-            validate_route(&env, &route),
+            env.as_contract(&cid, || validate_route(&env, &route)),
             Err(ContractError::RouteTooLong)
         );
     }
@@ -568,6 +570,7 @@ mod tests {
     #[test]
     fn validate_route_rejects_zero_amount() {
         let env = Env::default();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
         let sender = Address::generate(&env);
         let pool = Address::generate(&env);
         let mut steps = Vec::new(&env);
@@ -580,7 +583,7 @@ mod tests {
         });
         let route = Route { sender, steps };
         assert_eq!(
-            validate_route(&env, &route),
+            env.as_contract(&cid, || validate_route(&env, &route)),
             Err(ContractError::ZeroSwapAmount)
         );
     }
@@ -588,6 +591,7 @@ mod tests {
     #[test]
     fn validate_route_rejects_inconsistent_assets() {
         let env = Env::default();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
         let sender = Address::generate(&env);
         let pool = Address::generate(&env);
         let mut steps = Vec::new(&env);
@@ -609,7 +613,7 @@ mod tests {
         });
         let route = Route { sender, steps };
         assert_eq!(
-            validate_route(&env, &route),
+            env.as_contract(&cid, || validate_route(&env, &route)),
             Err(ContractError::InconsistentRouteAssets)
         );
     }

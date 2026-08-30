@@ -166,9 +166,9 @@ mod tests {
     use super::*;
     use soroban_sdk::testutils::Address as _;
     use soroban_sdk::testutils::Events;
-    use soroban_sdk::Env;
+    use soroban_sdk::{Env, TryFromVal};
 
-    fn setup() -> (Env, Address, Address) {
+    fn setup() -> (Env, Address, Address, Address) {
         let env = Env::default();
         env.mock_all_auths();
         let admin = Address::generate(&env);
@@ -211,7 +211,10 @@ mod tests {
         env.as_contract(&contract_id, || {
             pause_vault(&env, &admin).unwrap();
             assert!(is_vault_paused(&env));
-
+        });
+        // A fresh invocation frame so the admin is not re-authorized twice
+        // within the same context (SDK-20 harness limitation).
+        env.as_contract(&contract_id, || {
             unpause_vault(&env, &admin).expect("admin should be able to unpause vault");
             assert!(!is_vault_paused(&env));
         });
@@ -276,7 +279,9 @@ mod tests {
         let (env, contract_id, admin, _) = setup();
         env.as_contract(&contract_id, || {
             pause_vault(&env, &admin).unwrap();
+        });
 
+        env.as_contract(&contract_id, || {
             let asset = Symbol::new(&env, "USDC");
             let _ = emergency_vault_withdraw(
                 &env,
@@ -295,7 +300,9 @@ mod tests {
         let (env, contract_id, admin, _) = setup();
         env.as_contract(&contract_id, || {
             pause_vault(&env, &admin).unwrap();
+        });
 
+        env.as_contract(&contract_id, || {
             let asset = Symbol::new(&env, "USDC");
             let result = emergency_vault_withdraw(
                 &env,
@@ -315,7 +322,9 @@ mod tests {
         let (env, contract_id, admin, _) = setup();
         env.as_contract(&contract_id, || {
             pause_vault(&env, &admin).unwrap();
+        });
 
+        env.as_contract(&contract_id, || {
             let asset = Symbol::new(&env, "USDC");
             let _ = emergency_vault_withdraw(
                 &env,
@@ -324,14 +333,16 @@ mod tests {
                 1_000_000,
                 |_env, _caller, _asset, _amount| Ok(()),
             );
-
-            let events = env.events().all();
-            let found = events.iter().any(|e| {
-                e.0 == (contract_id.clone(),)
-                    && e.1 == (Symbol::new(&env, "VAULT_EMERG_WD"),)
-            });
-            assert!(found, "should emit VAULT_EMERG_WD event");
         });
+
+        let events = env.events().all();
+        let found = events.iter().any(|e| {
+            e.0 == contract_id.clone()
+                && e.1.get(0).map_or(false, |v| {
+                    Symbol::try_from_val(&env, &v) == Ok(Symbol::new(&env, "VAULT_EMERG_WD"))
+                })
+        });
+        assert!(found, "should emit VAULT_EMERG_WD event");
     }
 
     #[test]
@@ -342,8 +353,10 @@ mod tests {
 
             let events = env.events().all();
             let found = events.iter().any(|e| {
-                e.0 == (contract_id.clone(),)
-                    && e.1 == (Symbol::new(&env, "VAULT_PAUSE"),)
+                e.0 == contract_id.clone()
+                    && e.1.get(0).map_or(false, |v| {
+                        Symbol::try_from_val(&env, &v) == Ok(Symbol::new(&env, "VAULT_PAUSE"))
+                    })
             });
             assert!(found, "should emit VAULT_PAUSE event");
         });
@@ -354,15 +367,19 @@ mod tests {
         let (env, contract_id, admin, _) = setup();
         env.as_contract(&contract_id, || {
             pause_vault(&env, &admin).unwrap();
-            unpause_vault(&env, &admin).unwrap();
-
-            let events = env.events().all();
-            let found = events.iter().any(|e| {
-                e.0 == (contract_id.clone(),)
-                    && e.1 == (Symbol::new(&env, "VAULT_UNPAUSE"),)
-            });
-            assert!(found, "should emit VAULT_UNPAUSE event");
         });
+        env.as_contract(&contract_id, || {
+            unpause_vault(&env, &admin).unwrap();
+        });
+
+        let events = env.events().all();
+        let found = events.iter().any(|e| {
+            e.0 == contract_id.clone()
+                && e.1.get(0).map_or(false, |v| {
+                    Symbol::try_from_val(&env, &v) == Ok(Symbol::new(&env, "VAULT_UNPAUSE"))
+                })
+        });
+        assert!(found, "should emit VAULT_UNPAUSE event");
     }
 
     #[test]

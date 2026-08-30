@@ -1,8 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, panic_with_error, symbol_short, token, Address, Env,
-    String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address,
+    Env, String, Symbol, Vec,
 };
 
 #[derive(Clone)]
@@ -86,9 +86,9 @@ const STAGE_3_COOLDOWN: u64 = 86_400; // 24 hours
 #[contractimpl]
 impl RewardSplitter {
     /// Initialize the contract with admin address and token to distribute
-    pub fn initialize(env: Env, admin: Address, token: Address) {
+    pub fn initialize(env: Env, admin: Address, token: Address) -> Result<(), Error> {
         if env.storage().instance().has(&DataKey::Initialized) {
-            panic_with_error!(&env, Error::AlreadyInitialized);
+            return Err(Error::AlreadyInitialized);
         }
 
         // Store current values as defaults
@@ -105,6 +105,8 @@ impl RewardSplitter {
 
         // Initialize default cooldown stages
         Self::initialize_default_cooldown_stages(&env);
+
+        Ok(())
     }
 
     /// Initialize default cooldown stages for governance actions
@@ -137,11 +139,11 @@ impl RewardSplitter {
     }
 
     /// Add a recipient with a fixed share percentage (in basis points)
-    pub fn add_recipient(env: Env, admin: Address, recipient: Address, share: u32) {
-        Self::require_admin(&env, &admin);
+    pub fn add_recipient(env: Env, admin: Address, recipient: Address, share: u32) -> Result<(), Error> {
+        Self::require_admin(&env, &admin)?;
 
         if share == 0 || share > 10000 {
-            panic_with_error!(&env, Error::InvalidShare);
+            return Err(Error::InvalidShare);
         }
 
         let mut recipients: Vec<Recipient> = env
@@ -158,7 +160,7 @@ impl RewardSplitter {
 
         // Check if total shares would exceed 10000 (100%)
         if total_shares + share > 10000 {
-            panic_with_error!(&env, Error::TotalSharesExceeded);
+            return Err(Error::TotalSharesExceeded);
         }
 
         // Add recipient
@@ -175,11 +177,13 @@ impl RewardSplitter {
         env.storage()
             .instance()
             .set(&DataKey::TotalShares, &total_shares);
+
+        Ok(())
     }
 
     /// Remove a recipient
-    pub fn remove_recipient(env: Env, admin: Address, recipient: Address) {
-        Self::require_admin(&env, &admin);
+    pub fn remove_recipient(env: Env, admin: Address, recipient: Address) -> Result<(), Error> {
+        Self::require_admin(&env, &admin)?;
 
         let mut recipients: Vec<Recipient> = env
             .storage()
@@ -206,7 +210,7 @@ impl RewardSplitter {
         }
 
         if !found {
-            return; // Recipient not found, nothing to do
+            return Ok(()); // Recipient not found, nothing to do
         }
 
         env.storage()
@@ -215,14 +219,16 @@ impl RewardSplitter {
         env.storage()
             .instance()
             .set(&DataKey::TotalShares, &total_shares);
+
+        Ok(())
     }
 
     /// Update a recipient's share
-    pub fn update_recipient_share(env: Env, admin: Address, recipient: Address, new_share: u32) {
-        Self::require_admin(&env, &admin);
+    pub fn update_recipient_share(env: Env, admin: Address, recipient: Address, new_share: u32) -> Result<(), Error> {
+        Self::require_admin(&env, &admin)?;
 
         if new_share == 0 || new_share > 10000 {
-            panic_with_error!(&env, Error::InvalidShare);
+            return Err(Error::InvalidShare);
         }
 
         let mut recipients: Vec<Recipient> = env
@@ -249,13 +255,13 @@ impl RewardSplitter {
         }
 
         if !found {
-            return; // Recipient not found
+            return Ok(()); // Recipient not found
         }
 
         // Check if new total would exceed 10000
         let new_total = total_shares - old_share + new_share;
         if new_total > 10000 {
-            panic_with_error!(&env, Error::TotalSharesExceeded);
+            return Err(Error::TotalSharesExceeded);
         }
 
         // Update the recipient
@@ -263,7 +269,7 @@ impl RewardSplitter {
         for r in recipients.iter() {
             if r.address == recipient {
                 new_recipients.push_back(Recipient {
-                    address: recipient,
+                    address: recipient.clone(),
                     share: new_share,
                 });
             } else {
@@ -277,20 +283,21 @@ impl RewardSplitter {
         env.storage()
             .instance()
             .set(&DataKey::TotalShares, &new_total);
+
+        Ok(())
     }
 
     /// Distribute tokens to all recipients according to their fixed shares
-    pub fn distribute(env: Env, amount: i128) {
+    pub fn distribute(env: Env, amount: i128) -> Result<(), Error> {
         if amount <= 0 {
-            panic_with_error!(&env, Error::ZeroAmount);
+            return Err(Error::ZeroAmount);
         }
 
         let token: Address = env
             .storage()
             .instance()
             .get(&DataKey::Token)
-            .ok_or_else(|| panic_with_error!(&env, Error::TokenNotSet))
-            .unwrap();
+            .ok_or(Error::TokenNotSet)?;
 
         let recipients: Vec<Recipient> = env
             .storage()
@@ -299,7 +306,7 @@ impl RewardSplitter {
             .unwrap_or_else(|| Vec::new(&env));
 
         if recipients.is_empty() {
-            panic_with_error!(&env, Error::NoRecipients);
+            return Err(Error::NoRecipients);
         }
 
         let total_shares: u32 = env
@@ -309,7 +316,7 @@ impl RewardSplitter {
             .unwrap_or(0);
 
         if total_shares == 0 {
-            panic_with_error!(&env, Error::NoRecipients);
+            return Err(Error::NoRecipients);
         }
 
         let contract_address = env.current_contract_address();
@@ -318,7 +325,7 @@ impl RewardSplitter {
         // Check contract balance
         let balance = token_client.balance(&contract_address);
         if balance < amount {
-            panic_with_error!(&env, Error::InsufficientBalance);
+            return Err(Error::InsufficientBalance);
         }
 
         // Distribute to each recipient
@@ -328,6 +335,8 @@ impl RewardSplitter {
                 token_client.transfer(&contract_address, &recipient.address, &share_amount);
             }
         }
+
+        Ok(())
     }
 
     /// Get all recipients
@@ -357,20 +366,24 @@ impl RewardSplitter {
     }
 
     /// Transfer admin to a new address
-    pub fn transfer_admin(env: Env, current_admin: Address, new_admin: Address) {
+    pub fn transfer_admin(env: Env, current_admin: Address, new_admin: Address) -> Result<(), Error> {
         Self::require_admin(&env, &current_admin);
         env.storage().instance().set(&DataKey::Admin, &new_admin);
+
+        Ok(())
     }
 
     /// Update the token to distribute
-    pub fn update_token(env: Env, admin: Address, new_token: Address) {
-        Self::require_admin(&env, &admin);
+    pub fn update_token(env: Env, admin: Address, new_token: Address) -> Result<(), Error> {
+        Self::require_admin(&env, &admin)?;
         env.storage().instance().set(&DataKey::Token, &new_token);
+
+        Ok(())
     }
 
     /// Reset all parameters to their default values
-    pub fn reset_parameters(env: Env, admin: Address) {
-        Self::require_admin(&env, &admin);
+    pub fn reset_parameters(env: Env, admin: Address) -> Result<(), Error> {
+        Self::require_admin(&env, &admin)?;
 
         let default_admin: Address = env
             .storage()
@@ -393,6 +406,8 @@ impl RewardSplitter {
             .instance()
             .set(&DataKey::Recipients, &Vec::<Recipient>::new(&env));
         env.storage().instance().set(&DataKey::TotalShares, &0u32);
+
+        Ok(())
     }
 
     /// Get the default admin address
@@ -412,12 +427,14 @@ impl RewardSplitter {
     }
 
     /// Helper function to require admin authorization
-    fn require_admin(env: &Env, admin: &Address) {
+    fn require_admin(env: &Env, admin: &Address) -> Result<(), Error> {
         admin.require_auth();
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if stored_admin != *admin {
-            panic_with_error!(env, Error::Unauthorized);
+            return Err(Error::Unauthorized);
         }
+
+        Ok(())
     }
 
     /// Propose a new governance action through the cooldown gateway
@@ -426,8 +443,8 @@ impl RewardSplitter {
         admin: Address,
         action_type: CooldownActionType,
         data: String,
-    ) -> u64 {
-        Self::require_admin(&env, &admin);
+    ) -> Result<u64, Error> {
+        Self::require_admin(&env, &admin)?;
 
         // Generate action ID (using timestamp as simple ID)
         let action_id = env.ledger().timestamp();
@@ -448,30 +465,29 @@ impl RewardSplitter {
             .instance()
             .set(&DataKey::CooldownAction(action_id), &action);
 
-        action_id
+        Ok(action_id)
     }
 
     /// Advance an action to the next cooldown stage
-    pub fn advance_action(env: Env, admin: Address, action_id: u64) {
-        Self::require_admin(&env, &admin);
+    pub fn advance_action(env: Env, admin: Address, action_id: u64) -> Result<(), Error> {
+        Self::require_admin(&env, &admin)?;
 
         let mut action: CooldownAction = env
             .storage()
             .instance()
             .get(&DataKey::CooldownAction(action_id))
-            .ok_or_else(|| panic_with_error!(&env, Error::ActionNotFound))
-            .unwrap();
+            .ok_or(Error::ActionNotFound)?;
 
         if action.executed {
-            panic_with_error!(&env, Error::ActionAlreadyExecuted);
+            return Err(Error::ActionAlreadyExecuted);
         }
         if action.cancelled {
-            panic_with_error!(&env, Error::ActionAlreadyCancelled);
+            return Err(Error::ActionAlreadyCancelled);
         }
 
         // Prevent advancing past stage 3
         if action.current_stage > 3 {
-            panic_with_error!(&env, Error::InvalidStage);
+            return Err(Error::InvalidStage);
         }
 
         let current_stage = action.current_stage;
@@ -479,14 +495,13 @@ impl RewardSplitter {
             .storage()
             .instance()
             .get(&DataKey::CooldownStage(current_stage as u64))
-            .ok_or_else(|| panic_with_error!(&env, Error::InvalidStage))
-            .unwrap();
+            .ok_or(Error::InvalidStage)?;
 
         let now = env.ledger().timestamp();
         let stage_expiry = action.proposed_at + stage.cooldown_seconds;
 
         if now < stage_expiry {
-            panic_with_error!(&env, Error::CooldownNotExpired);
+            return Err(Error::CooldownNotExpired);
         }
 
         // Advance to next stage
@@ -494,35 +509,36 @@ impl RewardSplitter {
         env.storage()
             .instance()
             .set(&DataKey::CooldownAction(action_id), &action);
+
+        Ok(())
     }
 
     /// Execute a governance action after all cooldown stages complete
-    pub fn execute_action(env: Env, admin: Address, action_id: u64) {
-        Self::require_admin(&env, &admin);
+    pub fn execute_action(env: Env, admin: Address, action_id: u64) -> Result<(), Error> {
+        Self::require_admin(&env, &admin)?;
 
         let mut action: CooldownAction = env
             .storage()
             .instance()
             .get(&DataKey::CooldownAction(action_id))
-            .ok_or_else(|| panic_with_error!(&env, Error::ActionNotFound))
-            .unwrap();
+            .ok_or(Error::ActionNotFound)?;
 
         if action.executed {
-            panic_with_error!(&env, Error::ActionAlreadyExecuted);
+            return Err(Error::ActionAlreadyExecuted);
         }
         if action.cancelled {
-            panic_with_error!(&env, Error::ActionAlreadyCancelled);
+            return Err(Error::ActionAlreadyCancelled);
         }
 
         // Check if all stages are complete (stage 4 means past stage 3)
         if action.current_stage < 4 {
-            panic_with_error!(&env, Error::CooldownNotExpired);
+            return Err(Error::CooldownNotExpired);
         }
 
         // Execute the action based on type
         match action.action_type {
             CooldownActionType::UpdateToken => {
-                let new_token: Address = Address::from_string(&env, &action.data);
+                let new_token: Address = Address::from_string(&action.data);
                 env.storage().instance().set(&DataKey::Token, &new_token);
             }
             CooldownActionType::ResetParameters => {
@@ -538,30 +554,33 @@ impl RewardSplitter {
         env.storage()
             .instance()
             .set(&DataKey::CooldownAction(action_id), &action);
+
+        Ok(())
     }
 
     /// Cancel a pending governance action
-    pub fn cancel_action(env: Env, admin: Address, action_id: u64) {
-        Self::require_admin(&env, &admin);
+    pub fn cancel_action(env: Env, admin: Address, action_id: u64) -> Result<(), Error> {
+        Self::require_admin(&env, &admin)?;
 
         let mut action: CooldownAction = env
             .storage()
             .instance()
             .get(&DataKey::CooldownAction(action_id))
-            .ok_or_else(|| panic_with_error!(&env, Error::ActionNotFound))
-            .unwrap();
+            .ok_or(Error::ActionNotFound)?;
 
         if action.executed {
-            panic_with_error!(&env, Error::ActionAlreadyExecuted);
+            return Err(Error::ActionAlreadyExecuted);
         }
         if action.cancelled {
-            panic_with_error!(&env, Error::ActionAlreadyCancelled);
+            return Err(Error::ActionAlreadyCancelled);
         }
 
         action.cancelled = true;
         env.storage()
             .instance()
             .set(&DataKey::CooldownAction(action_id), &action);
+
+        Ok(())
     }
 
     /// Get the status of a governance action
@@ -604,11 +623,11 @@ impl RewardSplitter {
         stage_number: u32,
         cooldown_seconds: u64,
         description: Symbol,
-    ) {
-        Self::require_admin(&env, &admin);
+    ) -> Result<(), Error> {
+        Self::require_admin(&env, &admin)?;
 
         if stage_number < 1 || stage_number > 3 {
-            panic_with_error!(&env, Error::InvalidStage);
+            return Err(Error::InvalidStage);
         }
 
         let stage = CooldownStage {
@@ -620,6 +639,8 @@ impl RewardSplitter {
         env.storage()
             .instance()
             .set(&DataKey::CooldownStage(stage_number as u64), &stage);
+
+        Ok(())
     }
 
     /// Get a cooldown stage configuration

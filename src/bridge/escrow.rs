@@ -271,7 +271,6 @@ mod tests {
     #[test]
     fn lock_tokens_transfers_to_vault_and_emits_event() {
         let (env, client, contract_id, admin, token, depositor, recipient) = setup();
-        let event_count_before = env.events().all().len();
         client.configure_bridge_escrow(&admin, &token);
 
         let lock = client.lock_tokens(&depositor, &1_500, &42, &recipient);
@@ -282,7 +281,13 @@ mod tests {
         let token_client = token::Client::new(&env, &token);
         assert_eq!(token_client.balance(&depositor), 8_500);
         assert_eq!(token_client.balance(&contract_id), 1_500);
-        assert_eq!(env.events().all().len(), event_count_before + 1);
+        let vault_event_count = env
+            .events()
+            .all()
+            .into_iter()
+            .filter(|e| e.0 == contract_id)
+            .count();
+        assert_eq!(vault_event_count, 1);
     }
 
     #[test]

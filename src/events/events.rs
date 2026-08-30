@@ -442,11 +442,9 @@ mod tests {
             EV_BALLOT_CLOSED,
         ];
         for name in names.iter() {
-            assert!(
-                seen.try_insert(*name, ()).is_ok(),
-                "duplicate event name: {:?}",
-                name
-            );
+            let is_new = !seen.contains_key(name.clone());
+            seen.set(name.clone(), ());
+            assert!(is_new, "duplicate event name: {:?}", name);
         }
     }
 

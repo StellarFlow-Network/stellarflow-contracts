@@ -279,6 +279,7 @@ mod tests {
         let data = ContractData {
             admin: admin.clone(),
             value: 0,
+            max_fee_ceiling: 0,
         };
         env.storage().instance().set(&DATA_KEY, &data);
         (admin, treasury)
@@ -289,40 +290,44 @@ mod tests {
     #[test]
     fn staging_mode_off_by_default() {
         let env = Env::default();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
         env.mock_all_auths();
-        init_contract(&env);
-        assert!(!is_staging_active(&env));
+        env.as_contract(&cid, || init_contract(&env));
+        assert!(!env.as_contract(&cid, || is_staging_active(&env)));
     }
 
     #[test]
     fn admin_can_enable_staging_mode() {
         let env = Env::default();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
         env.mock_all_auths();
-        let (admin, _) = init_contract(&env);
+        let (admin, _) = env.as_contract(&cid, || init_contract(&env));
 
-        set_staging_mode(&env, &admin, true).expect("admin should be able to enable staging");
-        assert!(is_staging_active(&env));
+        env.as_contract(&cid, || set_staging_mode(&env, &admin, true)).expect("admin should be able to enable staging");
+        assert!(env.as_contract(&cid, || is_staging_active(&env)));
     }
 
     #[test]
     fn admin_can_disable_staging_mode() {
         let env = Env::default();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
         env.mock_all_auths();
-        let (admin, _) = init_contract(&env);
+        let (admin, _) = env.as_contract(&cid, || init_contract(&env));
 
-        set_staging_mode(&env, &admin, true).unwrap();
-        set_staging_mode(&env, &admin, false).expect("admin should be able to disable staging");
-        assert!(!is_staging_active(&env));
+        env.as_contract(&cid, || set_staging_mode(&env, &admin, true)).unwrap();
+        env.as_contract(&cid, || set_staging_mode(&env, &admin, false)).expect("admin should be able to disable staging");
+        assert!(!env.as_contract(&cid, || is_staging_active(&env)));
     }
 
     #[test]
     fn non_admin_cannot_enable_staging_mode() {
         let env = Env::default();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
         env.mock_all_auths();
-        let (_admin, _) = init_contract(&env);
+        let (_admin, _) = env.as_contract(&cid, || init_contract(&env));
         let other = Address::generate(&env);
 
-        let result = set_staging_mode(&env, &other, true);
+        let result = env.as_contract(&cid, || set_staging_mode(&env, &other, true));
         assert_eq!(result, Err(ContractError::NotAdmin));
     }
 
@@ -331,66 +336,71 @@ mod tests {
     #[test]
     fn admin_can_add_and_remove_tester() {
         let env = Env::default();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
         env.mock_all_auths();
-        let (admin, _) = init_contract(&env);
+        let (admin, _) = env.as_contract(&cid, || init_contract(&env));
         let tester = Address::generate(&env);
 
-        add_tester(&env, &admin, tester.clone()).expect("add should succeed");
-        let cfg = get_staging_config(&env);
+        env.as_contract(&cid, || add_tester(&env, &admin, tester.clone())).expect("add should succeed");
+        let cfg = env.as_contract(&cid, || get_staging_config(&env));
         assert_eq!(cfg.testers.len(), 1);
         assert_eq!(cfg.testers.get(0).unwrap(), tester);
 
-        remove_tester(&env, &admin, &tester).expect("remove should succeed");
-        let cfg = get_staging_config(&env);
+        env.as_contract(&cid, || remove_tester(&env, &admin, &tester)).expect("remove should succeed");
+        let cfg = env.as_contract(&cid, || get_staging_config(&env));
         assert_eq!(cfg.testers.len(), 0);
     }
 
     #[test]
     fn add_tester_is_idempotent() {
         let env = Env::default();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
         env.mock_all_auths();
-        let (admin, _) = init_contract(&env);
+        let (admin, _) = env.as_contract(&cid, || init_contract(&env));
         let tester = Address::generate(&env);
 
-        add_tester(&env, &admin, tester.clone()).unwrap();
-        add_tester(&env, &admin, tester.clone()).unwrap(); // second call is no-op
-        assert_eq!(get_staging_config(&env).testers.len(), 1);
+        env.as_contract(&cid, || add_tester(&env, &admin, tester.clone())).unwrap();
+        env.as_contract(&cid, || add_tester(&env, &admin, tester.clone())).unwrap(); // second call is no-op
+        assert_eq!(env.as_contract(&cid, || get_staging_config(&env)).testers.len(), 1);
     }
 
     #[test]
     fn remove_tester_is_idempotent() {
         let env = Env::default();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
         env.mock_all_auths();
-        let (admin, _) = init_contract(&env);
+        let (admin, _) = env.as_contract(&cid, || init_contract(&env));
         let tester = Address::generate(&env);
 
         // Remove a tester that was never added — should not error.
-        remove_tester(&env, &admin, &tester).expect("no-op remove should succeed");
-        assert_eq!(get_staging_config(&env).testers.len(), 0);
+        env.as_contract(&cid, || remove_tester(&env, &admin, &tester)).expect("no-op remove should succeed");
+        assert_eq!(env.as_contract(&cid, || get_staging_config(&env)).testers.len(), 0);
     }
 
     #[test]
     fn non_admin_cannot_add_tester() {
         let env = Env::default();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
         env.mock_all_auths();
-        let (_admin, _) = init_contract(&env);
+        let (_admin, _) = env.as_contract(&cid, || init_contract(&env));
         let other = Address::generate(&env);
         let tester = Address::generate(&env);
 
-        let result = add_tester(&env, &other, tester);
+        let result = env.as_contract(&cid, || add_tester(&env, &other, tester));
         assert_eq!(result, Err(ContractError::NotAdmin));
     }
 
     #[test]
     fn non_admin_cannot_remove_tester() {
         let env = Env::default();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
         env.mock_all_auths();
-        let (admin, _) = init_contract(&env);
+        let (admin, _) = env.as_contract(&cid, || init_contract(&env));
         let other = Address::generate(&env);
         let tester = Address::generate(&env);
 
-        add_tester(&env, &admin, tester.clone()).unwrap();
-        let result = remove_tester(&env, &other, &tester);
+        env.as_contract(&cid, || add_tester(&env, &admin, tester.clone())).unwrap();
+        let result = env.as_contract(&cid, || remove_tester(&env, &other, &tester));
         assert_eq!(result, Err(ContractError::NotAdmin));
     }
 
@@ -399,91 +409,97 @@ mod tests {
     #[test]
     fn check_passes_when_staging_is_inactive() {
         let env = Env::default();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
         env.mock_all_auths();
-        let (_admin, _) = init_contract(&env);
+        let (_admin, _) = env.as_contract(&cid, || init_contract(&env));
         let random = Address::generate(&env);
 
         // Staging is off by default — any caller should pass.
-        check_staging_access(&env, &random)
+        env.as_contract(&cid, || check_staging_access(&env, &random))
             .expect("check should pass when staging mode is off");
     }
 
     #[test]
     fn admin_always_passes_staging_check() {
         let env = Env::default();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
         env.mock_all_auths();
-        let (admin, _) = init_contract(&env);
+        let (admin, _) = env.as_contract(&cid, || init_contract(&env));
 
-        set_staging_mode(&env, &admin, true).unwrap();
+        env.as_contract(&cid, || set_staging_mode(&env, &admin, true)).unwrap();
 
-        check_staging_access(&env, &admin)
+        env.as_contract(&cid, || check_staging_access(&env, &admin))
             .expect("admin should always pass the staging check");
     }
 
     #[test]
     fn authorized_tester_passes_staging_check() {
         let env = Env::default();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
         env.mock_all_auths();
-        let (admin, _) = init_contract(&env);
+        let (admin, _) = env.as_contract(&cid, || init_contract(&env));
         let tester = Address::generate(&env);
 
-        set_staging_mode(&env, &admin, true).unwrap();
-        add_tester(&env, &admin, tester.clone()).unwrap();
+        env.as_contract(&cid, || set_staging_mode(&env, &admin, true)).unwrap();
+        env.as_contract(&cid, || add_tester(&env, &admin, tester.clone())).unwrap();
 
-        check_staging_access(&env, &tester)
+        env.as_contract(&cid, || check_staging_access(&env, &tester))
             .expect("authorized tester should pass the staging check");
     }
 
     #[test]
     fn unauthorized_caller_blocked_when_staging_is_active() {
         let env = Env::default();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
         env.mock_all_auths();
-        let (admin, _) = init_contract(&env);
+        let (admin, _) = env.as_contract(&cid, || init_contract(&env));
         let unauthorized = Address::generate(&env);
 
-        set_staging_mode(&env, &admin, true).unwrap();
+        env.as_contract(&cid, || set_staging_mode(&env, &admin, true)).unwrap();
 
-        let result = check_staging_access(&env, &unauthorized);
+        let result = env.as_contract(&cid, || check_staging_access(&env, &unauthorized));
         assert_eq!(result, Err(ContractError::StagingNotAuthorized));
     }
 
     #[test]
     fn removed_tester_is_blocked_after_removal() {
         let env = Env::default();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
         env.mock_all_auths();
-        let (admin, _) = init_contract(&env);
+        let (admin, _) = env.as_contract(&cid, || init_contract(&env));
         let tester = Address::generate(&env);
 
-        set_staging_mode(&env, &admin, true).unwrap();
-        add_tester(&env, &admin, tester.clone()).unwrap();
+        env.as_contract(&cid, || set_staging_mode(&env, &admin, true)).unwrap();
+        env.as_contract(&cid, || add_tester(&env, &admin, tester.clone())).unwrap();
 
         // Tester is in the allowlist — should pass.
-        check_staging_access(&env, &tester).expect("tester should pass before removal");
+        env.as_contract(&cid, || check_staging_access(&env, &tester)).expect("tester should pass before removal");
 
-        remove_tester(&env, &admin, &tester).unwrap();
+        env.as_contract(&cid, || remove_tester(&env, &admin, &tester)).unwrap();
 
         // Tester removed — should now be blocked.
-        let result = check_staging_access(&env, &tester);
+        let result = env.as_contract(&cid, || check_staging_access(&env, &tester));
         assert_eq!(result, Err(ContractError::StagingNotAuthorized));
     }
 
     #[test]
     fn disabling_staging_mode_unblocks_all_callers() {
         let env = Env::default();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
         env.mock_all_auths();
-        let (admin, _) = init_contract(&env);
+        let (admin, _) = env.as_contract(&cid, || init_contract(&env));
         let random = Address::generate(&env);
 
-        set_staging_mode(&env, &admin, true).unwrap();
+        env.as_contract(&cid, || set_staging_mode(&env, &admin, true)).unwrap();
         // Random address is blocked while staging is active.
         assert_eq!(
-            check_staging_access(&env, &random),
+            env.as_contract(&cid, || check_staging_access(&env, &random)),
             Err(ContractError::StagingNotAuthorized)
         );
 
-        set_staging_mode(&env, &admin, false).unwrap();
+        env.as_contract(&cid, || set_staging_mode(&env, &admin, false)).unwrap();
         // After staging is disabled, the random address passes.
-        check_staging_access(&env, &random)
+        env.as_contract(&cid, || check_staging_access(&env, &random))
             .expect("random address should pass after staging mode is disabled");
     }
 }

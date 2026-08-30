@@ -42,12 +42,15 @@ mod tests {
     #[test]
     fn rejects_duplicates() {
         let env = Env::default();
+        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
         let nullifier = BytesN::from_array(&env, &[7u8; 32]);
-        assert!(register_nullifier(&env, nullifier.clone()).is_ok());
-        assert_eq!(
-            register_nullifier(&env, nullifier.clone()),
-            Err(ContractError::NullifierAlreadyUsed)
-        );
-        assert!(is_nullifier_used(&env, &nullifier));
+        env.as_contract(&contract_id, || {
+            assert!(register_nullifier(&env, nullifier.clone()).is_ok());
+            assert_eq!(
+                register_nullifier(&env, nullifier.clone()),
+                Err(ContractError::NullifierAlreadyUsed)
+            );
+            assert!(is_nullifier_used(&env, &nullifier));
+        });
     }
 }

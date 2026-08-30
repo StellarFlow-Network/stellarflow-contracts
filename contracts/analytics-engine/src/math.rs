@@ -27,27 +27,27 @@ pub fn integer_sqrt(value: i128) -> i128 {
     hi
 }
 
-/// Compute a root-scaled smoothing update using checked bit shifts.
+/// Compute a basis-point-weighted smoothing update using checked bit shifts.
 ///
-/// The weight is derived from the square root of the supplied alpha and then
-/// applied through a power-of-two fixed-point scale so the update stays exact
-/// for the host engine without relying on fractional arithmetic.
+/// `alpha` is the EWMA weight expressed in basis points (10_000 == 100%):
+/// `new = (price * alpha + previous * (10000 - alpha)) / 10000`, applied
+/// through a power-of-two fixed-point scale so the update stays exact for
+/// the host engine without relying on fractional arithmetic.
 pub fn compute_smoothed_value(price: i128, previous: i128, alpha: i128) -> i128 {
     if alpha <= 0 {
         return price;
     }
 
     const SCALE_SHIFT: u32 = 16;
-    let alpha_root = integer_sqrt(alpha);
-    let max_root = integer_sqrt(10_000);
+    const BPS_DENOMINATOR: i128 = 10_000;
 
     let max_weight = match 1_i128.checked_shl(SCALE_SHIFT) {
         Some(weight) => weight,
         None => i128::MAX,
     };
 
-    let alpha_weight = match alpha_root.checked_mul(max_weight) {
-        Some(weight) => weight / max_root,
+    let alpha_weight = match alpha.checked_mul(max_weight) {
+        Some(weight) => weight / BPS_DENOMINATOR,
         None => i128::MAX,
     };
     let complement_weight = max_weight.saturating_sub(alpha_weight);

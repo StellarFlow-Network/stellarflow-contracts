@@ -1,3 +1,4 @@
+extern crate std;
 use soroban_sdk::{Bytes, Env, symbol_short};
 use soroban_sdk::testutils::{Address as _, Ledger, LedgerInfo};
 use crate::{
@@ -41,9 +42,9 @@ fn advance_ledger_timestamp_only(env: &Env, delta: u64) {
         sequence_number: env.ledger().sequence(),
         network_id: Default::default(),
         base_reserve: 10,
-        min_temp_entry_ttl: 0,
-        min_persistent_entry_ttl: 0,
-        max_entry_ttl: u32::MAX,
+        min_temp_entry_ttl: 4096,
+        min_persistent_entry_ttl: 4096,
+        max_entry_ttl: 6_312_000,
     });
 }
 
@@ -80,20 +81,19 @@ fn test_schema_version_migration_converts_legacy_state() {
         confidence: 90,
         updated_at: 1,
     });
-    env.storage().instance().set(&legacy_profiles_key, &profiles);
-
     let mut signers = soroban_sdk::Map::new(&env);
     signers.set(admin.clone(), true);
-    env.storage().instance().set(&legacy_signers_key, &signers);
-
     let mut stakes = soroban_sdk::Map::new(&env);
     stakes.set(admin.clone(), 123u64);
-    env.storage().instance().set(&legacy_stakes_key, &stakes);
-    env.storage().instance().set(&legacy_total_key, &123u64);
-
     let mut heartbeats = soroban_sdk::Map::new(&env);
     heartbeats.set(0u32, 7u64);
-    env.storage().instance().set(&legacy_heartbeat_key, &heartbeats);
+    env.as_contract(&contract_id, || {
+        env.storage().instance().set(&legacy_profiles_key, &profiles.clone());
+        env.storage().instance().set(&legacy_signers_key, &signers.clone());
+        env.storage().instance().set(&legacy_stakes_key, &stakes.clone());
+        env.storage().instance().set(&legacy_total_key, &123u64);
+        env.storage().instance().set(&legacy_heartbeat_key, &heartbeats.clone());
+    });
 
     client.initialize(&admin, &treasury);
 
@@ -101,11 +101,13 @@ fn test_schema_version_migration_converts_legacy_state() {
     assert_eq!(data.admin, admin);
     assert_eq!(data.value, 0);
 
-    assert!(env.storage().persistent().has(&crate::storage::NodeProfileKey(admin.clone())));
-    assert!(env.storage().instance().has(&crate::storage::SignerKey(admin.clone())));
-    assert!(env.storage().instance().has(&crate::storage::StakeKey(admin.clone())));
-    assert_eq!(env.storage().instance().get(&crate::TOTAL_STAKED_KEY).unwrap(), 123u64);
-    assert!(env.storage().temporary().has(&crate::storage::HeartbeatKey(0u32)));
+    env.as_contract(&contract_id, || {
+        assert!(env.storage().persistent().has(&crate::storage::NodeProfileKey::ProfileByNode(admin.clone())));
+        assert!(env.storage().instance().has(&crate::storage::SignerKey::SignerByAddress(admin.clone())));
+        assert!(env.storage().instance().has(&crate::storage::StakeKey::StakeByNode(admin.clone())));
+        assert_eq!(env.storage().instance().get::<_, u64>(&crate::TOTAL_STAKED_KEY).unwrap(), 123u64);
+        assert!(env.storage().temporary().has(&crate::HeartbeatKey(0u32)));
+    });
 }
 
 #[test]
@@ -194,7 +196,7 @@ fn test_execute_upgrade_after_timelock() {
     client.propose_upgrade(&new_wasm_hash, &admin, &signers, &0, &salt, &signature, &u64::MAX);
 
     // Fast forward time by 48 hours
-    advance_ledger_timestamp(&env, UPGRADE_DELAY_SECONDS);
+    advance_ledger_timestamp_only(&env, UPGRADE_DELAY_SECONDS);
 
     // Timelock should be satisfied
     let remaining = client.get_upgrade_timelock_remaining();
@@ -231,7 +233,6 @@ fn test_cancel_upgrade() {
     assert!(client.get_pending_upgrade().is_some());
 
     client.cancel_upgrade(&admin);
-
     assert!(client.get_pending_upgrade().is_none());
     assert!(client.get_upgrade_timelock_remaining().is_none());
 }
@@ -255,7 +256,7 @@ fn test_execute_upgrade_post_health_check() {
     client.propose_upgrade(&new_wasm_hash, &admin, &signers, &0, &salt, &signature, &u64::MAX);
 
     // Fast forward time by 48 hours
-    advance_ledger_timestamp(&env, UPGRADE_DELAY_SECONDS);
+    advance_ledger_timestamp_only(&env, UPGRADE_DELAY_SECONDS);
 
     // Execute upgrade - should succeed with health check
     let (exec_salt, exec_signature) = nonce_proof(&env, 1, b"execute-upgrade-health");
@@ -852,7 +853,7 @@ fn test_set_value_updates_heartbeat() {
     assert!(client.get_last_update_timestamp(&value_asset).is_some());
 
     // Fast-forward past interval → data goes stale
-    advance_ledger_timestamp(&env, DEFAULT_HEARTBEAT_INTERVAL + 1);
+    advance_ledger_timestamp_only(&env, DEFAULT_HEARTBEAT_INTERVAL + 1);
     assert!(!client.is_data_fresh(&value_asset));
 
     // Another set_value call refreshes the heartbeat
@@ -916,7 +917,7 @@ fn test_expired_signature_rejected() {
     client.initialize(&admin, &admin);
 
     // Advance ledger past the expiry window
-    advance_ledger_timestamp(&env, 1000);
+    advance_ledger_timestamp_only(&env, 1000);
     let expired_at: u64 = 500; // already in the past
 
     let new_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[1u8; 32]);
@@ -1499,12 +1500,12 @@ fn test_feed_stake_expires_and_is_pruned_after_rent_threshold() {
 
     // Simulate the passage of time up to (but not beyond) the rent threshold
     // via env.ledger().set() — at the exact boundary the entry is still active.
-    advance_ledger_timestamp(&env, crate::storage::RENT_THRESHOLD as u64);
+    advance_ledger_timestamp_only(&env, crate::storage::RENT_THRESHOLD as u64);
     assert_eq!(client.get_feed_stake(&node, &asset), 100u64);
 
     // One more second pushes the entry past its rent-expiry window: the next
     // read must prune it and reconcile the node's and the global stake totals.
-    advance_ledger_timestamp(&env, 1);
+    advance_ledger_timestamp_only(&env, 1);
     assert_eq!(client.get_feed_stake(&node, &asset), 0u64);
     assert_eq!(client.get_total_staked(), 0u64);
 }
@@ -1576,7 +1577,7 @@ fn test_feed_stake_restoration_does_not_grant_permanent_immunity() {
     // Restoration resets the clock, it does not disable expiry outright: once
     // a full rent window elapses from the *restored* activity timestamp with
     // no further activity, the entry must expire again.
-    advance_ledger_timestamp(&env, crate::storage::RENT_THRESHOLD as u64 + 1);
+    advance_ledger_timestamp_only(&env, crate::storage::RENT_THRESHOLD as u64 + 1);
     assert_eq!(client.get_feed_stake(&node, &asset), 0u64);
 }
 
@@ -1591,35 +1592,89 @@ fn test_reentrancy_guard_blocks_reentrant_calls() {
         // Manually acquire reentrancy lock to simulate active contract entrypoint
         crate::security::reentrancy::lock(&env).unwrap();
         assert!(crate::security::reentrancy::is_locked(&env));
+    });
 
-        // Calling vault_deposit should revert with ReentrancyDetected
-        let depositor = soroban_sdk::Address::generate(&env);
-        let res = client.try_vault_deposit(&depositor, &100i128);
-        assert_eq!(res, Err(Ok(ContractError::ReentrancyDetected)));
+    // The storage-backed guard stays locked after the writing scope closes, so
+    // top-level invocations on the same contract are rejected.
+    let depositor = soroban_sdk::Address::generate(&env);
+    let res = client.try_vault_deposit(&depositor, &100i128);
+    assert_eq!(res, Err(Ok(ContractError::ReentrancyDetected)));
 
-        // Calling vault_withdraw should revert with ReentrancyDetected
-        let owner = soroban_sdk::Address::generate(&env);
-        let res = client.try_vault_withdraw(&owner, &100i128);
-        assert_eq!(res, Err(Ok(ContractError::ReentrancyDetected)));
+    let owner = soroban_sdk::Address::generate(&env);
+    let res = client.try_vault_withdraw(&owner, &100i128);
+    assert_eq!(res, Err(Ok(ContractError::ReentrancyDetected)));
 
-        // Calling mint_wrapped should revert with ReentrancyDetected
-        let controller = soroban_sdk::Address::generate(&env);
-        let to = soroban_sdk::Address::generate(&env);
-        let res = client.try_mint_wrapped(&controller, &symbol_short!("USDC"), &to, &100i128);
-        assert_eq!(res, Err(Ok(ContractError::ReentrancyDetected)));
+    let controller = soroban_sdk::Address::generate(&env);
+    let to = soroban_sdk::Address::generate(&env);
+    let res = client.try_mint_wrapped(&controller, &symbol_short!("USDC"), &to, &100i128);
+    assert_eq!(res, Err(Ok(ContractError::ReentrancyDetected)));
 
-        // Calling burn_wrapped should revert with ReentrancyDetected
-        let res = client.try_burn_wrapped(&controller, &symbol_short!("USDC"), &to, &100i128);
-        assert_eq!(res, Err(Ok(ContractError::ReentrancyDetected)));
+    let res = client.try_burn_wrapped(&controller, &symbol_short!("USDC"), &to, &100i128);
+    assert_eq!(res, Err(Ok(ContractError::ReentrancyDetected)));
 
-        // Calling cancel_limit_order should revert with ReentrancyDetected
-        let maker = soroban_sdk::Address::generate(&env);
-        let res = client.try_cancel_limit_order(&maker, &1u64);
-        assert_eq!(res, Err(Ok(ContractError::ReentrancyDetected)));
+    let maker = soroban_sdk::Address::generate(&env);
+    let res = client.try_cancel_limit_order(&maker, &1u64);
+    assert_eq!(res, Err(Ok(ContractError::ReentrancyDetected)));
 
+    env.as_contract(&contract_id, || {
         // Release lock
         crate::security::reentrancy::unlock(&env);
         assert!(!crate::security::reentrancy::is_locked(&env));
     });
 }
+
+// ── Yield farm emergency unstake (Issue #749) ────────────────────────────────
+//
+// NOTE: a single-ledger sequence jump is used to accrue recyclable rewards.
+// Larger sequence jumps destabilize the pinned soroban-sdk 20.0.0 harness when
+// token transfers follow (see `advance_ledger_timestamp_only` above), so the
+// tests deliberately keep the jump minimal.
+
+fn farm_env() -> (
+    Env,
+    TimeLockedUpgradeContractClient<'static>,
+    soroban_sdk::Address,
+    soroban_sdk::Address,
+    soroban_sdk::token::StellarAssetClient<'static>,
+    soroban_sdk::token::StellarAssetClient<'static>,
+    soroban_sdk::Address,
+    soroban_sdk::Address,
+) {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &admin);
+
+    let lp_issuer = soroban_sdk::Address::generate(&env);
+    let reward_issuer = soroban_sdk::Address::generate(&env);
+    let lp_token = env.register_stellar_asset_contract(lp_issuer.clone());
+    let reward_token = env.register_stellar_asset_contract(reward_issuer.clone());
+    let lp = soroban_sdk::token::StellarAssetClient::new(&env, &lp_token);
+    let reward = soroban_sdk::token::StellarAssetClient::new(&env, &reward_token);
+
+    let funder = soroban_sdk::Address::generate(&env);
+    let user = soroban_sdk::Address::generate(&env);
+
+    client.init_yield_farming(&admin, &lp_token, &reward_token, &1_000i128);
+    (env, client, lp_token, reward_token, lp, reward, funder, user)
+}
+
+fn advance_farm_one_ledger(env: &Env) {
+    let info = env.ledger().get();
+    env.ledger().set(LedgerInfo {
+        protocol_version: info.protocol_version,
+        sequence_number: info.sequence_number + 1,
+        timestamp: info.timestamp + 5,
+        network_id: Default::default(),
+        base_reserve: 10,
+        min_temp_entry_ttl: 0,
+        min_persistent_entry_ttl: 0,
+        max_entry_ttl: u32::MAX,
+    });
+}
+
+
 

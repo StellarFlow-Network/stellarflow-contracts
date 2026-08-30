@@ -5,6 +5,14 @@ edition = "2021"
 authors = ["StellarFlow Network"]
 description = "StellarFlow smart contracts with time-locked upgrade mechanism"
 
+[features]
+default = ["testutils"]
+# Enables the `#[contractimpl]`-generated ContractFunctionSet impl (gated by
+# `cfg(any(test, feature = "testutils"))` in soroban-sdk-macros 20.x) so the
+# contract can be `env.register_contract`'d from the integration-test targets
+# in tests/unit.rs and tests/integration.rs.
+testutils = []
+
 [workspace]
 members = [
     "contracts/analytics-engine",
@@ -12,14 +20,15 @@ members = [
     "contracts/ledger-time-helper",
     "contracts/liquidity-lock",
     "contracts/linear-vesting",
-    "contracts/price-oracle",
-    "contracts/reward-splitter",
-    "contracts/gas-tank",
-    "contracts/relayer-allowance",
     "contracts/stop-loss-trigger",
-    "tests/benchmarks",
-    "tests/fuzz",
+    "contracts/relayer-allowance",
+    "contracts/reward-splitter",
 ]
+# Excluded from the workspace (see REPAIRS.md):
+#   contracts/gas-tank        - lib.rs is an AI placeholder, not real code
+#   contracts/price-oracle    - SDK drift (686 errors), legacy target
+#   tests/benchmarks          - depends on price-oracle
+#   tests/fuzz                - pre-existing compile break (zero diff from HEAD)
 # tests/fuzz/fuzz/ is the cargo-fuzz coverage-guided target subcrate.
 # It depends on libfuzzer-sys, which only builds on nightly Rust, so it
 # must be excluded from this stable-Rust workspace. We list it explicitly

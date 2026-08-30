@@ -36,7 +36,7 @@ pub fn mock_approve(
 ) {
     env.mock_all_auths();
     let client = token::Client::new(env, token_id);
-    client.approve(owner, spender, amount, &1000u32);
+    client.approve(owner, spender, &amount, &1000u32);
 }
 
 /// Simulate a token transfer: move `amount` from `from` to `to`.

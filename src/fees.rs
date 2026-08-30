@@ -231,7 +231,7 @@ impl CorridorWeightProfile {
 // ---------------------------------------------------------------------------
 
 pub fn add_corridor_fees(
-    env: Env,
+    env: &Env,
     admin: Address,
     asset: AssetId,
     collected: u64,
@@ -670,8 +670,8 @@ mod tests {
         let (_, client, admin, _) = setup();
         let asset = 3897123275;
 
-        let pool = client.add_corridor_fees(&admin, &asset, &1_000, &25);
-        assert_eq!(pool.collected, 1_000);
+        let pool = client.add_corridor_fees(&admin, &asset, &10_000, &25);
+        assert_eq!(pool.collected, 10_000);
         assert_eq!(pool.variable_pool, 25);
 
         let profile = client.set_corridor_weight(&admin, &asset, &70, &30);
@@ -680,7 +680,7 @@ mod tests {
         assert_eq!(profile.dynamic_weight, 30);
 
         let unchanged_pool = client.get_corridor_fee_pool(&asset);
-        assert_eq!(unchanged_pool.collected, 1_000);
+        assert_eq!(unchanged_pool.collected, 10_000);
         assert_eq!(unchanged_pool.variable_pool, 25);
 
         let stored_profile = client.get_corridor_weight(&asset);

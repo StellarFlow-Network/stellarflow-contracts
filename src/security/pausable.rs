@@ -105,9 +105,9 @@ pub fn emergency_unpause(
 mod tests {
     use super::*;
     use soroban_sdk::testutils::{Address as _, Events};
-    use soroban_sdk::Env;
+    use soroban_sdk::{Env, TryFromVal};
 
-    fn setup() -> (Env, Address, Address, Address) {
+    fn setup() -> (Env, Address, Address, Address, Address) {
         let env = Env::default();
         env.mock_all_auths();
         let admin = Address::generate(&env);
@@ -120,6 +120,7 @@ mod tests {
             let data = ContractData {
                 admin: admin.clone(),
                 value: 0,
+                max_fee_ceiling: 0,
             };
             env.storage().instance().set(&DATA_KEY, &data);
         });
@@ -183,22 +184,28 @@ mod tests {
         let (env, contract_id, admin, emergency_admin, signer) = setup();
         env.as_contract(&contract_id, || {
             set_emergency_admin(&env, &admin, &emergency_admin).unwrap();
+            env.storage().instance().set(&crate::storage::SignerKey::SignerByAddress(signer.clone()), &true);
+        });
+        env.as_contract(&contract_id, || {
             emergency_pause(&env, &emergency_admin).unwrap();
+        });
 
-            let mut signers = Vec::new(&env);
-            signers.push_back(admin.clone());
-            signers.push_back(signer.clone());
+        let mut signers = Vec::new(&env);
+        signers.push_back(admin.clone());
+        signers.push_back(signer.clone());
 
+        env.as_contract(&contract_id, || {
             emergency_unpause(&env, &admin, &signers)
                 .expect("multi-sig should be able to unpause");
+        });
 
-            let paused: bool = env
-                .storage()
+        let paused: bool = env.as_contract(&contract_id, || {
+            env.storage()
                 .instance()
                 .get(&crate::admin::PAUSED_KEY)
-                .unwrap_or(false);
-            assert!(!paused);
+                .unwrap_or(false)
         });
+        assert!(!paused);
     }
 
     #[test]
@@ -210,8 +217,10 @@ mod tests {
 
             let events = env.events().all();
             let found = events.iter().any(|e| {
-                e.0 == (contract_id.clone(),)
-                    && e.1 == (Symbol::new(&env, "EMRG_PAUSE"),)
+                e.0 == contract_id.clone()
+                    && e.1.get(0).map_or(false, |v| {
+                        Symbol::try_from_val(&env, &v) == Ok(Symbol::new(&env, "EMRG_PAUSE"))
+                    })
             });
             assert!(found, "should emit EMRG_PAUSE event");
         });
@@ -222,20 +231,27 @@ mod tests {
         let (env, contract_id, admin, emergency_admin, signer) = setup();
         env.as_contract(&contract_id, || {
             set_emergency_admin(&env, &admin, &emergency_admin).unwrap();
-            emergency_pause(&env, &emergency_admin).unwrap();
-
-            let mut signers = Vec::new(&env);
-            signers.push_back(admin.clone());
-            signers.push_back(signer.clone());
-            emergency_unpause(&env, &admin, &signers).unwrap();
-
-            let events = env.events().all();
-            let found = events.iter().any(|e| {
-                e.0 == (contract_id.clone(),)
-                    && e.1 == (Symbol::new(&env, "EMRG_UNPAUSE"),)
-            });
-            assert!(found, "should emit EMRG_UNPAUSE event");
+            env.storage().instance().set(&crate::storage::SignerKey::SignerByAddress(signer.clone()), &true);
         });
+        env.as_contract(&contract_id, || {
+            emergency_pause(&env, &emergency_admin).unwrap();
+        });
+
+        let mut signers = Vec::new(&env);
+        signers.push_back(admin.clone());
+        signers.push_back(signer.clone());
+        env.as_contract(&contract_id, || {
+            emergency_unpause(&env, &admin, &signers).unwrap();
+        });
+
+        let events = env.events().all();
+        let found = events.iter().any(|e| {
+            e.0 == contract_id.clone()
+                && e.1.get(0).map_or(false, |v| {
+                    Symbol::try_from_val(&env, &v) == Ok(Symbol::new(&env, "EMRG_UNPAUSE"))
+                })
+        });
+        assert!(found, "should emit EMRG_UNPAUSE event");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, contracterror, token, Address, Env, symbol_short};
+use soroban_sdk::{contract, contractimpl, contracttype, contracterror, token, Address, Env, Symbol};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -16,6 +16,7 @@ pub enum AllowanceError {
     InvalidAmount = 8,
     InvalidExpiry = 9,
     AllowanceAlreadyExists = 10,
+    Overflow = 11,
 }
 
 #[contracttype]
@@ -99,7 +100,7 @@ impl RelayerAllowanceContract {
 
         // Emit event
         env.events().publish(
-            (symbol_short!("allow_grant"),),
+            (Symbol::new(&env, "allow_grant"),),
             (owner, relayer, max_amount, expiry_ledger),
         );
 
@@ -167,7 +168,7 @@ impl RelayerAllowanceContract {
 
         // Emit event
         env.events().publish(
-            (symbol_short!("allow_exec"),),
+            (Symbol::new(&env, "allow_exec"),),
             (owner, relayer, recipient, amount),
         );
 
@@ -211,7 +212,7 @@ impl RelayerAllowanceContract {
 
         // Emit event
         env.events().publish(
-            (symbol_short!("allow_revoke"),),
+            (Symbol::new(&env, "allow_revoke"),),
             (owner, relayer, caller),
         );
 
@@ -275,14 +276,14 @@ mod tests {
     fn advance_ledgers(env: &Env, count: u32) {
         let info = env.ledger().get();
         env.ledger().set(LedgerInfo {
-            sequence: info.sequence + count,
+            sequence_number: info.sequence_number + count,
             timestamp: info.timestamp,
             protocol_version: info.protocol_version,
             network_id: Default::default(),
             base_reserve: 10,
-            min_temp_entry_ttl: 0,
-            min_persistent_entry_ttl: 0,
-            max_entry_ttl: u32::MAX,
+            min_temp_entry_ttl: 4096,
+            min_persistent_entry_ttl: 4096,
+            max_entry_ttl: 6_312_000,
         });
     }
 

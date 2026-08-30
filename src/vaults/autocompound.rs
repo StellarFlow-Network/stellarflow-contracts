@@ -74,7 +74,7 @@ pub fn flash_loan(env: &Env, borrower: Address, amount: i128) -> Result<i128, Co
     token_client.transfer(&env.current_contract_address(), &borrower, &amount);
     env.invoke_contract::<()>(
         &borrower,
-        &soroban_sdk::symbol_short!("on_flash_loan"),
+        &soroban_sdk::Symbol::new(env, "on_flash_loan"),
         soroban_sdk::vec![
             env,
             config.asset.into_val(env),
@@ -197,7 +197,6 @@ pub fn set_performance_fee(env: &Env, admin: Address, fee_bps: u32) -> Result<Va
 /// Deposit `amount` of the underlying asset and mint pro-rata `sfvToken`
 /// shares. The first depositor mints 1:1.
 pub fn deposit(env: &Env, depositor: Address, amount: i128) -> Result<i128, ContractError> {
-    let _guard = crate::security::reentrancy::ReentrancyGuard::new(env)?;
     if amount <= 0 {
         return Err(ContractError::VaultZeroAmount);
     }
@@ -246,7 +245,6 @@ pub fn deposit(env: &Env, depositor: Address, amount: i128) -> Result<i128, Cont
 
 /// Burn `shares` and withdraw the pro-rata amount of underlying asset.
 pub fn withdraw(env: &Env, owner: Address, shares: i128) -> Result<i128, ContractError> {
-    let _guard = crate::security::reentrancy::ReentrancyGuard::new(env)?;
     if shares <= 0 {
 
         return Err(ContractError::VaultZeroAmount);

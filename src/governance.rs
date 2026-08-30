@@ -1,5 +1,6 @@
 use soroban_sdk::{contracttype, symbol_short, Address, BytesN, Env, Map, Symbol, Vec};
-use crate::{ContractData, ContractError, DATA_KEY, SIGNERS_KEY};
+use crate::storage::SignerKey;
+use crate::{ContractData, ContractError, DATA_KEY};
 
 const BALLOT_TTL_LEDGERS: u32 = 17_280;
 const BALLOT_TTL_THRESHOLD: u32 = 5_000;
@@ -98,12 +99,6 @@ pub fn verify_upgrade_quorum(env: &Env, signers: &Vec<Address>) -> Result<(), Co
         .get(&DATA_KEY)
         .ok_or(ContractError::NotInitialized)?;
 
-    let authorized_signers: Map<Address, ()> = env
-        .storage()
-        .instance()
-        .get(&SIGNERS_KEY)
-        .unwrap_or_else(|| Map::new(env));
-
     let config = get_governance_config(env);
     let multisig_config = get_multisig_config(env);
     
@@ -119,8 +114,13 @@ pub fn verify_upgrade_quorum(env: &Env, signers: &Vec<Address>) -> Result<(), Co
         }
         seen_signers.set(signer.clone(), ());
         
-        // Check if signer is authorized (admin or in authorized_signers)
-        let is_authorized = signer == data.admin || authorized_signers.contains_key(signer.clone());
+        // Check if signer is authorized (admin or a registered signer)
+        let is_authorized =
+            signer == data.admin
+                || env
+                    .storage()
+                    .instance()
+                    .has(&SignerKey::SignerByAddress(signer.clone()));
         if !is_authorized {
             continue;
         }
@@ -172,12 +172,6 @@ pub struct GovernanceUpgradeProposal {
 
 /// Event emitted when a governance upgrade is proposed
 pub fn calculate_collected_weight(env: &Env, signers: &Vec<Address>, data: &ContractData) -> Result<u32, ContractError> {
-    let authorized_signers: Map<Address, ()> = env
-        .storage()
-        .instance()
-        .get(&SIGNERS_KEY)
-        .unwrap_or_else(|| Map::new(env));
-    
     let mut collected_weight: u32 = 0;
     let mut seen_signers: Map<Address, ()> = Map::new(env);
     
@@ -188,8 +182,13 @@ pub fn calculate_collected_weight(env: &Env, signers: &Vec<Address>, data: &Cont
         }
         seen_signers.set(signer.clone(), ());
         
-        // Check if signer is authorized
-        let is_authorized = signer == data.admin || authorized_signers.contains_key(signer.clone());
+        // Check if signer is authorized (admin or a registered signer)
+        let is_authorized =
+            signer == data.admin
+                || env
+                    .storage()
+                    .instance()
+                    .has(&SignerKey::SignerByAddress(signer.clone()));
         if !is_authorized {
             continue;
         }
