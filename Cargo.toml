@@ -23,6 +23,7 @@ members = [
     "contracts/stop-loss-trigger",
     "contracts/relayer-allowance",
     "contracts/reward-splitter",
+    "contracts/flash-loan",
 ]
 # Excluded from the workspace (see REPAIRS.md):
 #   contracts/gas-tank        - lib.rs is an AI placeholder, not real code
