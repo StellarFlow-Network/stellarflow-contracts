@@ -1676,5 +1676,47 @@ fn advance_farm_one_ledger(env: &Env) {
     });
 }
 
+#[test]
+fn test_yield_farming_emergency_withdraw_skips_rewards_and_zeroes_shares() {
+    let (env, client, lp_token, reward_token, lp, reward, funder, user) = farm_env();
+
+    // Fund the reward pool and stake an LP position.
+    reward.mint(&funder, &100_000);
+    client.fund_yield_rewards(&funder, &100_000);
+    lp.mint(&user, &1_000);
+    client.stake_lp(&user, &1_000);
+
+    // A ledger of emission leaves the user with unclaimed rewards.
+    advance_farm_one_ledger(&env);
+    let pending = client.pending_yield_rewards(&user);
+    assert!(pending > 0);
+
+    // Emergency unstake bypasses the reward math and forfeits the yield.
+    let withdrawn = client.emergency_exit_yield_farming(&user);
+    assert_eq!(withdrawn, 1_000);
+    assert_eq!(client.yield_farming_share_balance(&user), 0);
+    assert_eq!(client.pending_yield_rewards(&user), 0);
+
+    // LP tokens are returned immediately...
+    let lp_client = soroban_sdk::token::Client::new(&env, &lp_token);
+    assert_eq!(lp_client.balance(&user), 1_000);
+    assert_eq!(lp_client.balance(&client.address), 0);
+
+    // ...but the forfeited reward tokens stay in the farm reward pool.
+    let reward_client = soroban_sdk::token::Client::new(&env, &reward_token);
+    assert_eq!(reward_client.balance(&user), 0);
+    assert_eq!(reward_client.balance(&client.address), 100_000);
+}
+
+#[test]
+fn test_yield_farming_emergency_withdraw_requires_stake() {
+    let (_env, client, _lp_token, _reward_token, _lp, reward, funder, user) = farm_env();
+    reward.mint(&funder, &10_000);
+    client.fund_yield_rewards(&funder, &10_000);
+
+    let res = client.try_emergency_exit_yield_farming(&user);
+    assert_eq!(res, Err(Ok(ContractError::InvalidStakeAmount)));
+}
+
 
 

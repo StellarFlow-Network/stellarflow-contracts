@@ -243,6 +243,35 @@ pub fn exit(env: &Env, user: Address) -> Result<(i128, i128), ContractError> {
     Ok((shares, reward))
 }
 
+/// Emergency unstake: return the full LP position immediately, bypassing the
+/// reward distribution math entirely.
+///
+/// Unlike [`exit`], this does not settle or credit any pending rewards — any
+/// yield accrued up to this ledger is forfeited back to the farm reward pool.
+/// The user's staked-balance mapping (and reward bookkeeping) is zeroed so no
+/// further rewards can be claimed on the position.
+pub fn emergency_withdraw(env: &Env, user: Address) -> Result<i128, ContractError> {
+    let config = load_config(env)?;
+    user.require_auth();
+    let shares = read_i128(env, &FarmingStorageKey::Shares(user.clone()));
+    if shares <= 0 {
+        return Err(ContractError::InvalidStakeAmount);
+    }
+    write_i128(env, &FarmingStorageKey::Shares(user.clone()), 0);
+    write_i128(env, &FarmingStorageKey::RewardDebt(user.clone()), 0);
+    write_i128(env, &FarmingStorageKey::AccruedRewards(user.clone()), 0);
+    env.storage().instance().set(
+        &FarmingStorageKey::TotalShares,
+        &total_shares(env).checked_sub(shares).ok_or(ContractError::MathOverflow)?,
+    );
+    token::Client::new(env, &config.lp_token).transfer(
+        &env.current_contract_address(),
+        &user,
+        &shares,
+    );
+    Ok(shares)
+}
+
 pub fn set_emission_multiplier(
     env: &Env,
     governance: Address,

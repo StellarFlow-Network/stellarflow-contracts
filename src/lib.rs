@@ -1443,6 +1443,14 @@ impl TimeLockedUpgradeContract {
         vaults::lp_farming::exit(&env, user)
     }
 
+    pub fn emergency_exit_yield_farming(
+        env: Env,
+        user: Address,
+    ) -> Result<i128, ContractError> {
+        let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
+        vaults::lp_farming::emergency_withdraw(&env, user)
+    }
+
     pub fn set_emission_multiplier(
         env: Env,
         governance: Address,
