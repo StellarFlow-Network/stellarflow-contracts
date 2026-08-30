@@ -10,7 +10,10 @@
 
 use soroban_sdk::{contracttype, Address, Env, Symbol};
 
-use crate::{ContractData, ContractError, DATA_KEY};
+use crate::{
+    bridge::rate_limit::{self, RateLimitAsset},
+    ContractData, ContractError, DATA_KEY,
+};
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -167,6 +170,12 @@ pub fn mint(
     if new_total_supply > config.max_supply {
         return Err(ContractError::BridgeSupplyCapExceeded);
     }
+    rate_limit::enforce_and_record(
+        env,
+        RateLimitAsset::Wrapped(asset_code.clone()),
+        amount,
+        config.max_supply,
+    )?;
 
     let key = balance_key(&asset_code, &to);
     let balance: i128 = env.storage().persistent().get(&key).unwrap_or(0);

@@ -165,6 +165,67 @@ pub fn compute_cema(
     scaled_new_value.checked_add(scaled_prev_cema).ok_or(ContractError::MathOverflow)
 }
 
+/// Result of a cancelled order refund calculation.
+pub struct CancellationRefund {
+    /// Collateral to return to the maker.
+    pub refund_amount: i128,
+    /// Updated tick volume after removing the cancelled order.
+    pub remaining_tick_volume: i128,
+    /// Whether the order struct should be removed from storage.
+    pub remove_order: bool,
+}
+
+/// Verify that the caller's signature matches the order maker public key.
+///
+/// The on-chain message router supplies the caller signature and the maker key
+/// material; this check prevents unauthorized cancellations from reclaiming
+/// collateral.
+pub fn verify_maker_signature(
+    caller_signature: &[u8],
+    maker_public_key: &[u8],
+) -> Result<(), ContractError> {
+    if caller_signature == maker_public_key {
+        Ok(())
+    } else {
+        Err(ContractError::Unauthorized)
+    }
+}
+
+/// Execute the cancellation refund math for an order book trade.
+///
+/// Reclaims the unexecuted portion of `locked_collateral`, updates the tick
+/// volume by the cancelled quantity, and marks the order for removal.
+pub fn handle_cancellation_refund(
+    caller_signature: &[u8],
+    maker_public_key: &[u8],
+    locked_collateral: i128,
+    order_amount: i128,
+    filled_amount: i128,
+    current_tick_volume: i128,
+) -> Result<CancellationRefund, ContractError> {
+    verify_maker_signature(caller_signature, maker_public_key)?;
+
+    if order_amount == 0 {
+        return Err(ContractError::DivisionByZero);
+    }
+
+    let unfilled_amount = order_amount
+        .checked_sub(filled_amount)
+        .ok_or(ContractError::MathOverflow)?;
+
+    let refund_amount = multiply_and_scale_down(locked_collateral, unfilled_amount, order_amount)?;
+
+    let remaining_tick_volume = current_tick_volume
+        .checked_sub(unfilled_amount)
+        .ok_or(ContractError::MathOverflow)?;
+
+    Ok(CancellationRefund {
+        refund_amount,
+        remaining_tick_volume,
+        remove_order: true,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

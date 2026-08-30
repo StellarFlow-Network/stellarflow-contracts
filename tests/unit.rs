@@ -395,7 +395,7 @@ fn test_node_profile_upsert_and_get_rate() {
     let node = Address::generate(&env);
     client.upsert_node_profile(&admin, &node, &1000, &80);
     let rate = client.get_latest_rate(&node);
-    assert_eq!(rate, Ok(1000));
+    assert_eq!(rate, 1000);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

@@ -6,7 +6,7 @@ use soroban_sdk::{contracttype, token, Address, Env};
 /// - Both `sender` and `receiver` approve (sign) before `expiry_ledger` elapses.
 /// - The depositor executes a single-signature refund after `expiry_ledger`.
 #[contracttype]
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Escrow {
     pub sender: Address,
     pub receiver: Address,
@@ -17,6 +17,13 @@ pub struct Escrow {
     pub sender_approved: bool,
     pub receiver_approved: bool,
     pub released: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EscrowStorageKey {
+    NextEscrowId,
+    Escrow(u64),
 }
 
 impl Escrow {

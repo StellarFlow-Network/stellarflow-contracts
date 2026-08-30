@@ -123,7 +123,7 @@ pub fn compute_swap_out(
     }
     
     // Update volume history and get current dynamic fee
-    let fee_bps = crate::TimeLockedUpgradeContract::update_volume_and_get_fee(
+    let fee_bps = crate::fees::update_volume_and_adjust_fee(
         env, 
         asset, 
         amount_in as u64
@@ -136,7 +136,7 @@ pub fn compute_swap_out(
     let raw_output = mul_div(reserve_out, amount_in, denominator)?;
     
     // Apply dynamic fee deduction
-    let (amount_after_fees, fee_amount) = crate::TimeLockedUpgradeContract::calculate_and_deduct_fee(
+    let (amount_after_fees, fee_amount) = crate::fees::calculate_and_deduct_fee(
         raw_output, 
         fee_bps
     )?;

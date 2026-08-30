@@ -1,5 +1,8 @@
 #![no_std]
-use soroban_sdk::{contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short, Address, Bytes, BytesN, Env, Map, Symbol, Vec};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short,
+    Address, Bytes, BytesN, Env, Map, Symbol, Vec,
+};
 
 contractmeta!(key = "name", val = "stellarflow-contracts");
 contractmeta!(key = "version", val = "0.1.0");
@@ -64,56 +67,63 @@ pub fn asset_id_to_symbol(asset_id: u32) -> Symbol {
 pub(crate) mod nonce;
 use crate::nonce::{consume_nonce, get_nonce};
 
+pub mod action_guard;
 pub mod amm;
 pub mod admin;
+pub mod amm;
 pub mod auth;
 pub mod bridge;
 pub mod escrow;
 pub mod config;
-pub mod kernel;
-pub mod orders;
-pub mod roles;
-pub mod vaults;
-pub use config::{get_price_variance_config, set_price_variance_config, PriceVarianceConfig};
 pub mod consensus;
+pub mod kernel;
+pub use kernel::instance;
+pub mod errors;
+pub mod escrow;
 pub mod events;
 pub mod fees;
 pub mod governance;
 pub mod math;
+pub mod orders;
 pub mod recovery;
+pub mod roles;
+pub mod router;
+pub mod security;
+pub mod settlement;
 pub mod slashing;
 pub mod staging;
 pub mod staking_tiers;
 pub mod router;
 pub mod settlement;
+pub mod state_verification;
 pub mod storage;
-pub mod zk;
 pub mod temp_governance;
-pub mod security;
 pub mod upgrades;
 pub mod validation;
+pub use state_verification::{
+    assert_contract_state_sanity, verify_contract_state, verify_storage_ttl_bumps,
+    verify_zero_loss_accounting,
+};
 use crate::governance::{
-    verify_staged_delay, StagedUpgrade, VotingBallot, open_ballot, cast_vote, close_ballot,
-    verify_upgrade_quorum, GovernanceUpgradeProposal, GovernanceUpgradeProposedEvent,
-    calculate_collected_weight, get_multisig_config, GOVERNANCE_UPGRADE_KEY, get_ballot,
+    calculate_collected_weight, cast_vote, close_ballot, get_ballot, get_multisig_config,
+    open_ballot, verify_staged_delay, verify_upgrade_quorum, GovernanceUpgradeProposal,
+    GovernanceUpgradeProposedEvent, StagedUpgrade, VotingBallot, GOVERNANCE_UPGRADE_KEY,
 };
-use crate::events::events::{emit_simple2, EV_UPGRADE_PROPOSED};
+use crate::slashing::{
+    apply_escrow_penalty, get_fault_count_in_window, get_penalty_multiplier, record_tracking_fault,
+    IngestionPenaltyResult,
+};
+use crate::staking_tiers::{
+    assign_tier, effective_volume_score, required_stake_for_tier, validate_tier_config,
+};
+use crate::storage::{NodeProfileKey, SignerKey, StakeKey, HeartbeatKey};
 use crate::validation::{
-    check_bond_capacity, check_liquidity_depth, validate_telemetry_submission,
-    process_price_bundle, AssetPriceUpdate, BundleValidationOutcome,
+    check_bond_capacity, check_liquidity_depth, process_price_bundle, validate_telemetry_submission,
+    AssetPriceUpdate, BundleValidationOutcome,
 };
-pub use events::swaps::{publish_swap_executed, SwapExecutedEvent};
 
-pub use staking_tiers::{AssetFeedMetrics, StakingTier, StakingTierConfig};
-use staking_tiers::{assign_tier, effective_volume_score, required_stake_for_tier, validate_tier_config};
-use slashing::{
-    apply_escrow_penalty, get_fault_count_in_window, get_penalty_multiplier,
-    record_tracking_fault, IngestionPenaltyResult,
-};
-use storage::{StakeKey, NodeProfileKey, SignerKey};
 use crate::upgrades::migration::ensure_schema_version;
 
-#[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum ContractError {
@@ -144,16 +154,16 @@ pub enum ContractError {
     NoPendingOwner = 25,
     FeeCeilingExceeded = 26,
     DivisionByZero = 27,
-    InvalidVarianceConfig = 28,
-    ContractPaused = 29,
-    RevokedAddress = 30,
-    EmergencyRevocAlreadyActive = 31,
-    NoActiveEmergencyRevocation = 32,
-    StaleTelemetryPayload = 33,
-    InsufficientReserveBalance = 34,
-    InsufficientVolume = 35,
-    StaleSequence = 36,
-    InsufficientLiquidityDepth = 37,
+    StaleSequence = 28,
+    InvalidVarianceConfig = 29,
+    StaleTelemetryPayload = 30,
+    InsufficientReserveBalance = 31,
+    InsufficientVolume = 32,
+    InsufficientLiquidityDepth = 33,
+    ContractPaused = 34,
+    RevokedAddress = 35,
+    EmergencyRevocationActive = 36,
+    NoActiveEmergencyRevocation = 37,
     BundleAssetLimitExceeded = 38,
     BundleValidationFailed = 39,
     IncompleteQuorum = 40,
@@ -161,6 +171,7 @@ pub enum ContractError {
     AdminChangePending = 42,
     NoAdminChangePending = 43,
     CosignerCannotBeProposer = 44,
+    AdminTimelockNotSatisfied = 45,
     InsufficientBondForPenalty = 46,
     SlippageExceeded = 47,
     AmountTooLow = 48,
@@ -179,6 +190,10 @@ pub enum ContractError {
     MerkleTreeFull = 59,
     InvalidFeeSplitConfig = 60,
     FeeDistributionMismatch = 61,
+    NotSecurityCouncil = 62,
+    ProposalNotFound = 63,
+    ProposalNotVetoable = 64,
+    ProposalAlreadyVetoed = 65,
 }
 
 impl ContractError {
@@ -231,12 +246,14 @@ impl ContractError {
     pub const OrderNotMaker: Self = Self::Unauthorized;
     pub const RoleExpirationInPast: Self = Self::UpgradeTimelockNotSatisfied;
     pub const RoleNotFound: Self = Self::NotRegistered;
+    pub const UnauthorizedReentryAttempt: Self = Self::Unauthorized;
     pub const RoleExpiredOrMissing: Self = Self::Unauthorized;
 }
 
 // Contract state keys
 pub(crate) const DATA_KEY: Symbol = symbol_short!("DATA");
 pub(crate) const SIGNERS_KEY: Symbol = symbol_short!("SIGNERS");
+pub(crate) const STAGING_KEY: Symbol = symbol_short!("STAGING");
 const PENDING_UPGRADE_KEY: Symbol = symbol_short!("PENDING");
 pub(crate) use crate::upgrades::timelock::WASM_UPGRADE_DELAY_SECONDS as UPGRADE_DELAY_SECONDS;
 pub(crate) const STAKE_REGISTRY_KEY: Symbol = symbol_short!("STAKES");
@@ -251,12 +268,12 @@ const PLATFORM_CAPITAL_KEY: Symbol = symbol_short!("CAPITAL");
 pub(crate) const CONSENSUS_CACHE_KEY: Symbol = symbol_short!("CACHE");
 const RELAYER_TTL_THRESHOLD: u32 = 5_000;
 const INSTANCE_TTL_EXTEND: u32 = 100_000;
-const TREASURY_KEY: Symbol = symbol_short!("TREASURY");
+pub(crate) const TREASURY_KEY: Symbol = symbol_short!("TREASURY");
+pub(crate) const LP_REWARD_POOL_KEY: Symbol = symbol_short!("LPREWARD");
 const SEQUENCE_COUNTER_KEY: Symbol = symbol_short!("SEQCTR");
 const REVOCATION_KEY: Symbol = symbol_short!("REVOKE");
 const RECOVERY_KEY: Symbol = symbol_short!("RKEY");
 const LAST_ADMIN_ACTIVITY: Symbol = symbol_short!("LASTACT");
-pub(crate) const STAGING_KEY: Symbol = symbol_short!("STAGING");
 
 #[contracttype]
 #[derive(Clone)]
@@ -273,7 +290,6 @@ pub struct RevocationProposal {
 pub struct ContractData {
     pub admin: Address,
     pub value: u64,
-    pub max_fee_ceiling: u64,
 }
 
 #[contracttype]
@@ -310,15 +326,6 @@ pub enum StakingStorageKey {
     FeedStake(Address, AssetId),
 }
 
-// Storage key newtype wrappers
-#[contracttype] pub struct HeartbeatKey(pub AssetId);
-#[contracttype] pub struct CorridorFeeKey(pub Symbol);
-
-// CorridorFeePool is imported/used from the fees module
-
-// AssetMetrics key wrapper
-#[contracttype] pub struct AssetMetricsKey(pub AssetId);
-
 #[contract]
 pub struct TimeLockedUpgradeContract;
 
@@ -331,14 +338,23 @@ impl TimeLockedUpgradeContract {
     pub(crate) fn _load_data(env: &Env) -> Result<ContractData, crate::ContractError> {
         Self::load_data(env)
     }
-
-    pub(crate) fn _extend_instance_ttl(env: &Env) {
-        env.storage().instance().extend_ttl(storage::PERSISTENT_TTL_THRESHOLD, storage::PERSISTENT_TTL_THRESHOLD);
-    }
 }
 
 #[contractimpl]
 impl TimeLockedUpgradeContract {
+    /// Atomically consume a nullifier for a private transfer.
+    ///
+    /// The persistent key is checked and written in this invocation, so a
+    /// replay returns before any caller-supplied transfer side effect runs.
+    pub fn consume_private_transfer_nullifier(
+        env: Env,
+        caller: Address,
+        nullifier: BytesN<32>,
+    ) -> Result<(), ContractError> {
+        caller.require_auth();
+        crate::zk::nullifier::register_nullifier(&env, nullifier)
+    }
+
     pub fn initialize(env: Env, admin: Address, treasury: Address) -> Result<(), ContractError> {
         let _dummy: soroban_sdk::Error = soroban_sdk::Error::from_contract_error(1);
         ensure_schema_version(&env)?;
@@ -346,7 +362,7 @@ impl TimeLockedUpgradeContract {
             return Err(ContractError::AlreadyInitialized);
         }
         admin.require_auth();
-        let data = ContractData { admin: admin.clone(), value: 0, max_fee_ceiling: 10_000 };
+        let data = ContractData { admin: admin.clone(), value: 0 };
         env.storage().instance().set(&DATA_KEY, &data);
         env.storage().instance().set(&TREASURY_KEY, &treasury);
         Ok(())
@@ -356,7 +372,6 @@ impl TimeLockedUpgradeContract {
         if amount == 0 { return Err(ContractError::InvalidStakeAmount); }
         admin::assert_not_revoked(&env, &node)?;
         node.require_auth();
-        let total: u64 = env.storage().instance().get(&TOTAL_STAKED_KEY).unwrap_or(0u64);
         let stake_key = StakeKey::StakeByNode(node.clone());
         if env.storage().instance().has(&stake_key) {
             return Err(ContractError::AlreadyRegistered);
@@ -461,6 +476,18 @@ impl TimeLockedUpgradeContract {
         Self::load_data(&env)
     }
 
+    pub fn verify_storage_ttl(env: Env) -> Result<(), ContractError> {
+        verify_storage_ttl_bumps(&env)
+    }
+
+    pub fn verify_zero_loss(env: Env) -> Result<(), ContractError> {
+        verify_zero_loss_accounting(&env)
+    }
+
+    pub fn verify_contract_state(env: Env) -> Result<(), ContractError> {
+        verify_contract_state(&env)
+    }
+
     pub fn propose_upgrade(
         env: Env, new_wasm_hash: BytesN<32>, proposer: Address,
         signers: Vec<Address>,
@@ -489,15 +516,19 @@ impl TimeLockedUpgradeContract {
         };
         env.storage().instance().set(&GOVERNANCE_UPGRADE_KEY, &proposal);
 
-        let execute_at = staged_at + UPGRADE_DELAY_SECONDS;
-        let staged = StagedUpgrade { new_wasm_hash: new_wasm_hash.clone(), proposer: proposer.clone(), staged_at, execute_at };
+        let staged = StagedUpgrade {
+            new_wasm_hash: new_wasm_hash.clone(),
+            proposer: proposer.clone(),
+            staged_at,
+            execute_at: staged_at + UPGRADE_DELAY_SECONDS,
+        };
         env.storage().instance().set(&PENDING_UPGRADE_KEY, &staged);
 
         // Emit GovernanceUpgradeProposed event
         let _ = emit_simple2(
             &env,
             EV_UPGRADE_PROPOSED,
-            Symbol::new(&env, "governance"),
+            symbol_short!("gov"),
             GovernanceUpgradeProposedEvent {
                 new_wasm_hash,
                 proposer: proposer.clone(),
@@ -508,7 +539,7 @@ impl TimeLockedUpgradeContract {
             },
         );
 
-        crate::kernel::instance::bump_instance_ttl(&env);
+        crate::instance::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -536,7 +567,7 @@ impl TimeLockedUpgradeContract {
         // Run post-upgrade diagnostic health checks
         Self::_run_post_upgrade_health_check(&env, pre_upgrade_data)?;
         env.storage().instance().remove(&PENDING_UPGRADE_KEY);
-        crate::kernel::instance::bump_instance_ttl(&env);
+        crate::instance::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -593,7 +624,7 @@ impl TimeLockedUpgradeContract {
         env.storage().instance().remove(&PENDING_UPGRADE_KEY);
         env.storage().instance().remove(&crate::governance::GOVERNANCE_UPGRADE_KEY);
         Self::_extend_instance_ttl(&env);
-        crate::kernel::instance::bump_instance_ttl(&env);
+        crate::instance::bump_instance_ttl(&env);
         Ok(())
     }
 
@@ -634,9 +665,8 @@ impl TimeLockedUpgradeContract {
         get_nonce(&env, &coordinator)
     }
 
-    pub fn get_last_update_timestamp(env: Env, asset: Symbol) -> Option<u64> {
-        let asset_id = symbol_to_asset_id(&asset);
-        let heartbeat_key = HeartbeatKey(asset_id);
+    pub fn get_last_update_timestamp(env: Env, asset: AssetId) -> Option<u64> {
+        let heartbeat_key = HeartbeatKey::HeartbeatByAsset(asset);
         env.storage().temporary().get(&heartbeat_key)
     }
 
@@ -682,7 +712,7 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn is_data_fresh(env: Env, asset: AssetId) -> bool {
-        let heartbeat_key = HeartbeatKey(asset);
+        let heartbeat_key = storage::HeartbeatKey::HeartbeatByAsset(asset);
         if let Some(last_update) = env.storage().temporary().get::<_, u64>(&heartbeat_key) {
             env.ledger().timestamp().saturating_sub(last_update) <= Self::_get_interval(&env)
         } else {
@@ -711,6 +741,18 @@ impl TimeLockedUpgradeContract {
         Self::_scan_profile_for_rate(profile).ok_or(ContractError::NotRegistered)
     }
 
+    pub fn add_corridor_fees(
+        env: Env,
+        admin: Address,
+        asset: AssetId,
+        collected: u64,
+        variable_fee: u64,
+    ) -> Result<fees::CorridorFeePool, ContractError> {
+        let pool = fees::add_corridor_fees(env.clone(), admin, asset, collected, variable_fee)?;
+        Self::_extend_instance_ttl(&env);
+        crate::recovery::update_admin_activity(&env);
+        Ok(pool)
+    }
     pub fn get_corridor_fee_pool(env: Env, asset: AssetId) -> fees::CorridorFeePool {
         crate::fees::get_corridor_fee_pool(env, asset)
     }
@@ -761,6 +803,38 @@ impl TimeLockedUpgradeContract {
         provider: Address,
     ) -> Option<settlement::fees::LiquidityPosition> {
         settlement::fees::get_position(&env, asset, provider)
+    }
+
+    /// Record flash loan fee revenue for an asset.
+    pub fn record_flash_fee(
+        env: Env,
+        asset: AssetId,
+        fee_amount: u64,
+    ) -> Result<u64, ContractError> {
+        fees::record_flash_fee(&env, asset, fee_amount)
+    }
+
+    /// Query the flash loan fee pool status for an asset.
+    pub fn get_flash_fee_pool(env: Env, asset: AssetId) -> fees::FlashLoanFeePool {
+        fees::get_flash_fee_pool(&env, asset)
+    }
+
+    /// Set the LP reward pool destination address for flash fee distributions.
+    pub fn set_lp_reward_pool(
+        env: Env,
+        admin: Address,
+        lp_reward_pool: Address,
+    ) -> Result<(), ContractError> {
+        fees::set_lp_reward_pool(&env, &admin, lp_reward_pool)
+    }
+
+    /// Distribute accumulated flash loan service fees (50% to LP reward pool and 50% to DAO treasury).
+    pub fn distribute_flash_fees(
+        env: Env,
+        caller: Address,
+        asset: AssetId,
+    ) -> Result<(u64, u64), ContractError> {
+        fees::distribute_flash_fees(&env, &caller, asset)
     }
 
     /// Get the current dynamic trading fee for an asset (in basis points)
@@ -1152,6 +1226,73 @@ impl TimeLockedUpgradeContract {
         admin::has_active_emergency_revocation(&env)
     }
 
+    // ── Governance Proposal Veto Engine (Issue #769) ────────────────────────────
+    // 
+    // Emergency veto control allowing the designated Security Council multi-sig
+    // address to cancel malicious or dangerous proposals during their timelock
+    // windows, providing a last-resort circuit-breaker mechanism.
+
+    /// Configure the Security Council address that has authority to veto proposals.
+    ///
+    /// Only the current admin may set the Security Council. Once configured,
+    /// this multi-sig address gains exclusive authority to veto any proposal.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `caller` - The caller (must be the contract admin)
+    /// * `council` - The Security Council multi-sig address
+    ///
+    /// # Errors
+    /// - [`ContractError::NotAdmin`] if the caller is not the contract admin
+    /// - [`ContractError::NotInitialized`] if the contract is not initialized
+    pub fn set_security_council(env: Env, caller: Address, council: Address) -> Result<(), ContractError> {
+        veto::set_security_council(&env, caller, council)
+    }
+
+    /// Retrieve the current Security Council address, if configured.
+    pub fn get_security_council(env: Env) -> Option<Address> {
+        veto::get_security_council(&env)
+    }
+
+    /// Veto an active proposal, instantly transitioning it to `Vetoed` state.
+    ///
+    /// Only the designated Security Council may invoke this function. Upon veto:
+    /// 1. The proposal is marked as vetoed
+    /// 2. Execution payload is invalidated
+    /// 3. Audit trail is recorded with reason hash
+    /// 4. `ProposalVetoed` event is emitted
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `caller` - The address attempting the veto (must be Security Council)
+    /// * `proposal_id` - The ID of the proposal to veto
+    /// * `reason` - Audit reason string (logged as hash for transparency)
+    ///
+    /// # Errors
+    /// - [`ContractError::NotSecurityCouncil`] if the caller is not the Security Council
+    /// - [`ContractError::ProposalNotFound`] if the proposal does not exist
+    /// - [`ContractError::ProposalAlreadyVetoed`] if the proposal is already vetoed
+    pub fn veto_proposal(
+        env: Env,
+        caller: Address,
+        proposal_id: u64,
+        reason: soroban_sdk::String,
+    ) -> Result<(), ContractError> {
+        veto::veto_proposal(&env, caller, proposal_id, reason)
+    }
+
+    /// Retrieve the veto record for a proposal, if it has been vetoed.
+    ///
+    /// Returns None if the proposal has not been vetoed.
+    pub fn get_veto_record(env: Env, proposal_id: u64) -> Option<veto::ProposalVeto> {
+        veto::get_veto_record(&env, proposal_id)
+    }
+
+    /// Check if a proposal has been vetoed.
+    pub fn is_proposal_vetoed(env: Env, proposal_id: u64) -> bool {
+        veto::is_proposal_vetoed(&env, proposal_id)
+    }
+
     // ── Multi-Tier Escrow Penalties (Issue #525) ──────────────────────────────
     // ── Dead-Man's Switch Recovery (Issue #617) ──────────────────────────
 
@@ -1236,32 +1377,6 @@ impl TimeLockedUpgradeContract {
 )?;
         Ok(result)
     }
-       
-    pub fn update_validator_profile(env: Env, node: Address, pool: Symbol) -> Result<(), ContractError> {
-        admin::assert_not_revoked(&env, &node)?;
-        node.require_auth();
-        check_bond_capacity(&env, &node, &pool)?;
-        let asset_id = symbol_to_asset_id(&pool);
-        check_liquidity_depth(&env, asset_id)?;
-        storage::update_feed_stake_activity(&env, node.clone(), asset_id);
-        Self::_record_heartbeat(&env, asset_id);
-        Ok(())
-    }
-
-    pub fn submit_telemetry_data(
-        env: Env, node: Address, pool: Symbol,
-        payload_timestamp: u64, reserve_a: i128, reserve_b: i128, volume_24h: i128,
-    ) -> Result<(), ContractError> {
-        admin::assert_not_revoked(&env, &node)?;
-        node.require_auth();
-        validate_telemetry_submission(&env, &node, &pool, payload_timestamp, reserve_a, reserve_b, volume_24h)?;
-        Self::_record_heartbeat(&env, symbol_to_asset_id(&pool));
-        env.events().publish(
-            (soroban_sdk::symbol_short!("telem_ok"),),
-            (node, pool, payload_timestamp),
-        );
-        Ok(())
-    }
 
     // ── Revocable admin role delegation with expiration (Issue #703) ────────
 
@@ -1338,6 +1453,27 @@ impl TimeLockedUpgradeContract {
 
     pub fn vault_share_balance(env: Env, holder: Address) -> i128 {
         vaults::autocompound::get_share_balance(&env, holder)
+    }
+
+    /// Evaluate a vault liquidation against verified TWAP prices from the
+    /// oracle. Liquidation is allowed below 110% collateralization and
+    /// allocates 5% of confiscated collateral to the liquidator.
+    pub fn vault_liquidation_quote(
+        env: Env,
+        oracle: Address,
+        collateral_asset: Symbol,
+        debt_asset: Symbol,
+        position: vaults::liquidation::VaultPosition,
+        purchase_collateral: u128,
+    ) -> Result<vaults::liquidation::LiquidationResult, ContractError> {
+        vaults::liquidation::liquidate_at_twap(
+            &env,
+            &oracle,
+            &collateral_asset,
+            &debt_asset,
+            &position,
+            purchase_collateral,
+        )
     }
 
     pub fn vault_config(env: Env) -> Option<vaults::autocompound::VaultConfig> {
@@ -1437,9 +1573,17 @@ impl TimeLockedUpgradeContract {
         orders::limit::fill_order(&env, filler, order_id, fill_amount)
     }
 
+    pub fn match_limit_orders(
+        env: Env, seller_order_id: u64, buyer_order_id: u64, fill_amount: i128,
+    ) -> Result<orders::limit::SettlementResult, ContractError> {
+        let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
+        orders::limit::match_orders(&env, seller_order_id, buyer_order_id, fill_amount)
+    }
+
     /// Cancel a still-open order and return its unfilled balance to the maker.
     pub fn cancel_limit_order(env: Env, maker: Address, order_id: u64) -> Result<i128, ContractError> {
         let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
+        maker.require_auth();
         orders::limit::cancel_order(&env, maker, order_id)
     }
 
@@ -1449,6 +1593,17 @@ impl TimeLockedUpgradeContract {
 
     pub fn get_orders_at_tick(env: Env, pair: orders::limit::AssetPair, price_tick: i128) -> Vec<u64> {
         orders::limit::get_orders_at_tick(&env, pair, price_tick)
+    }
+
+    pub fn get_order_balance(env: Env, owner: Address, asset: Address) -> i128 {
+        orders::limit::get_balance(&env, owner, asset)
+    }
+
+    pub fn withdraw_order_balance(
+        env: Env, owner: Address, asset: Address, amount: i128,
+    ) -> Result<i128, ContractError> {
+        let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
+        orders::limit::withdraw_balance(&env, owner, asset, amount)
     }
 
     // ── Multi-hop Route Swaps ───────────────────────────────────────────────
@@ -1498,6 +1653,27 @@ impl TimeLockedUpgradeContract {
 
     pub fn wrapped_asset_config(env: Env, asset_code: Symbol) -> Option<bridge::mint::BridgeAssetConfig> {
         bridge::mint::get_config(&env, asset_code)
+    }
+
+    pub fn set_wrapped_mint_rate_limit(
+        env: Env,
+        admin: Address,
+        asset_code: Symbol,
+        max_rolling_amount: i128,
+    ) -> Result<bridge::rate_limit::MintRateLimit, ContractError> {
+        bridge::rate_limit::set_limit(
+            &env,
+            admin,
+            bridge::rate_limit::RateLimitAsset::Wrapped(asset_code),
+            max_rolling_amount,
+        )
+    }
+
+    pub fn get_wrapped_mint_rate_limit(
+        env: Env,
+        asset_code: Symbol,
+    ) -> Option<bridge::rate_limit::MintRateLimit> {
+        bridge::rate_limit::get_limit(&env, bridge::rate_limit::RateLimitAsset::Wrapped(asset_code))
     }
 
     // --- Native bridge escrow (Issue #750) ---
@@ -1562,6 +1738,10 @@ impl TimeLockedUpgradeContract {
 
     // --- Private Helpers ---
 
+    fn _extend_instance_ttl(env: &Env) {
+        env.storage().instance().extend_ttl(RELAYER_TTL_THRESHOLD, INSTANCE_TTL_EXTEND);
+    }
+
     fn assert_contract_is_active(env: &Env) -> Result<(), ContractError> {
         if !env.storage().instance().has(&DATA_KEY) {
             return Err(ContractError::NotInitialized);
@@ -1573,7 +1753,7 @@ impl TimeLockedUpgradeContract {
     }
 
     fn _record_heartbeat(env: &Env, asset: AssetId) {
-        let heartbeat_key = HeartbeatKey(asset);
+        let heartbeat_key = storage::HeartbeatKey::HeartbeatByAsset(asset);
         env.storage().temporary().set(&heartbeat_key, &env.ledger().timestamp());
     }
 
@@ -1596,6 +1776,12 @@ impl TimeLockedUpgradeContract {
         // With individual tuple keys, TTL is managed per-entry.
         // This is a no-op placeholder for compatibility.
         let _ = env;
+    }
+
+    fn _extend_instance_ttl(env: &Env) {
+        env.storage()
+            .instance()
+            .extend_ttl(RELAYER_TTL_THRESHOLD, INSTANCE_TTL_EXTEND);
     }
 
 
@@ -1646,8 +1832,22 @@ impl TimeLockedUpgradeContract {
         }
         admin::cleanup::cleanup_zero_balances(&env, &signers, &targets)
     }
-}
 
+    // ── Issue #782: Key Pruning Utility for Obsolete Contract Data ──────────
+
+    /// Clean up obsolete contract storage keys (spent orders, closed escrows,
+    /// settled HTLCs, expired stakes) to reduce state bloat and reclaim storage deposits.
+    ///
+    /// Only the contract admin can call this entrypoint.
+    /// Returns the count of deleted storage entries.
+    pub fn prune_expired_keys(
+        env: Env,
+        admin: Address,
+        targets: Vec<admin::prune::PruneTarget>,
+    ) -> Result<u32, ContractError> {
+        admin::prune::prune_expired_keys(&env, &admin, &targets)
+    }
+}
 #[cfg(test)]
 mod query_guardrail_tests {
     use super::*;

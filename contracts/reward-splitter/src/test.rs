@@ -1,12 +1,13 @@
 #![cfg(test)]
 
 use super::*;
+use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{symbol_short, Address, Env, String, Symbol};
 
 #[test]
 fn test_initialize() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -22,7 +23,7 @@ fn test_initialize() {
 #[should_panic(expected = "Error(AlreadyInitialized)")]
 fn test_initialize_twice() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -35,7 +36,7 @@ fn test_initialize_twice() {
 #[test]
 fn test_add_recipient() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -57,7 +58,7 @@ fn test_add_recipient() {
 #[should_panic(expected = "Error(Unauthorized)")]
 fn test_add_recipient_unauthorized() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -74,7 +75,7 @@ fn test_add_recipient_unauthorized() {
 #[should_panic(expected = "Error(InvalidShare)")]
 fn test_add_recipient_invalid_share_zero() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -90,7 +91,7 @@ fn test_add_recipient_invalid_share_zero() {
 #[should_panic(expected = "Error(InvalidShare)")]
 fn test_add_recipient_invalid_share_exceeds_100() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -106,7 +107,7 @@ fn test_add_recipient_invalid_share_exceeds_100() {
 #[should_panic(expected = "Error(TotalSharesExceeded)")]
 fn test_add_recipient_total_exceeded() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -123,7 +124,7 @@ fn test_add_recipient_total_exceeded() {
 #[test]
 fn test_remove_recipient() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -146,7 +147,7 @@ fn test_remove_recipient() {
 #[test]
 fn test_update_recipient_share() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -168,7 +169,7 @@ fn test_update_recipient_share() {
 #[should_panic(expected = "Error(TotalSharesExceeded)")]
 fn test_update_recipient_share_exceeds_total() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -187,7 +188,7 @@ fn test_update_recipient_share_exceeds_total() {
 #[test]
 fn test_transfer_admin() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -204,7 +205,7 @@ fn test_transfer_admin() {
 #[test]
 fn test_update_token() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -221,7 +222,7 @@ fn test_update_token() {
 #[test]
 fn test_distribute() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -256,7 +257,7 @@ fn test_distribute() {
 #[should_panic(expected = "Error(ZeroAmount)")]
 fn test_distribute_zero_amount() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -273,7 +274,7 @@ fn test_distribute_zero_amount() {
 #[should_panic(expected = "Error(NoRecipients)")]
 fn test_distribute_no_recipients() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -287,7 +288,7 @@ fn test_distribute_no_recipients() {
 #[test]
 fn test_get_default_values() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -302,7 +303,7 @@ fn test_get_default_values() {
 #[test]
 fn test_reset_parameters() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -337,7 +338,7 @@ fn test_reset_parameters() {
 #[should_panic(expected = "Error(Unauthorized)")]
 fn test_reset_parameters_unauthorized() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -352,7 +353,7 @@ fn test_reset_parameters_unauthorized() {
 #[test]
 fn test_propose_action() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -376,7 +377,7 @@ fn test_propose_action() {
 #[should_panic(expected = "Error(Unauthorized)")]
 fn test_propose_action_unauthorized() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -395,7 +396,7 @@ fn test_propose_action_unauthorized() {
 #[test]
 fn test_advance_action() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -422,7 +423,7 @@ fn test_advance_action() {
 #[should_panic(expected = "Error(CooldownNotExpired)")]
 fn test_advance_action_too_soon() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -443,7 +444,7 @@ fn test_advance_action_too_soon() {
 #[test]
 fn test_execute_action() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -479,7 +480,7 @@ fn test_execute_action() {
 #[test]
 fn test_cancel_action() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -502,7 +503,7 @@ fn test_cancel_action() {
 #[test]
 fn test_get_cooldown_remaining() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -523,7 +524,7 @@ fn test_get_cooldown_remaining() {
 #[test]
 fn test_configure_cooldown_stage() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);
@@ -541,7 +542,7 @@ fn test_configure_cooldown_stage() {
 #[should_panic(expected = "Error(InvalidStage)")]
 fn test_configure_cooldown_stage_invalid() {
     let env = Env::default();
-    let contract_id = env.register(RewardSplitter, ());
+    let contract_id = env.register_contract(None, RewardSplitter);
     let client = RewardSplitterClient::new(&env, &contract_id);
 
     let admin = Address::generate(&env);

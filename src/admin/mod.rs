@@ -1,4 +1,7 @@
 pub mod cleanup;
+pub mod prune;
+
+pub use prune::{prune_expired_keys, PruneTarget};
 
 use soroban_sdk::{contracttype, symbol_short, Address, Env, Symbol, TryFromVal, Val, Vec};
 use crate::{ContractData, ContractError, DATA_KEY, SIGNERS_KEY, REVOKED_SIGNER_KEY};
@@ -191,7 +194,7 @@ pub fn propose_emergency_revocation(
 
     // Guard: only one active emergency proposal at a time.
     if has_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY) {
-        return Err(ContractError::EmergencyRevocAlreadyActive);
+        return Err(ContractError::EmergencyRevocationAlreadyActive);
     }
 
     // The target must currently be a signer or the admin.
@@ -492,7 +495,7 @@ pub fn countersign_admin_change(
     contract_data.admin = proposal.new_admin;
     env.storage().instance().set(&DATA_KEY, &contract_data);
     env.storage().instance().remove(&PENDING_ADMIN_KEY);
-    crate::kernel::instance::bump_instance_ttl(env);
+    crate::instance::bump_instance_ttl(env);
     Ok(())
 }
 
@@ -510,7 +513,7 @@ pub fn execute_admin_change_by_timelock(
 
     let elapsed = env.ledger().timestamp().saturating_sub(proposal.proposed_at);
     if elapsed < ADMIN_CHANGE_TIMELOCK_SECONDS {
-        return Err(ContractError::AdminChangeTimelockNotSatis);
+        return Err(ContractError::AdminTimelockNotSatisfied);
     }
 
     let data: ContractData = env

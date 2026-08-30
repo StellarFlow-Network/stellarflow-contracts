@@ -4,7 +4,7 @@
 //! `INTERIOR_SCALE` (10^14) before division, then normalize back to the
 //! standard 10^7 fixed-point footprint prior to ledger mutations.
 
-use crate::{AssetId, ContractError, TimeLockedUpgradeContract};
+use crate::{AssetId, ContractData, ContractError, TimeLockedUpgradeContract, DATA_KEY};
 use soroban_sdk::{contracttype, Address, Env, Vec};
 
 pub const STANDARD_FIXED_POINT_SCALE: i128 = 10_000_000;
@@ -33,6 +33,28 @@ pub enum FeesStorageKey {
     CorridorPool(AssetId),
     VolumeHistory(AssetId),
     DynamicFee(AssetId),
+    FlashLoanPool(AssetId),
+}
+
+/// Separate fee tracking pool for flash loan revenue.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct FlashLoanFeePool {
+    pub asset: AssetId,
+    pub accumulated_fees: u64,
+    pub total_lp_distributed: u64,
+    pub total_treasury_distributed: u64,
+}
+
+impl FlashLoanFeePool {
+    pub fn new(asset: AssetId) -> Self {
+        Self {
+            asset,
+            accumulated_fees: 0,
+            total_lp_distributed: 0,
+            total_treasury_distributed: 0,
+        }
+    }
 }
 
 /// Historical volume tracking to calculate volume delta
@@ -218,7 +240,11 @@ pub fn add_corridor_fees(
     admin.require_auth();
     // Reject dust deposits that fall below the minimum transfer threshold.
     crate::validation::dust::check_min_transfer(collected)?;
-    let data = TimeLockedUpgradeContract::load_data(&env)?;
+    let data: ContractData = env
+        .storage()
+        .instance()
+        .get(&DATA_KEY)
+        .ok_or(ContractError::NotInitialized)?;
     if data.admin != admin {
         return Err(ContractError::NotAdmin);
     }
@@ -353,7 +379,11 @@ pub fn set_dynamic_fee_config(
     period_seconds: u64,
 ) -> Result<(), ContractError> {
     caller.require_auth();
-    let data = TimeLockedUpgradeContract::load_data(env)?;
+    let data: ContractData = env
+        .storage()
+        .instance()
+        .get(&DATA_KEY)
+        .ok_or(ContractError::NotInitialized)?;
     if data.admin != *caller {
         return Err(ContractError::NotAdmin);
     }
@@ -396,7 +426,11 @@ pub fn set_corridor_weight(
     dynamic_weight: u64,
 ) -> Result<CorridorWeightProfile, ContractError> {
     admin.require_auth();
-    let data = TimeLockedUpgradeContract::load_data(&env)?;
+    let data: ContractData = env
+        .storage()
+        .instance()
+        .get(&DATA_KEY)
+        .ok_or(ContractError::NotInitialized)?;
     if data.admin != admin {
         return Err(ContractError::NotAdmin);
     }
@@ -474,10 +508,134 @@ pub fn distribute_variable_fee_pool(
     Ok(profiles)
 }
 
+// ---------------------------------------------------------------------------
+// Flash Loan Fee Distribution Handlers (#764)
+// ---------------------------------------------------------------------------
+
+/// Record flash loan fee revenue for a given asset.
+pub fn record_flash_fee(env: &Env, asset: AssetId, amount: u64) -> Result<u64, ContractError> {
+    if amount == 0 {
+        return Ok(0);
+    }
+    let key = FeesStorageKey::FlashLoanPool(asset);
+    let mut pool: FlashLoanFeePool = env
+        .storage()
+        .instance()
+        .get(&key)
+        .unwrap_or_else(|| FlashLoanFeePool::new(asset));
+
+    pool.accumulated_fees = pool
+        .accumulated_fees
+        .checked_add(amount)
+        .ok_or(ContractError::Overflow)?;
+
+    env.storage().instance().set(&key, &pool);
+    Ok(pool.accumulated_fees)
+}
+
+/// Retrieve the current flash loan fee pool for an asset.
+pub fn get_flash_fee_pool(env: &Env, asset: AssetId) -> FlashLoanFeePool {
+    let key = FeesStorageKey::FlashLoanPool(asset);
+    env.storage()
+        .instance()
+        .get(&key)
+        .unwrap_or_else(|| FlashLoanFeePool::new(asset))
+}
+
+/// Set the LP reward pool destination address for flash fee distributions.
+pub fn set_lp_reward_pool(env: &Env, admin: &Address, lp_reward_pool: Address) -> Result<(), ContractError> {
+    admin.require_auth();
+    let data: crate::ContractData = env
+        .storage()
+        .instance()
+        .get(&crate::DATA_KEY)
+        .ok_or(ContractError::NotInitialized)?;
+    if data.admin != *admin {
+        return Err(ContractError::NotAdmin);
+    }
+    env.storage().instance().set(&crate::LP_REWARD_POOL_KEY, &lp_reward_pool);
+    Ok(())
+}
+
+/// Get the LP reward pool address (falls back to DAO treasury if not configured).
+pub fn get_lp_reward_pool(env: &Env) -> Result<Address, ContractError> {
+    if let Some(pool) = env.storage().instance().get::<_, Address>(&crate::LP_REWARD_POOL_KEY) {
+        Ok(pool)
+    } else {
+        env.storage()
+            .instance()
+            .get::<_, Address>(&crate::TREASURY_KEY)
+            .ok_or(ContractError::NotInitialized)
+    }
+}
+
+/// Distribute accumulated flash loan service fees: 50% to LP reward pool and 50% to DAO treasury.
+/// Emits `FlashLoanFeesDistributed` event with token breakdown.
+pub fn distribute_flash_fees(
+    env: &Env,
+    caller: &Address,
+    asset: AssetId,
+) -> Result<(u64, u64), ContractError> {
+    caller.require_auth();
+    let key = FeesStorageKey::FlashLoanPool(asset);
+    let mut pool: FlashLoanFeePool = env
+        .storage()
+        .instance()
+        .get(&key)
+        .unwrap_or_else(|| FlashLoanFeePool::new(asset));
+
+    if pool.accumulated_fees == 0 {
+        return Ok((0, 0));
+    }
+
+    let total = pool.accumulated_fees;
+    let lp_share = total / 2;
+    let treasury_share = total - lp_share;
+
+    let treasury: Address = env
+        .storage()
+        .instance()
+        .get(&crate::TREASURY_KEY)
+        .ok_or(ContractError::NotInitialized)?;
+
+    let lp_reward_pool: Address = env
+        .storage()
+        .instance()
+        .get::<_, Address>(&crate::LP_REWARD_POOL_KEY)
+        .unwrap_or_else(|| treasury.clone());
+
+    pool.accumulated_fees = 0;
+    pool.total_lp_distributed = pool
+        .total_lp_distributed
+        .checked_add(lp_share)
+        .ok_or(ContractError::Overflow)?;
+    pool.total_treasury_distributed = pool
+        .total_treasury_distributed
+        .checked_add(treasury_share)
+        .ok_or(ContractError::Overflow)?;
+
+    env.storage().instance().set(&key, &pool);
+
+    // Emit FlashLoanFeesDistributed event
+    crate::events::publish_flash_fees_distributed(
+        env,
+        crate::events::FlashLoanFeesDistributedEvent {
+            asset,
+            total_amount: total,
+            lp_share,
+            treasury_share,
+            lp_reward_pool: lp_reward_pool.clone(),
+            treasury: treasury.clone(),
+        },
+    );
+
+    Ok((lp_share, treasury_share))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::TimeLockedUpgradeContractClient;
+    use crate::{TimeLockedUpgradeContract, TimeLockedUpgradeContractClient};
     use soroban_sdk::testutils::Address as _;
 
     fn setup() -> (Env, TimeLockedUpgradeContractClient<'static>, Address, Address) {
@@ -490,6 +648,33 @@ mod tests {
         let attacker = Address::generate(&env);
         client.initialize(&admin, &treasury);
         (env, client, admin, attacker)
+    }
+
+    #[test]
+    fn test_flash_loan_fee_accumulation_and_distribution() {
+        let (env, client, admin, _) = setup();
+        let asset: AssetId = 3897123275;
+        let lp_pool = Address::generate(&env);
+
+        // Set LP reward pool address
+        client.set_lp_reward_pool(&admin, &lp_pool);
+
+        // Record flash loan revenue
+        let acc = client.record_flash_fee(&asset, &1000u64);
+        assert_eq!(acc, 1000u64);
+
+        let pool_status = client.get_flash_fee_pool(&asset);
+        assert_eq!(pool_status.accumulated_fees, 1000u64);
+
+        // Distribute fees (50% to LP reward pool, 50% to DAO treasury)
+        let (lp_share, treasury_share) = client.distribute_flash_fees(&admin, &asset);
+        assert_eq!(lp_share, 500u64);
+        assert_eq!(treasury_share, 500u64);
+
+        let pool_after = client.get_flash_fee_pool(&asset);
+        assert_eq!(pool_after.accumulated_fees, 0u64);
+        assert_eq!(pool_after.total_lp_distributed, 500u64);
+        assert_eq!(pool_after.total_treasury_distributed, 500u64);
     }
 
     #[test]

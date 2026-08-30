@@ -523,6 +523,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4271d37baee1b8c7e4b708028c57d816cf9d2434acb33a549475f78c181f6253"
 
 [[package]]
+name = "governance-invariants"
+version = "0.0.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "group"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -706,6 +713,14 @@ name = "libm"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
+
+[[package]]
+name = "linear-vesting"
+version = "0.0.0"
+dependencies = [
+ "soroban-sdk",
+ "soroban-token-sdk",
+]
 
 [[package]]
 name = "linux-raw-sys"
@@ -953,6 +968,14 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "relayer-allowance"
+version = "0.0.0"
+dependencies = [
+ "soroban-sdk",
+ "soroban-token-sdk",
+]
 
 [[package]]
 name = "reward-splitter"
@@ -1394,6 +1417,7 @@ dependencies = [
 name = "stellarflow-contracts"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
  "ledger-time-helper",
  "soroban-sdk",
  "soroban-token-sdk",

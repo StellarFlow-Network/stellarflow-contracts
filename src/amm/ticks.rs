@@ -351,9 +351,9 @@ fn remove_tick_sorted(list: &mut Vec<i32>, tick: i32) {
 ///
 /// This is the core sub-linear lookup algorithm. For a sorted list of `n`
 /// ticks, this performs O(log n) `Vec::get` accesses.
-fn binary_search_tick(list: &Vec<i32>, target: i32) -> usize {
-    let mut lo: usize = 0;
-    let mut hi: usize = list.len();
+fn binary_search_tick(list: &Vec<i32>, target: i32) -> u32 {
+    let mut lo: u32 = 0;
+    let mut hi: u32 = list.len();
 
     while lo < hi {
         let mid = lo + (hi - lo) / 2;

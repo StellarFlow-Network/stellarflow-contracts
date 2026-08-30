@@ -53,6 +53,58 @@ fn nonce_proof(env: &Env, nonce: u64, salt_seed: &[u8]) -> (Bytes, soroban_sdk::
     (salt, signature)
 }
 
+#[test]
+fn test_flash_loan_fee_discount_selects_highest_volume_tier() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+    let admin = soroban_sdk::Address::generate(&env);
+    let treasury = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &treasury);
+
+    let tiers = soroban_sdk::vec![
+        &env,
+        FlashLoanFeeTier { min_volume: 1_000, discount_bps: 100 },
+        FlashLoanFeeTier { min_volume: 10_000, discount_bps: 500 },
+        FlashLoanFeeTier { min_volume: 100_000, discount_bps: 1_000 },
+    ];
+    client.set_flash_loan_fee_tiers(&admin, &tiers);
+
+    let quote = client.quote_flash_loan_fee(&10_000, &50_000);
+    assert_eq!(quote.tier_index, 1);
+    assert_eq!(quote.discount_bps, 500);
+    assert_eq!(quote.fee, 9_500);
+
+    let base_quote = client.quote_flash_loan_fee(&10_000, &999);
+    assert_eq!(base_quote.discount_bps, 0);
+    assert_eq!(base_quote.fee, 10_000);
+}
+
+#[test]
+fn test_flash_loan_fee_tiers_reject_unsorted_or_excessive_discount() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+    let admin = soroban_sdk::Address::generate(&env);
+    let treasury = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &treasury);
+
+    let invalid = soroban_sdk::vec![
+        &env,
+        FlashLoanFeeTier { min_volume: 10_000, discount_bps: 100 },
+        FlashLoanFeeTier { min_volume: 1_000, discount_bps: 10_001 },
+    ];
+    assert_eq!(client.try_set_flash_loan_fee_tiers(&admin, &invalid), Err(Ok(ContractError::InvalidFlashLoanFeeTier)));
+
+    let excessive = soroban_sdk::vec![
+        &env,
+        FlashLoanFeeTier { min_volume: 1_000, discount_bps: 10_001 },
+    ];
+    assert_eq!(client.try_set_flash_loan_fee_tiers(&admin, &excessive), Err(Ok(ContractError::InvalidFlashLoanFeeDiscount)));
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // Existing tests
 // ═════════════════════════════════════════════════════════════════════════════
@@ -101,11 +153,11 @@ fn test_schema_version_migration_converts_legacy_state() {
     assert_eq!(data.admin, admin);
     assert_eq!(data.value, 0);
 
-    assert!(env.storage().persistent().has(&crate::storage::NodeProfileKey(admin.clone())));
-    assert!(env.storage().instance().has(&crate::storage::SignerKey(admin.clone())));
-    assert!(env.storage().instance().has(&crate::storage::StakeKey(admin.clone())));
-    assert_eq!(env.storage().instance().get(&crate::TOTAL_STAKED_KEY).unwrap(), 123u64);
-    assert!(env.storage().temporary().has(&crate::storage::HeartbeatKey(0u32)));
+    assert!(env.storage().persistent().has(&crate::storage::NodeProfileKey::ProfileByNode(admin.clone())));
+    assert!(env.storage().instance().has(&crate::storage::SignerKey::SignerByAddress(admin.clone())));
+    assert!(env.storage().instance().has(&crate::storage::StakeKey::StakeByNode(admin.clone())));
+    assert_eq!(env.storage().instance().get::<_, u64>(&crate::TOTAL_STAKED_KEY).unwrap(), 123u64);
+    assert!(env.storage().temporary().has(&crate::storage::HeartbeatKey::HeartbeatByAsset(0u32)));
 }
 
 #[test]
@@ -1370,7 +1422,7 @@ fn test_timelock_path_rejected_before_delay() {
     client.propose_admin_change(&admin, &new_admin);
     // Attempt immediate execution without waiting
     let result = client.try_execute_admin_change_by_timelock(&admin);
-    assert_eq!(result, Err(Ok(ContractError::AdminChangeTimelockNotSatisfied)));
+    assert_eq!(result, Err(Ok(ContractError::AdminTimelockNotSatisfied)));
 }
 
 #[test]
@@ -1621,5 +1673,87 @@ fn test_reentrancy_guard_blocks_reentrant_calls() {
         crate::security::reentrancy::unlock(&env);
         assert!(!crate::security::reentrancy::is_locked(&env));
     });
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Zero-Knowledge Anonymity Set Deposit Merkle Verifier Tests (Issue #767)
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_zk_merkle_deposit_and_withdrawal_flow() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let treasury = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &treasury);
+
+    let commitment_0 = soroban_sdk::BytesN::from_array(&env, &[1u8; 32]);
+    let (leaf_idx, root_0) = client.deposit_commitment(&commitment_0);
+    assert_eq!(leaf_idx, 0);
+    assert_eq!(client.get_anonymity_set_root(), Some(root_0.clone()));
+    assert!(client.is_merkle_root_valid(&root_0));
+
+    // Build Merkle proof path for leaf 0
+    let mut path = soroban_sdk::Vec::new(&env);
+    for level in 0..crate::zk::merkle::TREE_DEPTH {
+        path.push_back(crate::zk::merkle::get_zero_hash(&env, level));
+    }
+
+    let nullifier = soroban_sdk::BytesN::from_array(&env, &[77u8; 32]);
+    assert!(!client.is_nullifier_spent(&nullifier));
+
+    // Verify valid withdrawal
+    let verify_res = client.verify_zk_withdrawal(&root_0, &nullifier, &commitment_0, &path, &0);
+    assert_eq!(verify_res, true);
+    assert!(client.is_nullifier_spent(&nullifier));
+
+    // Double spending: same nullifier should fail with NullifierAlreadyUsed
+    let double_spend_res = client.try_verify_zk_withdrawal(&root_0, &nullifier, &commitment_0, &path, &0);
+    assert_eq!(double_spend_res, Err(Ok(ContractError::NullifierAlreadyUsed)));
+}
+
+#[test]
+fn test_zk_merkle_withdrawal_reverts_on_unverified_or_expired_root() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let treasury = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &treasury);
+
+    let fake_root = soroban_sdk::BytesN::from_array(&env, &[0xee; 32]);
+    let commitment = soroban_sdk::BytesN::from_array(&env, &[10u8; 32]);
+    let nullifier = soroban_sdk::BytesN::from_array(&env, &[20u8; 32]);
+
+    let mut path = soroban_sdk::Vec::new(&env);
+    for level in 0..crate::zk::merkle::TREE_DEPTH {
+        path.push_back(crate::zk::merkle::get_zero_hash(&env, level));
+    }
+
+    // 1. Unverified root
+    let res = client.try_verify_zk_withdrawal(&fake_root, &nullifier, &commitment, &path, &0);
+    assert_eq!(res, Err(Ok(ContractError::InvalidMerkleProof)));
+    assert!(!client.is_nullifier_spent(&nullifier));
+
+    // 2. Expired root test
+    env.ledger().set_timestamp(1_000_000);
+    client.set_merkle_root_validity_window(&admin, &3600); // 1 hour validity
+    assert_eq!(client.get_merkle_root_validity_window(), 3600);
+
+    let (leaf_idx, valid_root) = client.deposit_commitment(&commitment);
+    assert_eq!(leaf_idx, 0);
+
+    // Fast forward timestamp past 1 hour
+    env.ledger().set_timestamp(1_000_000 + 3601);
+    assert!(!client.is_merkle_root_valid(&valid_root));
+
+    let expired_res = client.try_verify_zk_withdrawal(&valid_root, &nullifier, &commitment, &path, &0);
+    assert_eq!(expired_res, Err(Ok(ContractError::InvalidMerkleProof)));
+    assert!(!client.is_nullifier_spent(&nullifier));
 }
 

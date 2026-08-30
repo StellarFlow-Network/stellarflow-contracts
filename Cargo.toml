@@ -8,13 +8,17 @@ description = "StellarFlow smart contracts with time-locked upgrade mechanism"
 [workspace]
 members = [
     "contracts/analytics-engine",
+    "contracts/governance-invariants",
     "contracts/hello-world",
     "contracts/ledger-time-helper",
     "contracts/liquidity-lock",
+    "contracts/linear-vesting",
     "contracts/price-oracle",
     "contracts/reward-splitter",
     "contracts/gas-tank",
+    "contracts/relayer-allowance",
     "contracts/stop-loss-trigger",
+    "contracts/shielded-remittance-escrow",
     "tests/benchmarks",
     "tests/fuzz",
 ]
@@ -40,6 +44,7 @@ ledger-time-helper = { path = "contracts/ledger-time-helper" }
 
 [dev-dependencies]
 soroban-sdk = { version = "=20.0.0", default-features = false, features = ["testutils"] }
+ed25519-dalek = "2.0.0"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

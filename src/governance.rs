@@ -39,6 +39,27 @@ impl Default for GovernanceConfig {
     }
 }
 
+/// Proposal state enumeration for governance lifecycle management.
+///
+/// Proposals transition through states as they move through voting, approval,
+/// and execution phases. The `Vetoed` state is terminal and prevents execution.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProposalState {
+    /// Proposal has been created and is awaiting voting.
+    Pending,
+    /// Proposal is currently in the voting/discussion phase.
+    Active,
+    /// Proposal has been approved by the required threshold and awaits execution.
+    Approved,
+    /// Proposal was rejected during voting (failed to reach threshold).
+    Rejected,
+    /// Proposal has been executed and is complete.
+    Executed,
+    /// Proposal was vetoed by the Security Council (terminal state).
+    Vetoed,
+}
+
 /// Get multi-signature weight configuration for WASM upgrade governance
 pub fn get_multisig_config(env: &Env) -> MultiSigConfig {
     env.storage()
@@ -256,7 +277,7 @@ pub fn open_ballot(
     };
     env.storage().temporary().set(&key, &ballot);
     env.storage().temporary().extend_ttl(&key, BALLOT_TTL_THRESHOLD, BALLOT_TTL_LEDGERS);
-    crate::kernel::instance::bump_instance_ttl(env);
+    crate::instance::bump_instance_ttl(env);
     Ok(())
 }
 
@@ -277,7 +298,7 @@ pub fn cast_vote(
     ballot.votes.set(voter, ());
     env.storage().temporary().set(&key, &ballot);
     env.storage().temporary().extend_ttl(&key, BALLOT_TTL_THRESHOLD, BALLOT_TTL_LEDGERS);
-    crate::kernel::instance::bump_instance_ttl(env);
+    crate::instance::bump_instance_ttl(env);
     Ok(ballot)
 }
 
@@ -287,7 +308,7 @@ pub fn get_ballot(env: &Env, proposal_id: Symbol) -> Option<VotingBallot> {
 
 pub fn close_ballot(env: &Env, proposal_id: Symbol) {
     env.storage().temporary().remove(&BallotKey::Proposal(proposal_id));
-    crate::kernel::instance::bump_instance_ttl(env);
+    crate::instance::bump_instance_ttl(env);
 }
 
 pub fn verify_block_height(target_height: u32, active_index: u32) -> bool {

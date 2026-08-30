@@ -3653,6 +3653,16 @@ impl PriceOracle {
             .persistent()
             .has(&crate::auth::DataKey::VeflowLockContract)
         {
+            let lock_contract: Address = env
+                .storage()
+                .persistent()
+                .get(&crate::auth::DataKey::VeflowLockContract)
+                .unwrap();
+            let _: () = env.invoke_contract(
+                &lock_contract,
+                &Symbol::new(&env, "checkpoint_reclaim_on_vote"),
+                soroban_sdk::vec![&env, voter.clone().to_val()],
+            );
             return Self::record_vote(&env, &voter, action_id, true);
         }
 
