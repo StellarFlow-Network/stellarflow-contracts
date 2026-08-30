@@ -87,6 +87,7 @@ pub mod staking_tiers;
 pub mod router;
 pub mod settlement;
 pub mod storage;
+pub mod twap;
 pub mod zk;
 pub mod temp_governance;
 pub mod security;
@@ -872,6 +873,50 @@ impl TimeLockedUpgradeContract {
         let outcome = process_price_bundle(&env, &node, &updates)?;
         Self::_extend_instance_ttl(&env);
         Ok(outcome)
+    }
+
+    // ── Automated TWAP Oracle (Issue #722) ──────────────────────────────────
+
+    /// Ring-buffer capacity currently configured for the TWAP oracle.
+    pub fn get_twap_buffer_capacity(env: Env) -> u32 {
+        twap::buffer_capacity(&env)
+    }
+
+    /// Configure the TWAP ring-buffer capacity (admin only).
+    pub fn set_twap_buffer_capacity(
+        env: Env,
+        admin: Address,
+        capacity: u32,
+    ) -> Result<u32, ContractError> {
+        crate::staging::check_staging_access(&env, &admin)?;
+        let data = Self::_load_data(&env)?;
+        if data.admin != admin {
+            return Err(ContractError::NotAdmin);
+        }
+        admin.require_auth();
+        Ok(twap::set_buffer_capacity(&env, capacity))
+    }
+
+    /// Number of price observations currently retained for `asset`.
+    pub fn twap_observation_count(env: Env, asset: AssetId) -> u32 {
+        twap::observation_count(&env, asset)
+    }
+
+    /// Record a price observation for `asset` into the TWAP ring buffer.
+    /// Returns the number of observations retained for the asset.
+    pub fn record_twap_observation(
+        env: Env,
+        asset: AssetId,
+        price: u64,
+    ) -> Result<u32, ContractError> {
+        twap::record_price(&env, asset, price);
+        Ok(twap::observation_count(&env, asset))
+    }
+
+    /// Manipulation-resistant average price for `asset` over `time_window`
+    /// seconds (see [`crate::twap`]).
+    pub fn get_twap(env: Env, asset: AssetId, time_window: u64) -> Option<u64> {
+        twap::get_twap(&env, asset, time_window)
     }
 
     // ── Dynamic Staking Tier Assignment (Issue #300) ─────────────────────────

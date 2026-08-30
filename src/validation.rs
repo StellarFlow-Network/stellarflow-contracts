@@ -229,9 +229,13 @@ pub fn process_price_bundle(
     // Phase 2 — single-pass linear scan using pre-computed index fields.
     let mut accepted: u32 = 0;
 
-    for entry in index.iter() {
+    for i in 0..index.len() {
+        let entry = index.get(i).unwrap();
         check_bond_capacity(env, node, &entry.pool_symbol)?;
         verify_payload_freshness(env, entry.timestamp)?;
+        // Feed every accepted observation into the per-asset TWAP ring buffer.
+        let update = updates.get(i).unwrap();
+        crate::twap::record_price(env, entry.asset, update.price);
         accepted += 1;
     }
 
