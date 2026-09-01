@@ -37,14 +37,8 @@ exclude = ["tests/fuzz/fuzz"]
 resolver = "2"
 
 [workspace.dependencies]
-# Features named here are inherited by every member that writes
-# `soroban-sdk.workspace = true`, and a member's `default-features = false`
-# cannot drop them. Listing `testutils` here therefore forced it into the
-# *normal* dependency graph — including `ledger-time-helper`, which the root
-# crate depends on — and `testutils` needs `std` and `rand`, so the release
-# WASM build could not compile. Every member already asks for it explicitly in
-# its own [dev-dependencies].
 soroban-sdk = { version = "=20.0.0", default-features = false }
+soroban-token-sdk = { version = "=20.0.0", default-features = false }
 
 [dependencies]
 # No `testutils` here: it pulls in `std` and `rand`, which do not build for
