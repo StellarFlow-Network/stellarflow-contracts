@@ -89,6 +89,7 @@ pub mod governance;
 pub mod math;
 pub mod orders;
 pub mod recovery;
+pub mod rescue;
 pub mod roles;
 pub mod router;
 pub mod security;
@@ -234,6 +235,14 @@ pub enum ContractError {
     TickOutOfBounds = 73,
     /// Too many initialized ticks for a single pool.
     TooManyTicks = 74,
+    /// Protected asset (primary pool or vault reserve) cannot be rescued.
+    ProtectedAssetNotRescueable = 75,
+    /// Token rescue proposal was not found.
+    RescueProposalNotFound = 76,
+    /// Token rescue proposal is not pending.
+    RescueProposalNotPending = 77,
+    /// Mandatory timelock delay has not expired yet.
+    RescueTimelockNotExpired = 78,
 }
 
 impl ContractError {
@@ -1554,6 +1563,60 @@ impl TimeLockedUpgradeContract {
     /// Check if a proposal has been vetoed.
     pub fn is_proposal_vetoed(env: Env, proposal_id: u64) -> bool {
         veto::is_proposal_vetoed(&env, proposal_id)
+    }
+
+    // ── Timelocked Protocol Treasury Emergency Rescue Handler (Issue #783) ───
+
+    /// Register a token address as a protected asset (primary pool or vault reserve asset).
+    /// Protected assets CANNOT be extracted via emergency rescue.
+    pub fn register_protected_asset(
+        env: Env,
+        caller: Address,
+        asset: Address,
+    ) -> Result<(), ContractError> {
+        rescue::register_protected_asset(&env, caller, asset)
+    }
+
+    /// Check if a token address is a protected asset.
+    pub fn is_protected_asset(env: Env, asset: Address) -> bool {
+        rescue::is_protected_asset(&env, &asset)
+    }
+
+    /// Queue a governance proposal for recovering mis-sent non-protocol tokens.
+    pub fn queue_token_rescue(
+        env: Env,
+        proposer: Address,
+        token: Address,
+        amount: i128,
+        recipient: Address,
+    ) -> Result<u64, ContractError> {
+        rescue::queue_token_rescue(&env, proposer, token, amount, recipient)
+    }
+
+    /// Execute token transfer to treasury address once mandatory timelock expires.
+    pub fn execute_token_rescue(
+        env: Env,
+        executor: Address,
+        proposal_id: u64,
+    ) -> Result<(), ContractError> {
+        rescue::execute_token_rescue(&env, executor, proposal_id)
+    }
+
+    /// Cancel a pending token rescue proposal during its timelock window.
+    pub fn cancel_token_rescue(
+        env: Env,
+        canceller: Address,
+        proposal_id: u64,
+    ) -> Result<(), ContractError> {
+        rescue::cancel_token_rescue(&env, canceller, proposal_id)
+    }
+
+    /// Get details of a rescue proposal by proposal ID.
+    pub fn get_rescue_proposal(
+        env: Env,
+        proposal_id: u64,
+    ) -> Option<rescue::RescueProposal> {
+        rescue::get_rescue_proposal(&env, proposal_id)
     }
 
     // ── Multi-Tier Escrow Penalties (Issue #525) ──────────────────────────────
