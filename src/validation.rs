@@ -27,6 +27,134 @@ pub use dust::{check_min_transfer, MIN_TRANSFER_AMOUNT};
 use soroban_sdk::{contracttype, symbol_short, Address, Env, Map, Symbol, Vec};
 
 use crate::{AssetId, ContractError, CONSENSUS_CACHE_KEY, STAKE_REGISTRY_KEY};
+/// Maximum number of distinct admin signer addresses allowed on a governing
+/// multi-sig account.
+pub const MAX_ADMIN_SIGNERS: u32 = 32;
+
+/// Persistent multi-sig admin configuration for a governing account.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminConfig {
+    pub signers: Vec<Address>,
+    pub threshold: u32,
+}
+
+/// Storage key for the current multi-sig admin configuration.
+#[contracttype]
+pub enum AdminStorageKey {
+    Config,
+}
+
+/// Load the current multi-sig admin configuration.
+pub fn get_admin_config(env: &Env) -> AdminConfig {
+    env.storage()
+        .instance()
+        .get(&AdminStorageKey::Config)
+        .unwrap_or_else(|| AdminConfig {
+            signers: Vec::new(env),
+            threshold: 0,
+        })
+}
+
+/// Initialize the multi-sig admin configuration. Used during contract setup.
+pub fn initialize_admin_keys(
+    env: &Env,
+    signers: Vec<Address>,
+    threshold: u32,
+) -> Result<AdminConfig, ContractError> {
+    validate_admin_key_set(env, &signers, threshold)?;
+
+    let config = AdminConfig { signers, threshold };
+    env.storage()
+        .instance()
+        .set(&AdminStorageKey::Config, &config);
+    Ok(config)
+}
+
+/// Rotate the full admin key set and threshold.
+///
+/// The rotation only succeeds if `approvals` contains at least the current
+/// threshold number of distinct signer addresses, and each of those addresses
+/// has authenticated for the current call.
+pub fn rotate_admin_keys(
+    env: &Env,
+    new_signers: Vec<Address>,
+    new_threshold: u32,
+    approvals: Vec<Address>,
+) -> Result<AdminConfig, ContractError> {
+    let current = get_admin_config(env);
+    if current.threshold == 0 {
+        return Err(ContractError::IncompleteQuorum);
+    }
+
+    let mut counted: Vec<Address> = Vec::new(env);
+    for approval in approvals.iter() {
+        let approval = approval.clone();
+        if contains_address(&current.signers, &approval) {
+            approval.require_auth();
+            if !contains_address(&counted, &approval) {
+                counted.push_back(approval.clone());
+            }
+        }
+    }
+
+    if counted.len() < current.threshold {
+        return Err(ContractError::IncompleteQuorum);
+    }
+
+    validate_admin_key_set(env, &new_signers, new_threshold)?;
+
+    let config = AdminConfig {
+        signers: new_signers.clone(),
+        threshold: new_threshold,
+    };
+    env.storage()
+        .instance()
+        .set(&AdminStorageKey::Config, &config);
+
+    env.events().publish(
+        (Symbol::new(env, "AdminKeysRotated"),),
+        new_signers.clone(),
+    );
+
+    Ok(config)
+}
+
+/// Validate that an admin key set is non-empty, duplicate-free, and has a
+/// threshold between one and the total number of signers.
+fn validate_admin_key_set(
+    env: &Env,
+    signers: &Vec<Address>,
+    threshold: u32,
+) -> Result<(), ContractError> {
+    if signers.len() == 0 || signers.len() > MAX_ADMIN_SIGNERS {
+        return Err(ContractError::IncompleteQuorum);
+    }
+    if threshold == 0 || threshold > signers.len() {
+        return Err(ContractError::IncompleteQuorum);
+    }
+
+    let mut unique: Vec<Address> = Vec::new(env);
+    for signer in signers.iter() {
+        let signer = signer.clone();
+        if contains_address(&unique, &signer) {
+            return Err(ContractError::IncompleteQuorum);
+        }
+        unique.push_back(signer);
+    }
+
+    Ok(())
+}
+
+/// Returns true when `target` appears in `addresses`.
+fn contains_address(addresses: &Vec<Address>, target: &Address) -> bool {
+    for i in 0..addresses.len() {
+        if addresses.get(i).unwrap() == target.clone() {
+            return true;
+        }
+    }
+    false
+}
 
 /// Minimum stake (in the same units as `StakeRecord.amount`) required to
 /// update a validator profile for a premium asset pool.

@@ -518,6 +518,7 @@ fn calculate_actual_slippage_bps(expected_output: i128, actual_output: i128) -> 
 /// Returns `Error::SlippageToleranceExceeded` if output is below acceptable minimum
 pub fn execute_swap_with_dynamic_slippage(
     env: &Env,
+    sender: Address,
     from_asset: Symbol,
     to_asset: Symbol,
     amount_in: i128,
@@ -593,20 +594,14 @@ pub fn execute_swap_with_dynamic_slippage(
         // Calculate actual slippage for rejection event
         let actual_slippage_bps = calculate_actual_slippage_bps(expected_output, actual_output)?;
         
-        // Emit rejection event
-        let rejection_event = SlippageRejectionEvent {
-            from_asset: from_asset.clone(),
-            to_asset: to_asset.clone(),
+        // Emit rejection event with uniform swap topic and tuple payload
+        crate::event_topics::publish_swap(
+            env,
+            from_asset.clone(),
+            sender,
             amount_in,
-            amount_out: actual_output,
-            min_acceptable: effective_min_output,
-            deviation_bps: actual_slippage_bps,
-            allowed_slippage_bps: applied_slippage_bps,
-        };
-        
-        env.events().publish(
-            (crate::event_topics::SWAP, crate::event_topics::REJECTED),
-            rejection_event,
+            actual_output,
+            0, // No fee charged on rejected swaps
         );
         
         return Err(Error::SlippageToleranceExceeded);
@@ -616,21 +611,14 @@ pub fn execute_swap_with_dynamic_slippage(
     update_volatility_metrics(env, from_asset.clone(), from_price)?;
     update_volatility_metrics(env, to_asset.clone(), to_price)?;
     
-    // Emit successful execution event
-    let execution_event = SwapExecutionEvent {
+    // Emit successful execution event with uniform swap topic and tuple payload
+    crate::event_topics::publish_swap(
+        env,
         from_asset,
-        to_asset,
+        sender,
         amount_in,
-        amount_out: actual_output,
-        expected_rate: rate,
-        actual_rate: rate, // Same for oracle-based pricing
-        dynamic_slippage_bps,
-        applied_slippage_bps,
-    };
-    
-    env.events().publish(
-        (crate::event_topics::SWAP, crate::event_topics::EXECUTED),
-        execution_event,
+        actual_output,
+        0, // Price oracle does not charge swap fees
     );
     
     Ok(actual_output)
@@ -660,6 +648,7 @@ pub fn execute_swap_with_dynamic_slippage(
 /// Returns `Error::SlippageToleranceExceeded` if output is below acceptable minimum
 pub fn execute_swap_with_manual_slippage(
     env: &Env,
+    sender: Address,
     from_asset: Symbol,
     to_asset: Symbol,
     amount_in: i128,
@@ -706,19 +695,14 @@ pub fn execute_swap_with_manual_slippage(
     if actual_output < min_output {
         let actual_slippage_bps = calculate_actual_slippage_bps(expected_output, actual_output)?;
         
-        let rejection_event = SlippageRejectionEvent {
-            from_asset: from_asset.clone(),
-            to_asset: to_asset.clone(),
+        // Emit rejection event with uniform swap topic and tuple payload
+        crate::event_topics::publish_swap(
+            env,
+            from_asset.clone(),
+            sender,
             amount_in,
-            amount_out: actual_output,
-            min_acceptable: min_output,
-            deviation_bps: actual_slippage_bps,
-            allowed_slippage_bps: manual_slippage_bps,
-        };
-        
-        env.events().publish(
-            (crate::event_topics::SWAP, crate::event_topics::REJECTED),
-            rejection_event,
+            actual_output,
+            0, // No fee charged on rejected swaps
         );
         
         return Err(Error::SlippageToleranceExceeded);
@@ -728,21 +712,14 @@ pub fn execute_swap_with_manual_slippage(
     update_volatility_metrics(env, from_asset.clone(), from_price)?;
     update_volatility_metrics(env, to_asset.clone(), to_price)?;
     
-    // Emit execution event
-    let execution_event = SwapExecutionEvent {
+    // Emit execution event with uniform swap topic and tuple payload
+    crate::event_topics::publish_swap(
+        env,
         from_asset,
-        to_asset,
+        sender,
         amount_in,
-        amount_out: actual_output,
-        expected_rate: rate,
-        actual_rate: rate,
-        dynamic_slippage_bps: manual_slippage_bps, // Used manual, not dynamic
-        applied_slippage_bps: manual_slippage_bps,
-    };
-    
-    env.events().publish(
-        (crate::event_topics::SWAP, crate::event_topics::EXECUTED),
-        execution_event,
+        actual_output,
+        0, // Price oracle does not charge swap fees
     );
     
     Ok(actual_output)
@@ -909,6 +886,7 @@ mod tests {
     #[test]
     fn test_execute_swap_with_acceptable_slippage() {
         let env = Env::default();
+        let sender = Address::generate(&env);
         let from_asset = symbol_short!("NGN");
         let to_asset = symbol_short!("KES");
         
@@ -919,6 +897,7 @@ mod tests {
         
         let result = execute_swap_with_dynamic_slippage(
             &env,
+            sender,
             from_asset,
             to_asset,
             amount_in,
@@ -935,6 +914,7 @@ mod tests {
     #[test]
     fn test_execute_swap_with_manual_override() {
         let env = Env::default();
+        let sender = Address::generate(&env);
         let from_asset = symbol_short!("GHS");
         let to_asset = symbol_short!("NGN");
         
@@ -948,6 +928,7 @@ mod tests {
         
         let result = execute_swap_with_dynamic_slippage(
             &env,
+            sender,
             from_asset,
             to_asset,
             amount_in,

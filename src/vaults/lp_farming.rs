@@ -173,8 +173,30 @@ pub fn stake(env: &Env, user: Address, amount: i128) -> Result<i128, ContractErr
     if amount <= 0 {
         return Err(ContractError::InvalidStakeAmount);
     }
-    let config = load_config(env)?;
+    load_config(env)?;
     user.require_auth();
+    stake_preauthorized(env, user, amount)
+}
+
+/// [`stake`] without the `require_auth` call.
+///
+/// Soroban allows only one `require_auth` per address per invocation frame —
+/// a second one aborts the host rather than returning an error. Callers that
+/// have already asserted `user`'s authorization earlier in the same frame
+/// (see [`crate::vaults::harvest_compound::harvest_and_compound`], where
+/// [`claim_rewards`] does it) must use this entry point instead of [`stake`].
+///
+/// Not exported as a contract entry point: reaching it always requires having
+/// authorized `user` first.
+pub(crate) fn stake_preauthorized(
+    env: &Env,
+    user: Address,
+    amount: i128,
+) -> Result<i128, ContractError> {
+    if amount <= 0 {
+        return Err(ContractError::InvalidStakeAmount);
+    }
+    let config = load_config(env)?;
     let acc_reward_per_share = update_pool(env, &config)?;
     settle_user(env, &user, acc_reward_per_share)?;
     token::Client::new(env, &config.lp_token).transfer(
@@ -183,7 +205,22 @@ pub fn stake(env: &Env, user: Address, amount: i128) -> Result<i128, ContractErr
         &amount,
     );
     let shares = read_i128(env, &FarmingStorageKey::Shares(user.clone()));
-    write_i128(env, &FarmingStorageKey::Shares(user.clone()), shares.checked_add(amount).ok_or(ContractError::MathOverflow)?);
+    let new_shares = shares.checked_add(amount).ok_or(ContractError::MathOverflow)?;
+    write_i128(env, &FarmingStorageKey::Shares(user.clone()), new_shares);
+    // Re-baseline the reward debt against the *post-stake* share count.
+    // `settle_user` above set it from the old count, so without this the newly
+    // staked `amount` carries zero debt and the next settle credits it with
+    // `amount * acc_reward_per_share / REWARD_PRECISION` — the pool's entire
+    // accrued history, paid out on a stake that has earned nothing yet.
+    write_i128(
+        env,
+        &FarmingStorageKey::RewardDebt(user.clone()),
+        new_shares
+            .checked_mul(acc_reward_per_share)
+            .ok_or(ContractError::MathOverflow)?
+            .checked_div(REWARD_PRECISION)
+            .ok_or(ContractError::DivisionByZero)?,
+    );
     env.storage().instance().set(
         &FarmingStorageKey::TotalShares,
         &total_shares(env).checked_add(amount).ok_or(ContractError::MathOverflow)?,
@@ -227,7 +264,7 @@ pub fn exit(env: &Env, user: Address) -> Result<(i128, i128), ContractError> {
         write_i128(env, &FarmingStorageKey::Shares(user.clone()), 0);
         write_i128(
             env,
-            &FarmingStorageKey::RewardDebt(user),
+            &FarmingStorageKey::RewardDebt(user.clone()),
             0,
         );
         env.storage().instance().set(
@@ -283,4 +320,141 @@ pub fn pending_rewards(env: &Env, user: Address) -> Result<i128, ContractError> 
     Ok(read_i128(env, &FarmingStorageKey::AccruedRewards(user)).checked_add(
         accrued.checked_sub(reward_debt).ok_or(ContractError::MathOverflow)?,
     ).ok_or(ContractError::MathOverflow)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::testutils::{Address as _, Ledger};
+
+    const STAKE: i128 = 1_000_000;
+    const EMISSION: i128 = 100;
+    const LEDGERS: u32 = 10;
+
+    struct Farm {
+        env: Env,
+        client: crate::TimeLockedUpgradeContractClient<'static>,
+        lp_token: Address,
+    }
+
+    fn mint(env: &Env, asset: &Address, to: &Address, amount: i128) {
+        token::StellarAssetClient::new(env, asset).mint(to, &amount);
+    }
+
+    /// Editing the live `LedgerInfo` rather than building a fresh one keeps the
+    /// entry-TTL policy that the registered Stellar-asset contracts were
+    /// written under; resetting those fields makes later token calls fail with
+    /// `Error(Context, InternalError)` on soroban-sdk 20.0.0.
+    fn advance_ledgers(env: &Env, count: u32) {
+        let mut info = env.ledger().get();
+        info.sequence_number += count;
+        info.timestamp += 5 * count as u64;
+        env.ledger().set(info);
+    }
+
+    fn setup() -> Farm {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
+        let client = crate::TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        client.initialize(&admin, &treasury);
+
+        let issuer = Address::generate(&env);
+        let lp_token = env.register_stellar_asset_contract(issuer.clone());
+        let reward_token = env.register_stellar_asset_contract(issuer);
+        client.init_yield_farming(&admin, &lp_token, &reward_token, &EMISSION);
+
+        let funder = Address::generate(&env);
+        mint(&env, &reward_token, &funder, 1_000_000);
+        client.fund_yield_rewards(&funder, &1_000_000);
+
+        Farm {
+            env,
+            client,
+            lp_token,
+        }
+    }
+
+    fn new_staker(f: &Farm, amount: i128) -> Address {
+        let who = Address::generate(&f.env);
+        mint(&f.env, &f.lp_token, &who, amount);
+        f.client.stake_lp(&who, &amount);
+        who
+    }
+
+    /// Regression test: `stake` used to leave `RewardDebt` at the pre-stake
+    /// share count, so a staker entering a pool that had already accrued
+    /// `acc_reward_per_share` was immediately credited
+    /// `amount * acc / REWARD_PRECISION` — the pool's whole history — and could
+    /// drain the reward pot by staking and claiming in one ledger.
+    #[test]
+    fn staking_into_a_mature_pool_earns_nothing_for_earlier_ledgers() {
+        let f = setup();
+        let alice = new_staker(&f, STAKE);
+        advance_ledgers(&f.env, LEDGERS);
+        assert_eq!(
+            f.client.pending_yield_rewards(&alice),
+            EMISSION * LEDGERS as i128,
+            "the sole staker should hold every emission so far"
+        );
+
+        // Bob joins now and claims in the same ledger: zero time in the pool.
+        let bob = new_staker(&f, STAKE);
+        assert_eq!(
+            f.client.pending_yield_rewards(&bob),
+            0,
+            "a staker with zero ledgers in the pool is owed zero"
+        );
+        assert_eq!(f.client.claim_rewards(&bob), 0);
+
+        // Alice's entitlement is untouched by Bob's arrival.
+        assert_eq!(
+            f.client.pending_yield_rewards(&alice),
+            EMISSION * LEDGERS as i128
+        );
+    }
+
+    #[test]
+    fn emissions_split_by_share_weight_after_a_second_staker_joins() {
+        let f = setup();
+        let alice = new_staker(&f, STAKE);
+        advance_ledgers(&f.env, LEDGERS);
+        let bob = new_staker(&f, STAKE);
+
+        let alice_before = f.client.pending_yield_rewards(&alice);
+        advance_ledgers(&f.env, LEDGERS);
+
+        // Equal stakes, so the emissions of the second window split evenly.
+        let window = EMISSION * LEDGERS as i128;
+        assert_eq!(
+            f.client.pending_yield_rewards(&bob),
+            window / 2,
+            "bob earns only his half of the window he was present for"
+        );
+        assert_eq!(
+            f.client.pending_yield_rewards(&alice) - alice_before,
+            window / 2
+        );
+    }
+
+    #[test]
+    fn topping_up_a_stake_does_not_mint_phantom_rewards() {
+        let f = setup();
+        let alice = new_staker(&f, STAKE);
+        advance_ledgers(&f.env, LEDGERS);
+
+        let before = f.client.pending_yield_rewards(&alice);
+        mint(&f.env, &f.lp_token, &alice, STAKE);
+        f.client.stake_lp(&alice, &STAKE);
+
+        assert_eq!(
+            f.client.pending_yield_rewards(&alice),
+            before,
+            "doubling the stake must not retroactively pay on the new half"
+        );
+        assert_eq!(f.client.yield_farming_share_balance(&alice), STAKE * 2);
+    }
 }

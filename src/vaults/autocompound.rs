@@ -33,6 +33,12 @@ pub struct VaultConfig {
     pub fee_recipient: Address,
 }
 
+/// Scaling factor for share value precision.
+pub const SHARE_VALUE_PRECISION: i128 = 1_000_000_000_000_000_000;
+
+/// Maximum allowed drawdown from peak share value in basis points (1000 bps = 10%).
+pub const MAX_DRAWDOWN_BPS: u32 = 1_000;
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum VaultStorageKey {
@@ -41,6 +47,10 @@ pub enum VaultStorageKey {
     TotalAssets,
     /// Per-holder `sfvToken` share balance.
     Shares(Address),
+    /// Peak vault share value tracked in persistent storage.
+    PeakShareValue,
+    /// Circuit breaker drawdown state (true if triggered).
+    DrawdownState,
 }
 
 #[contracttype]
@@ -74,7 +84,7 @@ pub fn flash_loan(env: &Env, borrower: Address, amount: i128) -> Result<i128, Co
     token_client.transfer(&env.current_contract_address(), &borrower, &amount);
     env.invoke_contract::<()>(
         &borrower,
-        &soroban_sdk::symbol_short!("on_flash_loan"),
+        &soroban_sdk::Symbol::new(env, "on_flash_loan"),
         soroban_sdk::vec![
             env,
             config.asset.into_val(env),
@@ -151,6 +161,102 @@ fn assert_balance_invariant(env: &Env, config: &VaultConfig) {
     );
 }
 
+/// Calculates current share value scaled by `SHARE_VALUE_PRECISION`.
+/// Returns `None` if `total_shares` is 0.
+pub fn calculate_share_value(total_assets: i128, total_shares: i128) -> Option<i128> {
+    if total_shares <= 0 {
+        return None;
+    }
+    total_assets
+        .checked_mul(SHARE_VALUE_PRECISION)?
+        .checked_div(total_shares)
+}
+
+/// Reads the peak vault share value stored in persistent storage.
+pub fn get_peak_share_value(env: &Env) -> i128 {
+    env.storage()
+        .persistent()
+        .get(&VaultStorageKey::PeakShareValue)
+        .unwrap_or(0i128)
+}
+
+/// Returns `true` if the drawdown circuit breaker has been triggered.
+pub fn is_circuit_breaker_triggered(env: &Env) -> bool {
+    env.storage()
+        .persistent()
+        .get(&VaultStorageKey::DrawdownState)
+        .unwrap_or(false)
+}
+
+/// Updates the peak vault share value in persistent storage if `current_val` exceeds the previous peak.
+pub fn update_peak_share_value(env: &Env, current_val: i128) {
+    if current_val <= 0 {
+        return;
+    }
+    let peak = get_peak_share_value(env);
+    if current_val > peak {
+        let key = VaultStorageKey::PeakShareValue;
+        env.storage().persistent().set(&key, &current_val);
+        env.storage().persistent().extend_ttl(
+            &key,
+            crate::storage::PERSISTENT_TTL_THRESHOLD,
+            crate::storage::PERSISTENT_TTL_THRESHOLD,
+        );
+    }
+}
+
+/// Transitions vault to emergency withdrawal state and triggers circuit breaker.
+pub fn trigger_circuit_breaker(env: &Env) {
+    let key = VaultStorageKey::DrawdownState;
+    env.storage().persistent().set(&key, &true);
+    env.storage().persistent().extend_ttl(
+        &key,
+        crate::storage::PERSISTENT_TTL_THRESHOLD,
+        crate::storage::PERSISTENT_TTL_THRESHOLD,
+    );
+
+    // Pause vault and mark emergency withdrawal state
+    env.storage().instance().set(&crate::vaults::pause_guard::VAULT_PAUSED_KEY, &true);
+    env.storage().instance().set(&crate::vaults::pause_guard::EMRG_WD_KEY, &true);
+
+    env.events().publish(
+        (soroban_sdk::symbol_short!("circuit"), soroban_sdk::symbol_short!("drawdown")),
+        env.ledger().timestamp(),
+    );
+}
+
+/// Checks if the current share value reflects >10% drawdown from the peak share value.
+/// If triggered, transitions the vault to emergency withdrawal state and returns Ok(true).
+pub fn check_and_trigger_circuit_breaker(env: &Env) -> Result<bool, ContractError> {
+    if is_circuit_breaker_triggered(env) {
+        return Ok(true);
+    }
+
+    let shares = total_shares(env);
+    let assets = total_assets(env);
+    let peak = get_peak_share_value(env);
+
+    if shares > 0 && peak > 0 {
+        if let Some(current_val) = calculate_share_value(assets, shares) {
+            if current_val < peak {
+                let loss = peak.checked_sub(current_val).ok_or(ContractError::MathOverflow)?;
+                let loss_bps = loss
+                    .checked_mul(BPS_DENOMINATOR)
+                    .ok_or(ContractError::MathOverflow)?
+                    .checked_div(peak)
+                    .ok_or(ContractError::DivisionByZero)?;
+
+                if loss_bps > i128::from(MAX_DRAWDOWN_BPS) {
+                    trigger_circuit_breaker(env);
+                    return Ok(true);
+                }
+            }
+        }
+    }
+
+    Ok(false)
+}
+
 /// One-time vault setup. `admin` governs the performance fee configuration;
 /// it is independent of the main contract's admin so a vault can be deployed
 /// and re-parented without touching protocol-wide administration.
@@ -197,7 +303,9 @@ pub fn set_performance_fee(env: &Env, admin: Address, fee_bps: u32) -> Result<Va
 /// Deposit `amount` of the underlying asset and mint pro-rata `sfvToken`
 /// shares. The first depositor mints 1:1.
 pub fn deposit(env: &Env, depositor: Address, amount: i128) -> Result<i128, ContractError> {
-    let _guard = crate::security::reentrancy::ReentrancyGuard::new(env)?;
+    // No reentrancy guard here: the `vault_deposit` entry point in `lib.rs`
+    // already holds it for the whole call, and the lock is not re-entrant, so
+    // taking it twice made every deposit fail with `ReentrancyDetected`.
     if amount <= 0 {
         return Err(ContractError::VaultZeroAmount);
     }
@@ -231,6 +339,10 @@ pub fn deposit(env: &Env, depositor: Address, amount: i128) -> Result<i128, Cont
     env.storage().instance().set(&VaultStorageKey::TotalAssets, &new_assets);
     env.storage().instance().set(&VaultStorageKey::TotalShares, &new_shares);
 
+    if let Some(share_val) = calculate_share_value(new_assets, new_shares) {
+        update_peak_share_value(env, share_val);
+    }
+
     let holder_balance = share_balance_of(env, &depositor);
     set_share_balance(
         env,
@@ -246,7 +358,7 @@ pub fn deposit(env: &Env, depositor: Address, amount: i128) -> Result<i128, Cont
 
 /// Burn `shares` and withdraw the pro-rata amount of underlying asset.
 pub fn withdraw(env: &Env, owner: Address, shares: i128) -> Result<i128, ContractError> {
-    let _guard = crate::security::reentrancy::ReentrancyGuard::new(env)?;
+    // See `deposit`: the guard belongs to the `vault_withdraw` entry point.
     if shares <= 0 {
 
         return Err(ContractError::VaultZeroAmount);
@@ -300,11 +412,17 @@ pub fn withdraw(env: &Env, owner: Address, shares: i128) -> Result<i128, Contrac
 /// the configured fee recipient and the remainder compounds into
 /// `total_assets`, raising the value of every outstanding `sfvToken` share.
 pub fn harvest(env: &Env, keeper: Address, yield_amount: i128) -> Result<HarvestResult, ContractError> {
+    crate::vaults::pause_guard::require_vault_not_paused(env)?;
     if yield_amount <= 0 {
         return Err(ContractError::VaultZeroAmount);
     }
     let config = load_config(env)?;
     keeper.require_auth();
+
+    // Circuit breaker check: revert harvest and transition to emergency state if drawdown > 10%
+    if check_and_trigger_circuit_breaker(env)? {
+        return Err(ContractError::VaultMaxDrawdownExceeded);
+    }
 
     // Invariant check: verify balance consistency before state change
     assert_balance_invariant(env, &config);
@@ -326,6 +444,11 @@ pub fn harvest(env: &Env, keeper: Address, yield_amount: i128) -> Result<Harvest
     let assets = total_assets(env);
     let new_assets = assets.checked_add(compounded).ok_or(ContractError::MathOverflow)?;
     env.storage().instance().set(&VaultStorageKey::TotalAssets, &new_assets);
+
+    let shares = total_shares(env);
+    if let Some(new_share_val) = calculate_share_value(new_assets, shares) {
+        update_peak_share_value(env, new_share_val);
+    }
 
     env.events().publish(
         (soroban_sdk::symbol_short!("harvest"), keeper),
@@ -463,5 +586,81 @@ mod tests {
         let attacker = Address::generate(&env);
         let result = client.try_set_vault_performance_fee(&attacker, &500);
         assert_eq!(result, Err(Ok(ContractError::NotAdmin)));
+    }
+
+    #[test]
+    fn peak_share_value_tracked_in_persistent_storage() {
+        let (env, client, vault_admin, fee_recipient, asset) = setup();
+        client.init_vault(&vault_admin, &asset, &fee_recipient);
+        let depositor = Address::generate(&env);
+        mint(&env, &asset, &depositor, 10_000);
+
+        // Initial deposit
+        client.vault_deposit(&depositor, &10_000);
+        let initial_peak = client.vault_peak_share_value();
+        assert_eq!(initial_peak, SHARE_VALUE_PRECISION);
+
+        // Harvest increases share value and updates peak
+        let keeper = Address::generate(&env);
+        mint(&env, &asset, &keeper, 2_000);
+        client.vault_harvest(&keeper, &2_000);
+
+        let new_peak = client.vault_peak_share_value();
+        assert!(new_peak > initial_peak);
+        assert_eq!(new_peak, 1_196_000_000_000_000_000); // (10000 + 1960) * 1e18 / 10000
+    }
+
+    #[test]
+    fn harvest_reverts_if_drawdown_exceeds_ten_percent() {
+        let (env, client, vault_admin, fee_recipient, asset) = setup();
+        client.init_vault(&vault_admin, &asset, &fee_recipient);
+        let depositor = Address::generate(&env);
+        mint(&env, &asset, &depositor, 10_000);
+        client.vault_deposit(&depositor, &10_000);
+
+        // Grow vault share price via harvest
+        let keeper = Address::generate(&env);
+        mint(&env, &asset, &keeper, 10_000);
+        client.vault_harvest(&keeper, &10_000);
+
+        // Peak share price is now ~1.98e18
+        let peak = client.vault_peak_share_value();
+        assert!(peak > 1_900_000_000_000_000_000);
+
+        // Simulate strategy loss: reduce TotalAssets to 15,000 (drawdown ~24% > 10%)
+        env.as_contract(&client.address, || {
+            env.storage().instance().set(&VaultStorageKey::TotalAssets, &15_000i128);
+        });
+
+        // Harvest must be rejected due to maximum drawdown exceeded
+        mint(&env, &asset, &keeper, 500);
+        let res = client.try_vault_harvest(&keeper, &500);
+        assert!(res.is_err());
+        assert_eq!(client.vault_is_circuit_breaker_triggered(), true);
+    }
+
+    #[test]
+    fn circuit_breaker_transitions_vault_to_emergency_withdrawal_state() {
+        let (env, client, vault_admin, fee_recipient, asset) = setup();
+        client.init_vault(&vault_admin, &asset, &fee_recipient);
+        let depositor = Address::generate(&env);
+        mint(&env, &asset, &depositor, 10_000);
+        client.vault_deposit(&depositor, &10_000);
+
+        // Set peak share price to 2.0e18
+        env.as_contract(&client.address, || {
+            env.storage().persistent().set(&VaultStorageKey::PeakShareValue, &(2 * SHARE_VALUE_PRECISION));
+        });
+
+        // Current share price is 1.0e18 (50% loss from peak)
+        let triggered = client.vault_check_circuit_breaker().unwrap();
+        assert_eq!(triggered, true);
+        assert_eq!(client.vault_is_circuit_breaker_triggered(), true);
+
+        // Vault is now paused & in emergency withdrawal mode
+        env.as_contract(&client.address, || {
+            assert_eq!(crate::vaults::pause_guard::is_vault_paused(&env), true);
+            assert_eq!(crate::vaults::pause_guard::is_emergency_withdrawal_active(&env), true);
+        });
     }
 }

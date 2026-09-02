@@ -5,18 +5,37 @@ use soroban_sdk::{contracttype, token, Address, Env};
 /// Funds are held until either:
 /// - Both `sender` and `receiver` approve (sign) before `expiry_ledger` elapses.
 /// - The depositor executes a single-signature refund after `expiry_ledger`.
+/// Multi-stage state of a cross-border fiat settlement.
+#[contracttype]
+#[derive(Clone, PartialEq, Debug)]
+pub enum PaymentState {
+    Pending,
+    Locked,
+    Dispatched,
+    Settled,
+    Refunded,
+}
+
+/// Number of ledgers (~5s each) after locking within which the anchor must
+/// signal fiat payout completion before the locked funds may be returned to
+/// the sender. Approximately 24 hours.
+pub const PAYOUT_TIMEOUT_LEDGERS: u32 = 17280;
+
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Escrow {
     pub sender: Address,
     pub receiver: Address,
     pub depositor: Address,
+    pub anchor: Address,
     pub token: Address,
     pub amount: i128,
     pub expiry_ledger: u32,
+    pub payout_deadline: u32,
     pub sender_approved: bool,
     pub receiver_approved: bool,
     pub released: bool,
+    pub state: PaymentState,
 }
 
 #[contracttype]
@@ -49,6 +68,8 @@ pub fn create(
     expiry_ledger: u32,
 ) -> Escrow {
     let escrow = Escrow {
+        anchor: receiver.clone(),
+        payout_deadline: expiry_ledger + PAYOUT_TIMEOUT_LEDGERS,
         sender,
         receiver,
         depositor,
@@ -58,6 +79,7 @@ pub fn create(
         sender_approved: false,
         receiver_approved: false,
         released: false,
+        state: PaymentState::Locked,
     };
     let token_client = token::Client::new(env, &escrow.token);
     token_client.transfer(&escrow.depositor, &env.current_contract_address(), &amount);
@@ -100,6 +122,68 @@ pub fn release(env: &Env, escrow: &mut Escrow, current_ledger: u32) -> Result<()
         &escrow.amount,
     );
     escrow.released = true;
+    escrow.state = PaymentState::Settled;
+    Ok(())
+}
+
+/// Set / rotate the anchor keypair authorized to signal fiat payout completion.
+pub fn set_anchor(escrow: &mut Escrow, anchor: Address) {
+    escrow.anchor = anchor;
+}
+
+/// Called by the anchor keypair to signal that the off-chain fiat payout to the
+/// receiver has completed. Transitions the payment to `Dispatched` and releases
+/// the locked on-chain funds to the receiver, ending in `Settled`. Only valid
+/// before the payout deadline elapses.
+pub fn signal_fiat_payout(
+    env: &Env,
+    escrow: &mut Escrow,
+    caller: &Address,
+    current_ledger: u32,
+) -> Result<(), ()> {
+    if escrow.released {
+        return Err(());
+    }
+    if caller != &escrow.anchor {
+        return Err(());
+    }
+    if current_ledger >= escrow.payout_deadline {
+        return Err(());
+    }
+    escrow.state = PaymentState::Dispatched;
+    let token_client = token::Client::new(env, &escrow.token);
+    token_client.transfer(
+        &env.current_contract_address(),
+        &escrow.receiver,
+        &escrow.amount,
+    );
+    escrow.released = true;
+    escrow.state = PaymentState::Settled;
+    Ok(())
+}
+
+/// Automatic payout timeout: if the anchor fails to signal fiat payout
+/// completion within `PAYOUT_TIMEOUT_LEDGERS` (~24 hours) of locking, the
+/// locked funds are returned to the sender and the payment is `Refunded`.
+pub fn timeout_refund(
+    env: &Env,
+    escrow: &mut Escrow,
+    current_ledger: u32,
+) -> Result<(), ()> {
+    if escrow.released {
+        return Err(());
+    }
+    if current_ledger < escrow.payout_deadline {
+        return Err(());
+    }
+    let token_client = token::Client::new(env, &escrow.token);
+    token_client.transfer(
+        &env.current_contract_address(),
+        &escrow.sender,
+        &escrow.amount,
+    );
+    escrow.released = true;
+    escrow.state = PaymentState::Refunded;
     Ok(())
 }
 
@@ -121,6 +205,7 @@ pub fn refund(env: &Env, escrow: &mut Escrow, caller: &Address, current_ledger: 
         &escrow.amount,
     );
     escrow.released = true;
+    escrow.state = PaymentState::Refunded;
     Ok(())
 }
 

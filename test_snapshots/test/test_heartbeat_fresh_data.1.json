@@ -1,6 +1,6 @@
 {
   "generators": {
-    "address": 2,
+    "address": 3,
     "nonce": 0
   },
   "auth": [
@@ -17,35 +17,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                }
-              ]
-            }
-          },
-          "sub_invocations": []
-        }
-      ]
-    ],
-    [
-      [
-        "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
-        {
-          "function": {
-            "contract_fn": {
-              "contract_address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-              "function_name": "add_corridor_fees",
-              "args": [
-                {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                },
-                {
-                  "u32": 303994223
-                },
-                {
-                  "u64": 1000000
-                },
-                {
-                  "u64": 0
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 }
               ]
             }
@@ -64,7 +36,7 @@
               "function_name": "update_heartbeat",
               "args": [
                 {
-                  "u32": 303994223
+                  "u32": 3897123275
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
@@ -114,7 +86,7 @@
                   "map": [
                     {
                       "key": {
-                        "u32": 303994223
+                        "u32": 3897123275
                       },
                       "val": {
                         "u64": 0
@@ -179,50 +151,10 @@
                       },
                       {
                         "key": {
-                          "symbol": "TREASURY"
+                          "symbol": "TREASUR"
                         },
                         "val": {
-                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
-                            {
-                              "symbol": "CorridorPool"
-                            },
-                            {
-                              "u32": 303994223
-                            }
-                          ]
-                        },
-                        "val": {
-                          "map": [
-                            {
-                              "key": {
-                                "symbol": "asset"
-                              },
-                              "val": {
-                                "u32": 303994223
-                              }
-                            },
-                            {
-                              "key": {
-                                "symbol": "collected"
-                              },
-                              "val": {
-                                "u64": 1000000
-                              }
-                            },
-                            {
-                              "key": {
-                                "symbol": "variable_pool"
-                              },
-                              "val": {
-                                "u64": 0
-                              }
-                            }
-                          ]
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                         }
                       }
                     ]
@@ -232,7 +164,7 @@
             },
             "ext": "v0"
           },
-          105000
+          6000
         ]
       ],
       [
@@ -257,39 +189,6 @@
                 "key": {
                   "ledger_key_nonce": {
                     "nonce": 801925984706572462
-                  }
-                },
-                "durability": "temporary",
-                "val": "void"
-              }
-            },
-            "ext": "v0"
-          },
-          15
-        ]
-      ],
-      [
-        {
-          "contract_data": {
-            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
-            "key": {
-              "ledger_key_nonce": {
-                "nonce": 1033654523790656264
-              }
-            },
-            "durability": "temporary"
-          }
-        },
-        [
-          {
-            "last_modified_ledger_seq": 0,
-            "data": {
-              "contract_data": {
-                "ext": "v0",
-                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4",
-                "key": {
-                  "ledger_key_nonce": {
-                    "nonce": 1033654523790656264
                   }
                 },
                 "durability": "temporary",
@@ -352,7 +251,7 @@
             },
             "ext": "v0"
           },
-          105000
+          6000
         ]
       ]
     ]
@@ -382,7 +281,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 }
               ]
             }
@@ -427,100 +326,13 @@
                 "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
               },
               {
-                "symbol": "add_corridor_fees"
-              }
-            ],
-            "data": {
-              "vec": [
-                {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                },
-                {
-                  "u32": 303994223
-                },
-                {
-                  "u64": 1000000
-                },
-                {
-                  "u64": 0
-                }
-              ]
-            }
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000001",
-        "type_": "diagnostic",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "fn_return"
-              },
-              {
-                "symbol": "add_corridor_fees"
-              }
-            ],
-            "data": {
-              "map": [
-                {
-                  "key": {
-                    "symbol": "asset"
-                  },
-                  "val": {
-                    "u32": 303994223
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "collected"
-                  },
-                  "val": {
-                    "u64": 1000000
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "variable_pool"
-                  },
-                  "val": {
-                    "u64": 0
-                  }
-                }
-              ]
-            }
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": null,
-        "type_": "diagnostic",
-        "body": {
-          "v0": {
-            "topics": [
-              {
-                "symbol": "fn_call"
-              },
-              {
-                "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
-              },
-              {
                 "symbol": "update_heartbeat"
               }
             ],
             "data": {
               "vec": [
                 {
-                  "u32": 303994223
+                  "u32": 3897123275
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
@@ -572,7 +384,7 @@
               }
             ],
             "data": {
-              "u32": 303994223
+              "u32": 3897123275
             }
           }
         }
@@ -621,7 +433,7 @@
               }
             ],
             "data": {
-              "u32": 303994223
+              "u32": 3897123275
             }
           }
         }

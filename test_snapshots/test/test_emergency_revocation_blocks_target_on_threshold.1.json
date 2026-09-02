@@ -244,7 +244,7 @@
                       },
                       {
                         "key": {
-                          "symbol": "TREASURY"
+                          "symbol": "TREASUR"
                         },
                         "val": {
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM"
@@ -257,7 +257,7 @@
             },
             "ext": "v0"
           },
-          105000
+          6000
         ]
       ],
       [
@@ -476,7 +476,7 @@
             },
             "ext": "v0"
           },
-          105000
+          6000
         ]
       ]
     ]
@@ -824,7 +824,7 @@
                 "bytes": "0000000000000000000000000000000000000000000000000000000000000001"
               },
               {
-                "symbol": "get_emergency_revocation"
+                "symbol": "get_emerg_revocation_proposal"
               }
             ],
             "data": "void"
@@ -845,7 +845,7 @@
                 "symbol": "fn_return"
               },
               {
-                "symbol": "get_emergency_revocation"
+                "symbol": "get_emerg_revocation_proposal"
               }
             ],
             "data": "void"

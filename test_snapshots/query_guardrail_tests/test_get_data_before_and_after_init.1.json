@@ -78,6 +78,14 @@
                             },
                             {
                               "key": {
+                                "symbol": "max_fee_ceiling"
+                              },
+                              "val": {
+                                "u64": 10000
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "value"
                               },
                               "val": {
@@ -89,10 +97,22 @@
                       },
                       {
                         "key": {
-                          "symbol": "TREASURY"
+                          "symbol": "TREASUR"
                         },
                         "val": {
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "SchemaVersion"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 2
                         }
                       }
                     ]
@@ -372,6 +392,14 @@
                   },
                   "val": {
                     "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "max_fee_ceiling"
+                  },
+                  "val": {
+                    "u64": 10000
                   }
                 },
                 {

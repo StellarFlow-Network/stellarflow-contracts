@@ -1,4 +1,9 @@
 //! Profiles oracle read entrypoints used before cross-currency swap execution.
+//!
+//! These tests report Soroban CPU instruction and memory usage for the oracle
+//! operations that make up the current swap price-read path. They also retain
+//! the existing safe-network-limit assertions for individual and repeated
+//! reads.
 
 use price_oracle::{ContractError as OracleError, PriceOracle, PriceOracleClient};
 use soroban_sdk::{symbol_short, vec, Env, Symbol};

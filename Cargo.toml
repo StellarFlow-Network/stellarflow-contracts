@@ -7,6 +7,7 @@ description = "StellarFlow smart contracts with time-locked upgrade mechanism"
 
 [workspace]
 members = [
+    "contracts/amm",
     "contracts/analytics-engine",
     "contracts/governance-invariants",
     "contracts/hello-world",
@@ -14,11 +15,13 @@ members = [
     "contracts/liquidity-lock",
     "contracts/linear-vesting",
     "contracts/price-oracle",
+    "contracts/remittance-escrow",
     "contracts/reward-splitter",
     "contracts/gas-tank",
     "contracts/relayer-allowance",
     "contracts/stop-loss-trigger",
     "contracts/shielded-remittance-escrow",
+    "contracts/fee-burn-engine",
     "tests/benchmarks",
     "tests/fuzz",
 ]
@@ -36,8 +39,12 @@ resolver = "2"
 
 [workspace.dependencies]
 soroban-sdk = { version = "=20.0.0", default-features = false }
+soroban-token-sdk = { version = "=20.0.0", default-features = false }
 
 [dependencies]
+# No `testutils` here: it pulls in `std` and `rand`, which do not build for
+# wasm32-unknown-unknown, so enabling it in [dependencies] broke the release
+# WASM build outright. Tests get it from [dev-dependencies] below.
 soroban-sdk = { version = "=20.0.0", default-features = false }
 soroban-token-sdk = { version = "=20.0.0", default-features = false }
 ledger-time-helper = { path = "contracts/ledger-time-helper" }

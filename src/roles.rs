@@ -8,7 +8,7 @@
 //! comparing ledger sequences at read time. The admin may also strip a grant
 //! early via `revoke_role`, e.g. in response to a compromised delegate key.
 
-use soroban_sdk::{contracttype, Address, Env};
+use soroban_sdk::{contracttype, Address, BytesN, Env, Symbol, Vec};
 
 use crate::{ContractData, ContractError, DATA_KEY};
 
@@ -134,6 +134,62 @@ pub fn require_role(env: &Env, grantee: &Address, role: Role) -> Result<(), Cont
 pub fn get_role_grant(env: &Env, grantee: Address, role: Role) -> Option<RoleGrant> {
     let key = RoleStorageKey::Grant(grantee, role);
     env.storage().persistent().get(&key)
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BridgeValidatorSet {
+    pub sequence: u32,
+    pub validator_hashes: Vec<BytesN<32>>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BridgeStorageKey {
+    ValidatorSet,
+}
+
+/// Returns the current bridge validator set, defaulting to sequence 0 and no
+/// validators.
+pub fn get_bridge_validator_set(env: &Env) -> BridgeValidatorSet {
+    env.storage()
+        .instance()
+        .get(&BridgeStorageKey::ValidatorSet)
+        .unwrap_or(BridgeValidatorSet {
+            sequence: 0,
+            validator_hashes: Vec::new(env),
+        })
+}
+
+/// Rotate the cross-chain bridge validator public-key hashes.
+///
+/// Only the contract admin (typically a governance multi-sig) may invoke this.
+/// The rotation sequence is incremented and recorded alongside the new set,
+/// preventing replay of attestations signed by a stale validator set.
+pub fn update_bridge_validators(
+    env: &Env,
+    admin: Address,
+    validator_hashes: Vec<BytesN<32>>,
+) -> Result<u32, ContractError> {
+    require_admin(env, &admin)?;
+
+    let previous = get_bridge_validator_set(env);
+    let sequence = previous.sequence + 1;
+    let new_set = BridgeValidatorSet {
+        sequence,
+        validator_hashes: validator_hashes.clone(),
+    };
+
+    env.storage()
+        .instance()
+        .set(&BridgeStorageKey::ValidatorSet, &new_set);
+
+    env.events().publish(
+        (Symbol::new(env, "BridgeValidatorsUpdated"), sequence),
+        validator_hashes,
+    );
+
+    Ok(sequence)
 }
 
 #[cfg(test)]

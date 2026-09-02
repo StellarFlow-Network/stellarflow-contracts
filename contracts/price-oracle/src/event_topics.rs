@@ -104,3 +104,23 @@ pub fn publish_emergency_halt(env: &Env, admin1: Address, admin2: Address, statu
         (admin1, admin2, status),
     );
 }
+
+/// Publish a swap event for indexer optimization.
+///
+/// Uses a uniform topic `[Symbol::new(&env, "swap"), pool_id]` and a structured
+/// tuple payload `(sender, amount_in, amount_out, fee_paid)` so that the
+/// `stellarflow-backend` Horizon event parsers can ingest swap activity
+/// consistently across all core contract functions.
+pub fn publish_swap(
+    env: &Env,
+    pool_id: Symbol,
+    sender: Address,
+    amount_in: i128,
+    amount_out: i128,
+    fee_paid: i128,
+) {
+    env.events().publish(
+        (Symbol::new(&env, "swap"), pool_id),
+        (sender, amount_in, amount_out, fee_paid),
+    );
+}

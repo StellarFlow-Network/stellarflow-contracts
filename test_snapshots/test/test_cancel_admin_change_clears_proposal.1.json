@@ -120,6 +120,14 @@
                             },
                             {
                               "key": {
+                                "symbol": "max_fee_ceiling"
+                              },
+                              "val": {
+                                "u64": 10000
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "value"
                               },
                               "val": {
@@ -131,10 +139,30 @@
                       },
                       {
                         "key": {
+                          "symbol": "LASTACT"
+                        },
+                        "val": {
+                          "u64": 0
+                        }
+                      },
+                      {
+                        "key": {
                           "symbol": "TREASURY"
                         },
                         "val": {
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "SchemaVersion"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 2
                         }
                       }
                     ]
@@ -589,6 +617,14 @@
                   },
                   "val": {
                     "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "max_fee_ceiling"
+                  },
+                  "val": {
+                    "u64": 10000
                   }
                 },
                 {

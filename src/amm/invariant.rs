@@ -51,17 +51,19 @@ impl U256 {
         let b_lo = b as u64;
         let b_hi = (b >> 64) as u64;
 
-        let lo = (a_lo as u128) * (b_lo as u128);
+        let p_lo_lo = (a_lo as u128) * (b_lo as u128);
         let cross1 = (a_hi as u128) * (b_lo as u128);
         let cross2 = (a_lo as u128) * (b_hi as u128);
-        let hi = (a_hi as u128) * (b_hi as u128);
+        let p_hi_hi = (a_hi as u128) * (b_hi as u128);
 
         let (mid, carry_mid) = cross1.overflowing_add(cross2);
         let mid_lo = mid << 64;
-        let mid_hi = (mid >> 64) + (carry_mid as u128);
+        let mid_hi = (mid >> 64).wrapping_add((carry_mid as u128) << 64);
 
-        let result_lo = (mid_lo_bits << 64) | p_lo_lo_lo;
-        let result_hi = (upper << 64) | mid_hi_bits;
+        let (result_lo, carry_lo) = p_lo_lo.overflowing_add(mid_lo);
+        let result_hi = p_hi_hi.wrapping_add(mid_hi).wrapping_add(carry_lo as u128);
+
+        debug_assert!(result_hi >> 64 <= u64::MAX as u128);
 
         U256(result_lo, result_hi)
     }
@@ -107,6 +109,64 @@ fn mul_div(numerator: u128, denominator: u128, divisor: u128) -> Result<u128, Co
     Ok(quot)
 }
 
+/// Supported pool fee tiers in basis points.
+pub const FEE_TIER_0_05_BPS: u64 = 5;
+pub const FEE_TIER_0_30_BPS: u64 = 30;
+pub const FEE_TIER_1_00_BPS: u64 = 100;
+
+/// Minimum and maximum fee tiers that governance may select.
+pub const MIN_FEE_TIER_BPS: u64 = FEE_TIER_0_05_BPS;
+pub const MAX_FEE_TIER_BPS: u64 = FEE_TIER_1_00_BPS;
+
+/// LP / treasury fee split: 80% to LP holders, 20% to protocol treasury.
+pub const LP_FEE_SHARE_BPS: u64 = 8_000;
+pub const TREASURY_FEE_SHARE_BPS: u64 = 2_000;
+
+/// Validate that a proposed fee tier is one of the supported configurable tiers.
+pub fn validate_fee_tier(fee_bps: u64) -> Result<(), ContractError> {
+    if matches!(fee_bps, FEE_TIER_0_05_BPS | FEE_TIER_0_30_BPS | FEE_TIER_1_00_BPS) {
+        Ok(())
+    } else {
+        Err(ContractError::InvalidInput)
+    }
+}
+
+/// Apply a governance vote to adjust the pool fee tier parameter.
+///
+/// The vote result must be a supported fee tier inside the bounded safety range.
+pub fn apply_governance_fee_tier(voted_fee_bps: u64) -> Result<u64, ContractError> {
+    validate_fee_tier(voted_fee_bps)?;
+    Ok(voted_fee_bps)
+}
+
+/// Controller for the pool's configurable fee tier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FeeTierController {
+    pub current_fee_bps: u64,
+}
+
+impl FeeTierController {
+    pub fn new(fee_bps: u64) -> Result<Self, ContractError> {
+        validate_fee_tier(fee_bps)?;
+        Ok(Self { current_fee_bps: fee_bps })
+    }
+
+    pub fn governance_adjust(&mut self, voted_fee_bps: u64) -> Result<u64, ContractError> {
+        let new_fee_bps = apply_governance_fee_tier(voted_fee_bps)?;
+        self.current_fee_bps = new_fee_bps;
+        Ok(new_fee_bps)
+    }
+}
+
+/// Split a collected fee between LP token holders (80%) and the protocol treasury (20%).
+///
+/// Rounding truncates in favor of LPs when fee_amount is not divisible by 5.
+pub fn split_pool_fee(fee_amount: u128) -> (u128, u128) {
+    let treasury_share = fee_amount / 5;
+    let lp_share = fee_amount - treasury_share;
+    (lp_share, treasury_share)
+}
+
 /// Compute the output amount for a constant-product swap with dynamic fee deduction.
 ///
 /// First calculates the raw output, then applies the dynamic fee to get the final amount
@@ -122,12 +182,14 @@ pub fn compute_swap_out(
         return Err(ContractError::InvalidInput);
     }
     
-    // Update volume history and get current dynamic fee
-    let fee_bps = crate::fees::update_volume_and_adjust_fee(
+    // Update volume history and derive the base dynamic fee, then apply the
+    // volatility-based adaptive scaling (Issue #766) when the pool opted in.
+    let legacy_fee_bps = crate::fees::update_volume_and_adjust_fee(
         env, 
         asset, 
         amount_in as u64
     )?;
+    let fee_bps = crate::fees::resolve_swap_fee_bps(env, asset, legacy_fee_bps)?;
     
     // Calculate raw output before fees
     let denominator = reserve_in
@@ -207,7 +269,28 @@ pub fn assert_invariant_stable(
     let k_after = U256::mul(reserve_in_after, reserve_out_after);
 
     if k_after.1 < k_before.1 || (k_after.1 == k_before.1 && k_after.0 < k_before.0) {
-        return Err(ContractError::Overflow);
+        return Err(ContractError::InvariantViolation);
+    }
+    Ok(())
+}
+
+/// Guard the final output of a trade path against the trader's slippage limit.
+///
+/// Evaluates the realized `amount_out` (the balance actually delivered after all
+/// intermediate pool hops have executed) against the user-defined
+/// `min_amount_out`. If the realized output falls short of the minimum, returns
+/// `ContractError::SlippageExceeded`.
+///
+/// This check is intended to run before the transaction is committed. Returning
+/// `Err` propagates up through the contract call, so the host environment rolls
+/// back every intermediate pool swap atomically — no partial state is persisted
+/// when the guard trips.
+pub fn assert_min_amount_out(
+    amount_out: u128,
+    min_amount_out: u128,
+) -> Result<(), ContractError> {
+    if amount_out < min_amount_out {
+        return Err(ContractError::SlippageExceeded);
     }
     Ok(())
 }

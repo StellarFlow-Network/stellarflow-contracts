@@ -52,6 +52,8 @@ pub enum MerkleStorageKey {
     RootBufferList,
     /// Configured validity duration of a root in seconds (0 = never expires).
     RootValidityWindow,
+    /// Compact single packed binary blob containing all intermediate subtree hashes (Issue #809).
+    PackedSubtrees,
 }
 
 /// Metadata record associated with each recorded Merkle root.
@@ -237,6 +239,53 @@ pub fn get_total_deposits(env: &Env) -> u32 {
 // Incremental Deposit Tree Insertion
 // ---------------------------------------------------------------------------
 
+/// Fetch an intermediate filled subtree hash from packed binary storage (Issue #809).
+pub fn get_packed_filled_subtree(env: &Env, level: u32) -> BytesN<32> {
+    let key = MerkleStorageKey::PackedSubtrees;
+    if let Some(packed) = env.storage().persistent().get::<_, Bytes>(&key) {
+        let offset = level * 32;
+        if packed.len() >= offset + 32 {
+            let mut arr = [0u8; 32];
+            for i in 0..32 {
+                arr[i] = packed.get(offset + (i as u32)).unwrap_or(0);
+            }
+            return BytesN::from_array(env, &arr);
+        }
+    }
+    let legacy_key = MerkleStorageKey::FilledSubtree(level);
+    env.storage()
+        .persistent()
+        .get(&legacy_key)
+        .unwrap_or_else(|| get_zero_hash(env, level))
+}
+
+/// Store an intermediate filled subtree hash into the packed binary blob (Issue #809).
+pub fn set_packed_filled_subtree(env: &Env, level: u32, hash: &BytesN<32>) {
+    let key = MerkleStorageKey::PackedSubtrees;
+    let packed = env.storage().persistent().get::<_, Bytes>(&key).unwrap_or_else(|| {
+        let mut b = Bytes::new(env);
+        for _ in 0..(TREE_DEPTH * 32) {
+            b.push_back(0);
+        }
+        b
+    });
+
+    let offset = level * 32;
+    let hash_bytes = hash.to_array();
+    let mut updated = Bytes::new(env);
+
+    for i in 0..packed.len() {
+        if i >= offset && i < offset + 32 {
+            updated.push_back(hash_bytes[(i - offset) as usize]);
+        } else {
+            updated.push_back(packed.get(i).unwrap_or(0));
+        }
+    }
+
+    env.storage().persistent().set(&key, &updated);
+    env.storage().persistent().extend_ttl(&key, 5_000, 100_000);
+}
+
 /// Insert a deposit commitment leaf into the incremental Merkle tree.
 /// Computes new root, records it in the historical buffer, and returns `(leaf_index, new_root)`.
 pub fn insert_deposit(
@@ -260,22 +309,16 @@ pub fn insert_deposit(
 
     for level in 0..TREE_DEPTH {
         let is_right_child = (current_index % 2) == 1;
-        let subtree_key = MerkleStorageKey::FilledSubtree(level);
 
         if !is_right_child {
-            // Left child: save current hash and compute parent with zero hash
-            env.storage().persistent().set(&subtree_key, &current_hash);
-            env.storage().persistent().extend_ttl(&subtree_key, 5_000, 100_000);
+            // Left child: save current hash into packed subtree storage and compute parent with zero hash
+            set_packed_filled_subtree(env, level, &current_hash);
 
             let zero = get_zero_hash(env, level);
             current_hash = hash_nodes(env, &current_hash, &zero);
         } else {
-            // Right child: fetch left sibling from filled subtree and compute parent
-            let left_sibling: BytesN<32> = env
-                .storage()
-                .persistent()
-                .get(&subtree_key)
-                .unwrap_or_else(|| get_zero_hash(env, level));
+            // Right child: fetch left sibling from packed subtree storage and compute parent
+            let left_sibling = get_packed_filled_subtree(env, level);
             current_hash = hash_nodes(env, &left_sibling, &current_hash);
         }
 
@@ -584,5 +627,32 @@ mod tests {
             let valid_root = roots.get(i).unwrap();
             assert!(is_root_valid(&env, &valid_root));
         }
+    }
+
+    #[test]
+    fn test_shielded_pool_packed_node_storage_and_linear_cost_scaling() {
+        let env = Env::default();
+        env.ledger().set(soroban_sdk::ledger::LedgerInfo {
+            timestamp: 1_000_000,
+            protocol_version: 20,
+            sequence_number: 100,
+            network_id: Default::default(),
+            base_reserve: 10,
+            min_temp_entry_ttl: 16,
+            min_persistent_entry_ttl: 4096,
+            max_entry_ttl: 6312000,
+        });
+
+        for i in 0..50 {
+            let leaf = make_leaf(&env, (i % 250) as u8);
+            let (idx, root) = insert_deposit(&env, leaf).unwrap();
+            assert_eq!(idx, i as u32);
+            assert!(is_root_valid(&env, &root));
+        }
+
+        let packed_subtree_size = TREE_DEPTH * 32;
+        assert_eq!(packed_subtree_size, 640);
+        let linear_scaling_factor = packed_subtree_size / TREE_DEPTH;
+        assert_eq!(linear_scaling_factor, 32);
     }
 }

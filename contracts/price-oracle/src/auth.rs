@@ -58,6 +58,10 @@ pub enum DataKey {
     /// Per-asset circuit-breaker override flag (Symbol → bool).
     /// When true the asset is individually paused regardless of the global flag.
     CircuitBreakerPairedAsset(soroban_sdk::Symbol),
+    /// Stores the current WASM code hash of the contract
+    CurrentWasmHash,
+    /// Stores the previous WASM code hash for rollback capabilities
+    PreviousWasmHash,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

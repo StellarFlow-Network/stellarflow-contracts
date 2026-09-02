@@ -64,6 +64,17 @@ pub struct FillResult {
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
+pub struct OrderPartiallyFilled {
+    pub order_id: u64,
+    pub maker: Address,
+    pub taker: Address,
+    pub filled_amount: i128,
+    pub remaining_amount: i128,
+    pub paid_amount: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SettlementResult {
     pub seller_order_id: u64,
     pub buyer_order_id: u64,
@@ -292,12 +303,15 @@ pub fn place_buy_order(
         id: next_order_id(env),
         maker,
         pair: pair.clone(),
-        side: OrderSide::Buy,
+        sell_asset: pair.sell_asset.clone(),
+        buy_asset: pair.buy_asset.clone(),
         price_tick,
+        amount: buy_amount,
         original_amount: buy_amount,
         remaining_amount: buy_amount,
         filled_amount: 0,
         created_at_ledger: env.ledger().sequence(),
+        expiry: 0,
         active: true,
     };
 
@@ -362,8 +376,22 @@ pub fn fill_order(env: &Env, filler: Address, order_id: u64, fill_amount: i128) 
 
     env.events().publish(
         (soroban_sdk::symbol_short!("ord_fill"), order.id),
-        (filler, fill_amount, paid_amount, order.remaining_amount),
+        (filler.clone(), fill_amount, paid_amount, order.remaining_amount),
     );
+
+    if !order_closed {
+        env.events().publish(
+            (soroban_sdk::symbol_short!("ord_part"), order.id),
+            OrderPartiallyFilled {
+                order_id: order.id,
+                maker: order.maker.clone(),
+                taker: filler.clone(),
+                filled_amount: fill_amount,
+                remaining_amount: order.remaining_amount,
+                paid_amount,
+            },
+        );
+    }
 
     Ok(FillResult {
         order_id: order.id,
@@ -372,6 +400,17 @@ pub fn fill_order(env: &Env, filler: Address, order_id: u64, fill_amount: i128) 
         remaining_amount: order.remaining_amount,
         order_closed,
     })
+}
+
+/// Explicitly execute a partial match on a limit order while leaving the
+/// remaining asset balance open in the order book.
+pub fn execute_partial_fill(
+    env: &Env,
+    filler: Address,
+    order_id: u64,
+    fill_amount: i128,
+) -> Result<FillResult, ContractError> {
+    fill_order(env, filler, order_id, fill_amount)
 }
 
 /// Atomically settle a seller order against a buyer order when the buyer's
@@ -826,5 +865,31 @@ mod tests {
 
         let result = client.try_match_limit_orders(&sell_order.id, &buy_order.id, &100);
         assert_eq!(result, Err(Ok(ContractError::OrderPriceNotCrossed)));
+    }
+
+    #[test]
+    fn execute_partial_fill_updates_remaining_amount_and_leaves_order_open() {
+        let (env, client, sell_asset, buy_asset, _) = setup();
+        let maker = Address::generate(&env);
+        let taker = Address::generate(&env);
+        mint(&env, &sell_asset, &maker, 1_000);
+        mint(&env, &buy_asset, &taker, 2_000);
+        let pair = AssetPair { sell_asset: sell_asset.clone(), buy_asset: buy_asset.clone() };
+        let order = client.place_limit_order(&maker, &pair, &(2 * PRICE_SCALE), &1_000);
+
+        let result = client.fill_limit_order(&taker, &order.id, &300);
+        assert_eq!(result.filled_amount, 300);
+        assert_eq!(result.remaining_amount, 700);
+        assert!(!result.order_closed);
+        assert_eq!(result.paid_amount, 600); // 300 * 2
+
+        let sell_token = soroban_sdk::token::Client::new(&env, &sell_asset);
+        let buy_token = soroban_sdk::token::Client::new(&env, &buy_asset);
+        assert_eq!(sell_token.balance(&taker), 300);
+        assert_eq!(buy_token.balance(&maker), 600);
+
+        let remaining_orders = client.get_orders_at_tick(&pair, &(2 * PRICE_SCALE));
+        assert_eq!(remaining_orders.len(), 1);
+        assert_eq!(remaining_orders.get(0).unwrap().remaining_amount, 700);
     }
 }

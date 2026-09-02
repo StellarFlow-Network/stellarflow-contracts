@@ -61,6 +61,21 @@ pub const STABLE_TICK_SPACING: i32 = 1;
 /// Default tick spacing for volatile pairs.
 pub const VOLATILE_TICK_SPACING: i32 = 60;
 
+/// Fee tier for stable pools: 0.05% (5 basis points).
+pub const FEE_TIER_1: u16 = 5;
+/// Fee tier for balanced pools: 0.30% (30 basis points).
+pub const FEE_TIER_2: u16 = 30;
+/// Fee tier for volatile pools: 1.00% (100 basis points).
+pub const FEE_TIER_3: u16 = 100;
+
+/// Default fee tier used when a pool has not been configured (0.30%).
+pub const DEFAULT_FEE_TIER: u16 = FEE_TIER_2;
+
+/// Protocol treasury share of collected fees (20.00%).
+pub const TREASURY_FEE_SHARE_BPS: u16 = 2_000;
+/// LP token holders share of collected fees (80.00%).
+pub const LP_FEE_SHARE_BPS: u16 = 8_000;
+
 // ---------------------------------------------------------------------------
 // Storage keys
 // ---------------------------------------------------------------------------
@@ -79,6 +94,11 @@ pub struct TickDataKey(AssetId, i32);
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TickListKey(AssetId);
+
+/// Persistent storage key for a pool's configured swap fee tier (in basis points).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FeeTierKey(AssetId);
 
 // ---------------------------------------------------------------------------
 // Types
@@ -344,6 +364,40 @@ fn remove_tick_sorted(list: &mut Vec<i32>, tick: i32) {
     if pos < list.len() && list.get(pos) == Some(tick) {
         list.remove(pos);
     }
+}
+
+/// Get the configured swap fee tier for a pool, in basis points.
+/// Returns `DEFAULT_FEE_TIER` if the pool has no explicitly configured tier.
+pub fn get_pool_fee_tier(env: &Env, asset: AssetId) -> u16 {
+    let key = FeeTierKey(asset);
+    env.storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or(DEFAULT_FEE_TIER)
+}
+
+/// Update a pool's swap fee tier. In production this is called by governance
+/// after a successful vote. The fee tier must be one of `FEE_TIER_1`,
+/// `FEE_TIER_2`, or `FEE_TIER_3`.
+pub fn set_pool_fee_tier(
+    env: &Env,
+    asset: AssetId,
+    fee_tier: u16,
+) -> Result<u16, ContractError> {
+    if fee_tier != FEE_TIER_1 && fee_tier != FEE_TIER_2 && fee_tier != FEE_TIER_3 {
+        return Err(ContractError::Overflow);
+    }
+    let key = FeeTierKey(asset);
+    env.storage().persistent().set(&key, &fee_tier);
+    Ok(fee_tier)
+}
+
+/// Split collected swap fees between LP token holders (80%) and the protocol
+/// treasury vault (20%). Returns `(lp_share, treasury_share)`.
+pub fn split_fee(amount: u64) -> (u64, u64) {
+    let lp_share = ((amount as u128 * LP_FEE_SHARE_BPS as u128) / 10_000) as u64;
+    let treasury_share = amount - lp_share;
+    (lp_share, treasury_share)
 }
 
 /// Binary search over the sorted tick list to find the index where `target`

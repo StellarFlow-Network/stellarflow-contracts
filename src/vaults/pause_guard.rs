@@ -166,7 +166,7 @@ mod tests {
     use super::*;
     use soroban_sdk::testutils::Address as _;
     use soroban_sdk::testutils::Events;
-    use soroban_sdk::Env;
+    use soroban_sdk::{Env, IntoVal};
 
     fn setup() -> (Env, Address, Address, Address) {
         let env = Env::default();
@@ -180,6 +180,7 @@ mod tests {
             let data = ContractData {
                 admin: admin.clone(),
                 value: 0,
+                max_fee_ceiling: 0,
             };
             env.storage().instance().set(&DATA_KEY, &data);
         });
@@ -207,10 +208,16 @@ mod tests {
     #[test]
     fn admin_can_unpause_vault() {
         let (env, contract_id, admin, _) = setup();
+        // One `as_contract` per auth-requiring call: Soroban allows a single
+        // `require_auth` per address per invocation frame, so pausing and
+        // unpausing inside one frame fails with `Auth, ExistingValue` rather
+        // than exercising the guard. Separate frames model the two separate
+        // transactions this really is.
         env.as_contract(&contract_id, || {
             pause_vault(&env, &admin).unwrap();
             assert!(is_vault_paused(&env));
-
+        });
+        env.as_contract(&contract_id, || {
             unpause_vault(&env, &admin).expect("admin should be able to unpause vault");
             assert!(!is_vault_paused(&env));
         });
@@ -273,9 +280,11 @@ mod tests {
     #[test]
     fn emergency_withdraw_clears_flag_on_success() {
         let (env, contract_id, admin, _) = setup();
+        // Separate frames: one `require_auth` per address per invocation.
         env.as_contract(&contract_id, || {
             pause_vault(&env, &admin).unwrap();
-
+        });
+        env.as_contract(&contract_id, || {
             let asset = Symbol::new(&env, "USDC");
             let _ = emergency_vault_withdraw(
                 &env,
@@ -292,9 +301,11 @@ mod tests {
     #[test]
     fn emergency_withdraw_clears_flag_on_failure() {
         let (env, contract_id, admin, _) = setup();
+        // Separate frames: one `require_auth` per address per invocation.
         env.as_contract(&contract_id, || {
             pause_vault(&env, &admin).unwrap();
-
+        });
+        env.as_contract(&contract_id, || {
             let asset = Symbol::new(&env, "USDC");
             let result = emergency_vault_withdraw(
                 &env,
@@ -312,9 +323,11 @@ mod tests {
     #[test]
     fn emergency_withdraw_emits_event() {
         let (env, contract_id, admin, _) = setup();
+        // Separate frames: one `require_auth` per address per invocation.
         env.as_contract(&contract_id, || {
             pause_vault(&env, &admin).unwrap();
-
+        });
+        env.as_contract(&contract_id, || {
             let asset = Symbol::new(&env, "USDC");
             let _ = emergency_vault_withdraw(
                 &env,
@@ -325,7 +338,11 @@ mod tests {
             );
 
             let events = env.events().all();
-            assert!(!events.is_empty(), "should emit VAULT_EMERG_WD event");
+            let found = events.iter().any(|e| {
+                e.0 == contract_id
+                    && e.1 == soroban_sdk::vec![&env, Symbol::new(&env, "VAULT_EMERG_WD").into_val(&env)]
+            });
+            assert!(found, "should emit VAULT_EMERG_WD event");
         });
     }
 
@@ -336,19 +353,30 @@ mod tests {
             pause_vault(&env, &admin).unwrap();
 
             let events = env.events().all();
-            assert!(!events.is_empty(), "should emit VAULT_PAUSE event");
+            let found = events.iter().any(|e| {
+                e.0 == contract_id
+                    && e.1 == soroban_sdk::vec![&env, Symbol::new(&env, "VAULT_PAUSE").into_val(&env)]
+            });
+            assert!(found, "should emit VAULT_PAUSE event");
         });
     }
 
     #[test]
     fn unpause_emits_event() {
         let (env, contract_id, admin, _) = setup();
+        // Separate frames: one `require_auth` per address per invocation.
         env.as_contract(&contract_id, || {
             pause_vault(&env, &admin).unwrap();
+        });
+        env.as_contract(&contract_id, || {
             unpause_vault(&env, &admin).unwrap();
 
             let events = env.events().all();
-            assert!(!events.is_empty(), "should emit VAULT_UNPAUSE event");
+            let found = events.iter().any(|e| {
+                e.0 == contract_id
+                    && e.1 == soroban_sdk::vec![&env, Symbol::new(&env, "VAULT_UNPAUSE").into_val(&env)]
+            });
+            assert!(found, "should emit VAULT_UNPAUSE event");
         });
     }
 

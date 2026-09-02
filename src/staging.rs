@@ -279,6 +279,7 @@ mod tests {
         let data = ContractData {
             admin: admin.clone(),
             value: 0,
+            max_fee_ceiling: 0,
         };
         env.storage().instance().set(&DATA_KEY, &data);
         (admin, treasury)

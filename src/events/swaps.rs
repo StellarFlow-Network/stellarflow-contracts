@@ -56,7 +56,7 @@ pub fn publish_swap_executed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::{Address as _, Events};
+    use soroban_sdk::testutils::{Address as _, Events as _};
     use soroban_sdk::{symbol_short, Env};
 
     #[test]

@@ -1,6 +1,6 @@
 {
   "generators": {
-    "address": 2,
+    "address": 3,
     "nonce": 0
   },
   "auth": [
@@ -17,7 +17,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 }
               ]
             }
@@ -205,10 +205,10 @@
                       },
                       {
                         "key": {
-                          "symbol": "TREASURY"
+                          "symbol": "TREASUR"
                         },
                         "val": {
-                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                         }
                       }
                     ]
@@ -218,7 +218,7 @@
             },
             "ext": "v0"
           },
-          105000
+          6000
         ]
       ],
       [
@@ -338,7 +338,7 @@
             },
             "ext": "v0"
           },
-          105000
+          6000
         ]
       ]
     ]
@@ -368,7 +368,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
-                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                 }
               ]
             }
@@ -507,26 +507,18 @@
               "map": [
                 {
                   "key": {
-                    "symbol": "new_wasm_hash"
-                  },
-                  "val": {
-                    "bytes": "0101010101010101010101010101010101010101010101010101010101010101"
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "proposer"
-                  },
-                  "val": {
-                    "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                  }
-                },
-                {
-                  "key": {
                     "symbol": "staged_at"
                   },
                   "val": {
-                    "u64": 0
+                    "u32": 0
+                  }
+                },
+                {
+                  "key": {
+                    "symbol": "wasm_hash"
+                  },
+                  "val": {
+                    "bytes": "0101010101010101010101010101010101010101010101010101010101010101"
                   }
                 }
               ]

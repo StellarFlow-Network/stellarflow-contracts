@@ -1,6 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, contracterror, token, Address, Env, symbol_short};
+use soroban_sdk::{contract, contractimpl, contracttype, contracterror, token, Address, Env, Vec, symbol_short};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -15,6 +15,7 @@ pub enum BuybackError {
     PoolAlreadyRegistered = 7,
     PoolNotFound = 8,
     InvalidRatio = 9,
+    NotAuthorized = 10,
 }
 
 #[contracttype]
@@ -51,6 +52,7 @@ pub struct BuybackRecord {
 pub enum DataKey {
     Admin,
     Treasury,
+    Keeper,
 }
 
 #[contract]
@@ -71,6 +73,32 @@ impl TreasuryBuybackContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Treasury, &treasury);
         Ok(())
+    }
+
+    /// Set the authorized keeper address allowed to trigger asset sweeps.
+    ///
+    /// Only the contract admin (governance) can update the keeper.
+    pub fn set_keeper(
+        env: Env,
+        admin: Address,
+        keeper: Address,
+    ) -> Result<(), BuybackError> {
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(BuybackError::NotInitialized)?;
+        if admin != stored_admin {
+            return Err(BuybackError::NotAdmin);
+        }
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Keeper, &keeper);
+        Ok(())
+    }
+
+    /// Get the configured keeper address.
+    pub fn get_keeper(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::Keeper)
     }
 
     /// Collect accrued fee balances from a protocol contract.
@@ -140,6 +168,69 @@ impl TreasuryBuybackContract {
         );
 
         Ok(updated)
+    }
+
+    /// Sweep stray fee tokens from secondary contract addresses into the DAO treasury.
+    ///
+    /// This handler can only be triggered by the configured keeper account or by an
+    /// admin/governance call.
+    pub fn sweep_assets(
+        env: Env,
+        caller: Address,
+        token: Address,
+        sources: Vec<Address>,
+    ) -> Result<i128, BuybackError> {
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(BuybackError::NotInitialized)?;
+        let keeper: Option<Address> = env.storage().instance().get(&DataKey::Keeper);
+        let is_authorized = caller == stored_admin
+            || keeper.map(|k| caller == k).unwrap_or(false);
+        if !is_authorized {
+            return Err(BuybackError::NotAuthorized);
+        }
+        caller.require_auth();
+
+        let treasury: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Treasury)
+            .ok_or(BuybackError::NotInitialized)?;
+
+        let token_client = token::Client::new(&env, &token);
+        let spender = env.current_contract_address();
+        let mut total_swept: i128 = 0;
+
+        for source in sources.iter() {
+            let balance = token_client.balance(&source);
+            if balance > 0 {
+                let _ = token_client.transfer_from(&spender, &source, &treasury, &balance);
+                total_swept = total_swept
+                    .checked_add(balance)
+                    .ok_or(BuybackError::Overflow)?;
+            }
+        }
+
+        if total_swept > 0 {
+            env.events().publish(
+                (symbol_short!("sweep"),),
+                (token, total_swept, treasury),
+            );
+        }
+
+        Ok(total_swept)
+    }
+
+    /// Alias for `sweep_assets` for fee-specific callers.
+    pub fn sweep_fees(
+        env: Env,
+        caller: Address,
+        token: Address,
+        sources: Vec<Address>,
+    ) -> Result<i128, BuybackError> {
+        Self::sweep_assets(env, caller, token, sources)
     }
 
     /// Get the current fee balance for a specific token.

@@ -29,4 +29,11 @@ pub enum ErrorCode {
     ReentrancyDetected = 6001,
     CapacityExceeded = 6002,
     StorageError = 6003,
+    EscrowNotFound = 7001,
+    InvalidEscrowState = 7002,
+    NotAnchor = 7003,
+    PayoutTimeoutNotReached = 7004,
+    PayoutTimeoutExpired = 7005,
+    EscrowAlreadySettled = 7006,
+    EscrowAlreadyRefunded = 7007,
 }

@@ -177,6 +177,7 @@ mod tests {
             let data = crate::ContractData {
                 admin: admin.clone(),
                 value: 0,
+                max_fee_ceiling: 0,
             };
             env.storage().instance().set(&crate::DATA_KEY, &data);
 
@@ -202,6 +203,7 @@ mod tests {
             let data = crate::ContractData {
                 admin: admin.clone(),
                 value: 0,
+                max_fee_ceiling: 0,
             };
             env.storage().instance().set(&crate::DATA_KEY, &data);
 
@@ -253,6 +255,7 @@ mod tests {
             let data = crate::ContractData {
                 admin: Address::generate(&env),
                 value: 0,
+                max_fee_ceiling: 0,
             };
             env.storage().instance().set(&crate::DATA_KEY, &data);
 
@@ -268,6 +271,7 @@ mod tests {
             let data = crate::ContractData {
                 admin: Address::generate(&env),
                 value: 0,
+                max_fee_ceiling: 0,
             };
             env.storage().instance().set(&crate::DATA_KEY, &data);
             env.storage().instance().set(&RECOVERY_KEY, &recovery_key);
@@ -285,6 +289,7 @@ mod tests {
             let data = crate::ContractData {
                 admin: Address::generate(&env),
                 value: 0,
+                max_fee_ceiling: 0,
             };
             env.storage().instance().set(&crate::DATA_KEY, &data);
             env.storage().instance().set(&RECOVERY_KEY, &recovery_key);
@@ -302,6 +307,7 @@ mod tests {
             let data = crate::ContractData {
                 admin: Address::generate(&env),
                 value: 0,
+                max_fee_ceiling: 0,
             };
             env.storage().instance().set(&crate::DATA_KEY, &data);
             env.storage().instance().set(&RECOVERY_KEY, &recovery_key);
@@ -319,6 +325,7 @@ mod tests {
             let data = crate::ContractData {
                 admin: Address::generate(&env),
                 value: 0,
+                max_fee_ceiling: 0,
             };
             env.storage().instance().set(&crate::DATA_KEY, &data);
             env.storage().instance().set(&RECOVERY_KEY, &recovery_key);
@@ -346,6 +353,7 @@ mod tests {
             let data = crate::ContractData {
                 admin: Address::generate(&env),
                 value: 0,
+                max_fee_ceiling: 0,
             };
             env.storage().instance().set(&crate::DATA_KEY, &data);
             env.storage().instance().set(&RECOVERY_KEY, &recovery_key);
@@ -368,6 +376,7 @@ mod tests {
             let data = crate::ContractData {
                 admin: recovery_key.clone(),
                 value: 0,
+                max_fee_ceiling: 0,
             };
             env.storage().instance().set(&crate::DATA_KEY, &data);
             env.storage().instance().set(&RECOVERY_KEY, &recovery_key);
@@ -391,6 +400,7 @@ mod tests {
             let data = crate::ContractData {
                 admin: admin.clone(),
                 value: 0,
+                max_fee_ceiling: 0,
             };
             env.storage().instance().set(&crate::DATA_KEY, &data);
 

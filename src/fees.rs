@@ -10,6 +10,15 @@ use soroban_sdk::{contracttype, Address, Env, Vec};
 pub const STANDARD_FIXED_POINT_SCALE: i128 = 10_000_000;
 pub const INTERIOR_FEE_PRECISION_SCALE: i128 = 100_000_000_000_000;
 
+/// Supported pool fee tiers in basis points: 0.05%, 0.30%, and 1.00%.
+pub const FEE_TIER_5_BPS: u32 = 5;
+pub const FEE_TIER_30_BPS: u32 = 30;
+pub const FEE_TIER_100_BPS: u32 = 100;
+
+/// Collected fee split: 80% to LP token holders, 20% to protocol treasury.
+pub const LP_FEE_SHARE_BPS: u64 = 8_000;
+pub const TREASURY_FEE_SHARE_BPS: u64 = 2_000;
+
 // ---------------------------------------------------------------------------
 // Asset pricing storage (general — unchanged)
 // ---------------------------------------------------------------------------
@@ -81,20 +90,29 @@ impl VolumeHistory {
 #[derive(Clone, Debug, PartialEq)]
 pub struct DynamicFeeState {
     pub min_fee_bps: u32,  // 5 = 0.05%
-    pub max_fee_bps: u32,  // 30 = 0.30%
+    pub max_fee_bps: u32,  // 100 = 1.00%
     pub current_fee_bps: u32,
     pub period_seconds: u64, // how often to recalculate (default: 3600 = 1 hour)
 }
 
 impl DynamicFeeState {
+    pub fn new_default() -> Self {
+        Self::new()
+    }
+
     fn new() -> Self {
         Self {
             min_fee_bps: 5,    // 0.05%
-            max_fee_bps: 30,   // 0.30%
+            max_fee_bps: FEE_TIER_100_BPS, // 1.00%
             current_fee_bps: 5, // start at minimum
             period_seconds: 3600, // 1 hour recalculation period
         }
     }
+}
+
+/// Returns true if `fee_bps` is one of the supported pool fee tiers.
+pub fn is_valid_fee_tier(fee_bps: u32) -> bool {
+    fee_bps == FEE_TIER_5_BPS || fee_bps == FEE_TIER_30_BPS || fee_bps == FEE_TIER_100_BPS
 }
 
 impl CorridorFeePool {
@@ -274,6 +292,19 @@ pub fn get_corridor_fee_pool(env: Env, asset: AssetId) -> CorridorFeePool {
         .unwrap_or(CorridorFeePool::new(asset))
 }
 
+/// Split collected swap fees between LP token holders (80%) and the protocol
+/// treasury vault (20%).
+pub fn split_collected_fees(collected: u64) -> Result<(u64, u64), ContractError> {
+    let lp_share = u64::try_from(
+        (u128::from(collected) * u128::from(LP_FEE_SHARE_BPS)) / 10_000,
+    )
+    .map_err(|_| ContractError::Overflow)?;
+    let treasury_share = collected
+        .checked_sub(lp_share)
+        .ok_or(ContractError::MathOverflow)?;
+    Ok((lp_share, treasury_share))
+}
+
 /// Update volume history and recalculate dynamic fee if period has elapsed
 pub fn update_volume_and_adjust_fee(env: &Env, asset: AssetId, trade_volume: u64) -> Result<u32, ContractError> {
     let volume_key = FeesStorageKey::VolumeHistory(asset.clone());
@@ -325,21 +356,25 @@ fn calculate_dynamic_fee(volume_history: &VolumeHistory, dynamic_fee: &DynamicFe
     // Calculate volume change ratio (current / previous)
     let volume_delta = volume_history.current_period_volume as f64 / volume_history.previous_period_volume as f64;
     
-    // Adjust fee based on volume changes:
-    // - Volume spiked > 50%: increase fee to reduce congestion
-    // - Volume dropped > 30%: decrease fee to attract more trading
+    // Adjust fee by moving one supported fee tier up or down based on volume.
     let new_fee_bps = if volume_delta > 1.5 {
-        // Volume increased significantly - raise fee
-        dynamic_fee.current_fee_bps.saturating_add(5)
+        match dynamic_fee.current_fee_bps {
+            FEE_TIER_5_BPS => FEE_TIER_30_BPS,
+            FEE_TIER_30_BPS => FEE_TIER_100_BPS,
+            _ => dynamic_fee.current_fee_bps,
+        }
     } else if volume_delta < 0.7 {
-        // Volume decreased significantly - lower fee
-        dynamic_fee.current_fee_bps.saturating_sub(5)
+        match dynamic_fee.current_fee_bps {
+            FEE_TIER_100_BPS => FEE_TIER_30_BPS,
+            FEE_TIER_30_BPS => FEE_TIER_5_BPS,
+            _ => dynamic_fee.current_fee_bps,
+        }
     } else {
         // No significant change - keep current fee
         dynamic_fee.current_fee_bps
     };
-    
-    // Clamp fee to within allowed range [0.05%, 0.30%] = [5bps, 30bps]
+
+    // Clamp fee to the configured safety bounds [min_fee_bps, max_fee_bps].
     Ok(new_fee_bps.clamp(dynamic_fee.min_fee_bps, dynamic_fee.max_fee_bps))
 }
 
@@ -351,6 +386,26 @@ pub fn get_current_dynamic_fee(env: &Env, asset: AssetId) -> u32 {
         .get(&fee_key)
         .unwrap_or(DynamicFeeState::new());
     dynamic_fee.current_fee_bps
+}
+
+/// Resolve the swap fee to apply for a pool (Issue #766).
+///
+/// If the pool has opted into adaptive (volatility-based) fee scaling, returns
+/// the volatility-scaled fee that lies within the configured `[base, max]`
+/// band. Otherwise falls back to the provided legacy fee unchanged, so pools
+/// that never configured an [`AdaptiveFeeConfig`] keep their existing
+/// volume-based dynamic fee behavior.
+pub fn resolve_swap_fee_bps(
+    env: &Env,
+    pool: AssetId,
+    legacy_fee_bps: u32,
+) -> Result<u32, ContractError> {
+    if crate::config::get_adaptive_fee_config(env, pool).is_some() {
+        let (fee, _vol) = crate::amm::adaptive_fee::resolve_adaptive_fee(env, pool)?;
+        Ok(fee)
+    } else {
+        Ok(legacy_fee_bps)
+    }
 }
 
 /// Calculate and deduct dynamic fee from a trade amount
@@ -389,7 +444,10 @@ pub fn set_dynamic_fee_config(
     }
     
     // Validate bounds
-    if min_fee_bps < 5 || max_fee_bps > 30 || min_fee_bps >= max_fee_bps {
+    if !is_valid_fee_tier(min_fee_bps)
+        || !is_valid_fee_tier(max_fee_bps)
+        || min_fee_bps >= max_fee_bps
+    {
         return Err(ContractError::InvalidVarianceConfig);
     }
     if period_seconds < 300 { // Minimum 5 minutes to prevent excessive recalculations
@@ -409,6 +467,47 @@ pub fn set_dynamic_fee_config(
     env.storage().instance().set(&fee_key, &dynamic_fee);
     
     Ok(())
+}
+
+/// Adjust the current fee tier via governance.
+///
+/// This is the governance vote entry point. The caller must be the protocol
+/// admin/governance address and the selected tier must be one of the supported
+/// tiers and within the configured safety bounds.
+pub fn governance_adjust_fee_tier(
+    env: &Env,
+    governance: &Address,
+    asset: AssetId,
+    new_fee_bps: u32,
+) -> Result<u32, ContractError> {
+    governance.require_auth();
+    let data: ContractData = env
+        .storage()
+        .instance()
+        .get(&DATA_KEY)
+        .ok_or(ContractError::NotInitialized)?;
+    if data.admin != *governance {
+        return Err(ContractError::NotAdmin);
+    }
+    if !is_valid_fee_tier(new_fee_bps) {
+        return Err(ContractError::InvalidVarianceConfig);
+    }
+
+    let fee_key = FeesStorageKey::DynamicFee(asset);
+    let mut dynamic_fee: DynamicFeeState = env
+        .storage()
+        .instance()
+        .get(&fee_key)
+        .unwrap_or(DynamicFeeState::new());
+
+    if new_fee_bps < dynamic_fee.min_fee_bps || new_fee_bps > dynamic_fee.max_fee_bps {
+        return Err(ContractError::InvalidVarianceConfig);
+    }
+
+    dynamic_fee.current_fee_bps = new_fee_bps;
+    env.storage().instance().set(&fee_key, &dynamic_fee);
+
+    Ok(new_fee_bps)
 }
 
 // ---------------------------------------------------------------------------

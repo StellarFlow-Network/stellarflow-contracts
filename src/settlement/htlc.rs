@@ -43,6 +43,12 @@ const MIN_DEADLINE_OFFSET: u32 = 10;
 /// ledgers (~365 days at 5s per ledger ≈ 6.3M sequences).
 const MAX_DEADLINE_OFFSET: u32 = 6_307_200;
 
+/// Automatic payout timeout window in ledger sequences. If the anchor fails
+/// to signal fiat payout completion within this window (~24 hours at 5s per
+/// ledger = 86_400s / 5 = 17_280 sequences), the locked funds may be
+/// refunded to the sender.
+pub const PAYOUT_TIMEOUT_LEDGERS: u32 = 17_280;
+
 // ---------------------------------------------------------------------------
 // Storage keys
 // ---------------------------------------------------------------------------
@@ -74,6 +80,14 @@ pub enum HtlcState {
     Claimed,
     /// Depositor refunded after deadline.
     Refunded,
+    /// Payment record created but funds not yet locked in escrow.
+    Pending,
+    /// Funds locked in escrow awaiting anchor payout.
+    Locked,
+    /// Anchor has dispatched the off-ledger fiat payout.
+    Dispatched,
+    /// Anchor has confirmed the fiat payout completed and funds released.
+    Settled,
 }
 
 /// A single HTLC record.
@@ -292,6 +306,94 @@ pub fn claim(
         &env,
         EV_HTLC_CLAIM,
         symbol_short!("htlc"),
+        (htlc_id, caller, htlc.amount),
+    );
+
+    Ok(ClaimResult {
+        htlc_id,
+        amount: htlc.amount,
+        beneficiary: htlc.beneficiary,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Anchor settlement (fiat payout completion)
+// ---------------------------------------------------------------------------
+
+/// Signal that the anchor (beneficiary) has completed the off-ledger fiat
+/// payout, releasing the locked escrow funds.
+///
+/// This is the fiat-corridor counterpart to [`claim`]: instead of proving a
+/// SHA-256 pre-image, the anchor keypair attests that the fiat payout has
+/// completed. Only the designated anchor (the `beneficiary`) may call this,
+/// and only before the payout deadline elapses. If the anchor never settles
+/// within the [`PAYOUT_TIMEOUT_LEDGERS`] window encoded in
+/// `deadline_sequence`, the sender reclaims the funds via [`refund`].
+///
+/// On success the HTLC transitions to [`HtlcState::Settled`].
+///
+/// # Arguments
+/// * `env` - Soroban environment.
+/// * `htlc_id` - The HTLC to settle.
+/// * `caller` - The anchor address (must equal the `beneficiary`).
+///
+/// # Errors
+/// * [`ContractError::HtlcNotFound`] if no HTLC exists with this ID.
+/// * [`ContractError::HtlcNotActive`] if already settled or refunded.
+/// * [`ContractError::DeadlineReached`] if the payout window has elapsed.
+/// * [`ContractError::Unauthorized`] if the caller is not the anchor.
+pub fn anchor_settle(
+    env: &Env,
+    htlc_id: u64,
+    caller: Address,
+) -> Result<ClaimResult, ContractError> {
+    caller.require_auth();
+
+    let key = HtlcKey(htlc_id);
+    let mut htlc: Htlc = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .ok_or(ContractError::HtlcNotFound)?;
+
+    // ── Authorization: only the anchor (beneficiary) may settle ─────────
+    if htlc.beneficiary != caller {
+        return Err(ContractError::Unauthorized);
+    }
+
+    // ── State check — must still be locked/active ──────────────────────
+    if htlc.state != HtlcState::Active && htlc.state != HtlcState::Locked {
+        return Err(ContractError::HtlcNotActive);
+    }
+
+    // ── Payout window — anchor must settle before the deadline ──────────
+    let current_seq = env.ledger().sequence();
+    if current_seq >= htlc.deadline_sequence {
+        return Err(ContractError::DeadlineReached);
+    }
+
+    // ── State transition ───────────────────────────────────────────────
+    htlc.state = HtlcState::Settled;
+    env.storage().persistent().set(&key, &htlc);
+
+    // Decrement depositor active count.
+    let counter_key = HtlcCounterKey(htlc.depositor.clone());
+    let count: u32 = env
+        .storage()
+        .persistent()
+        .get(&counter_key)
+        .unwrap_or(1u32);
+    if count > 0 {
+        env.storage()
+            .persistent()
+            .set(&counter_key, &(count - 1));
+    }
+
+    // Emit settlement event.
+    let _ = emit_simple2(
+        &env,
+        EV_HTLC_CLAIM,
+        symbol_short!("settle"),
         (htlc_id, caller, htlc.amount),
     );
 

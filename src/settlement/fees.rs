@@ -148,6 +148,106 @@ pub fn add_liquidity(
     Ok(position)
 }
 
+/// Allow users to deposit a single asset into a dual-token liquidity pool.
+/// Calculates optimal swap split (50/50) automatically before LP token minting.
+pub fn deposit_single_asset(
+    env: &Env,
+    provider: Address,
+    asset: AssetId,
+    amount_in: u128,
+    is_asset_a: bool,
+) -> Result<(LiquidityPosition, u128, u128), ContractError> {
+    provider.require_auth();
+    if amount_in == 0 {
+        return Err(ContractError::InvalidStakeAmount);
+    }
+
+    let mut pool = load_pool(env, asset);
+    if pool.total_lp_units == 0 {
+        return Err(ContractError::InsufficientLiquidityDepth);
+    }
+
+    let swap_amount = amount_in / 2;
+    let deposit_amount = amount_in - swap_amount;
+
+    let (reserve_in, reserve_out) = if is_asset_a {
+        (pool.reserve_a, pool.reserve_b)
+    } else {
+        (pool.reserve_b, pool.reserve_a)
+    };
+
+    let (swap_out, fee) = crate::amm::invariant::compute_swap_out(
+        env,
+        asset,
+        swap_amount,
+        reserve_in,
+        reserve_out,
+    )?;
+
+    // Add swap fee to the pool's fee pool
+    pool.fee_pool = pool
+        .fee_pool
+        .checked_add(fee as u64)
+        .ok_or(ContractError::MathOverflow)?;
+
+    let (deposit_a, deposit_b) = if is_asset_a {
+        (deposit_amount, swap_out)
+    } else {
+        (swap_out, deposit_amount)
+    };
+
+    // Update reserves logically for LP math
+    let mut new_reserve_a = pool.reserve_a;
+    let mut new_reserve_b = pool.reserve_b;
+    
+    if is_asset_a {
+        new_reserve_a = new_reserve_a.checked_add(swap_amount).ok_or(ContractError::MathOverflow)?;
+        new_reserve_b = new_reserve_b.checked_sub(swap_out).ok_or(ContractError::MathOverflow)?;
+    } else {
+        new_reserve_b = new_reserve_b.checked_add(swap_amount).ok_or(ContractError::MathOverflow)?;
+        new_reserve_a = new_reserve_a.checked_sub(swap_out).ok_or(ContractError::MathOverflow)?;
+    }
+
+    let lp_shares = crate::amm::invariant::compute_lp_shares(
+        deposit_a,
+        deposit_b,
+        new_reserve_a,
+        new_reserve_b,
+        pool.total_lp_units.into(),
+    )?;
+
+    // Calculate actual tokens taken to mint these shares
+    let actual_a = crate::amm::invariant::mul_div(lp_shares, new_reserve_a, pool.total_lp_units.into())?;
+    let actual_b = crate::amm::invariant::mul_div(lp_shares, new_reserve_b, pool.total_lp_units.into())?;
+
+    let dust_a = deposit_a.saturating_sub(actual_a);
+    let dust_b = deposit_b.saturating_sub(actual_b);
+
+    // Apply actual deposit
+    pool.reserve_a = new_reserve_a.checked_add(actual_a).ok_or(ContractError::MathOverflow)?;
+    pool.reserve_b = new_reserve_b.checked_add(actual_b).ok_or(ContractError::MathOverflow)?;
+    pool.total_lp_units = pool.total_lp_units.checked_add(lp_shares as u64).ok_or(ContractError::MathOverflow)?;
+
+    let key = position_key(asset, &provider);
+    let mut position: LiquidityPosition = env
+        .storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or(LiquidityPosition {
+            provider: provider.clone(),
+            asset,
+            lp_units: 0,
+        });
+    position.lp_units = position
+        .lp_units
+        .checked_add(lp_shares as u64)
+        .ok_or(ContractError::MathOverflow)?;
+    env.storage().persistent().set(&key, &position);
+    save_pool(env, &pool);
+
+    Ok((position, dust_a, dust_b))
+}
+
 /// Burn LP units and return the provider's pro-rata reserves and fee claim.
 pub fn redeem_liquidity(
     env: &Env,
