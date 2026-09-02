@@ -143,6 +143,9 @@ pub const EV_BALLOT_OPENED: Symbol = symbol_short!("ball_open");
 /// Governance: a revocation ballot was closed.
 pub const EV_BALLOT_CLOSED: Symbol = symbol_short!("ball_clos");
 
+/// Remittance: fees were routed through the fee splitter.
+pub const EV_REMITTANCE_FEES_ROUTED: Symbol = symbol_short!("rem_fee_r");
+
 /// Governance: a proposal was vetoed by the Security Council.
 pub const EV_PROPOSAL_VETOED: Symbol = symbol_short!("prop_vet");
 
@@ -567,6 +570,7 @@ mod tests {
             EV_UPGRADE_CANCELLED,
             EV_BALLOT_OPENED,
             EV_BALLOT_CLOSED,
+            EV_REMITTANCE_FEES_ROUTED,
             EV_PROPOSAL_VETOED,
         ];
         for name in names.iter() {
