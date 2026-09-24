@@ -1,0 +1,33 @@
+# SHA-256 checksums for tests/fuzz/proptest-regressions/lib.txt.
+#
+# Two tiers:
+#   file-level    <sha256>  <path>          SHA-256 of the entire lib.txt file content
+#   per-seed raw  <sha256>  <seed-hex>       SHA-256 of each cc-line's 32-byte raw
+#                                             seed bytes (NOT the hex string, NOT the comment).
+#                                             Robust against future proptest versions
+#                                             that normalise hex case or reformat comments.
+#
+# Per-seed rows mirror lib.txt cc-line order (row 1 = cc-line 1,
+# row 7 = cc-line 7); do not reorder without updating the index.
+#
+# Verify:
+#   ./verify_seeds.sh                                  # portable; xxd + sha256sum.
+#   sha256sum --ignore-missing -c SHA256SUMS           # standard tool path; only
+#                                                       # the file-level entry will
+#                                                       # check (per-seed rows use
+#                                                       # hex labels, not real files).
+#
+# Regenerate: re-run the verify script's recipes and re-key the data rows.
+#
+# Git history is the meta-verifier of this file: a malicious committer
+# would have to forge both lib.txt and SHA256SUMS in the same commit to
+# bypass it, which `git log -p` makes visible.
+
+76542885f0e0d55b1eaffa7c1a8e74702dc39c8af7a1c86f8e328568ff0138f7  lib.txt
+af39d0ba8aed119981deeb8dcbc6be306a9641fb8a0bcdf94dc273ef63087343  e14560bc20b4e56ee4d85691b025984127c94626d44a12cc0334d7b1a16e44fe
+9ac3b3132fa768e0552c6f5cae38b6276d9bba39731fcb99e8460dc62d315a3a  90bb0ff1197c65359998a204d94e3f5a62bc9c9b29fab9f980ccd2e341c0e846
+50641f4d59c2d79ddd0c80a96a2d9c7707a2778636a10f893c0d866a08326c9b  c8e3d19e747c3090e88c7dc4cdae4d449a276c71b817b62818bff6ef102a73c5
+c6681dee5d1a12ba0a517c5435d214a8c8619f671bb04a7ed97c4d5752b1a8e4  8f8ba1f192b47c958f1df7b0e64babb3f9c1c8d009aaecf10a0b58f5b3e6867d
+fe528722b1891daf40197c8d8ee21dd180cfce0bedd1a4df4466d237bf313f9b  0b485798f04e322b8a1204657234a15ef822c392354ea1bacc011c5c5a0d0db0
+e4f9cb7b8e44e4afae3fd3122e9a521c0534b294887eda5e0fd93af6ee4157fc  7c8e2a1d4f5b090c3e8a7d6f2c4b18e9a3f7c5d2b4e18a7c9f3d6b2e5a18c4f7
+a01b5510c78278cce9efaa4cb1924eba5198386bce94deb522361810648b22b4  9a3b7e2c5f8d4a18c6e7b3f9d2a5c8e4b1f7d6a3c9e2b5f8d4a7c1e3b6f9d2a5

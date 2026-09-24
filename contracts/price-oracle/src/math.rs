@@ -302,9 +302,6 @@ pub fn require_nonzero_denominator(n: i128) -> Result<(), Error> {
     }
 }
 
-    // --- 3. Wrap in a Soroban String ------------------------------------------
-    let text = core::str::from_utf8(&out[..pos]).expect("price formatting produced invalid utf-8");
-    String::from_str(env, text)
 /// Validate that a slippage tolerance is within acceptable bounds.
 ///
 /// Slippage tolerance must be in the range [0, 10_000] basis points (0-100%).

@@ -1,4 +1,4 @@
-use soroban_sdk::{Address, Env, IntoVal, Symbol, Vec};
+use soroban_sdk::{Address, Bytes, BytesN, Env, IntoVal, Symbol, Vec};
 
 use crate::types::{DataKey, PriceUpdatePayload};
 
@@ -124,6 +124,16 @@ fn try_invoke_callback(
     Ok(())
 }
 
+/// Verify an off-ramp anchor gateway attestation over the transaction id.
+pub fn verify_anchor_attestation(
+    env: &Env,
+    gateway_public_key: &BytesN<32>,
+    tx_id: &Bytes,
+    signature: &BytesN<64>,
+) -> bool {
+    env.crypto().ed25519_verify(gateway_public_key, tx_id, signature)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,5 +202,15 @@ mod tests {
 
         // Unsubscribe from empty list fails
         assert!(unsubscribe(&env, &contract).is_err());
+    }
+
+    #[test]
+    fn test_verify_anchor_attestation_rejects_invalid_signature() {
+        let env = Env::default();
+        let key = BytesN::from_array(&env, &[1u8; 32]);
+        let tx_id = Bytes::from_array(&env, &[9u8, 8u8, 7u8, 6u8]);
+        let signature = BytesN::from_array(&env, &[2u8; 64]);
+
+        assert!(!verify_anchor_attestation(&env, &key, &tx_id, &signature));
     }
 }

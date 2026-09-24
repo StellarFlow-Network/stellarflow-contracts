@@ -1,0 +1,260 @@
+name: WASM Size Check
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  CARGO_TERM_COLOR: always
+  WASM_TARGET: wasm32-unknown-unknown
+  # 2KB threshold for flagging size increases (2048 bytes)
+  SIZE_INCREASE_THRESHOLD: 2048
+  # 45KB absolute maximum per contract
+  MAX_WASM_SIZE: 46080
+
+jobs:
+  wasm-size-check:
+    name: WASM Size Comparison
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          path: pr-branch
+
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: main-branch
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.85.0
+        with:
+          targets: ${{ env.WASM_TARGET }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-size-check-${{ hashFiles('pr-branch/**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-size-check-
+            ${{ runner.os }}-cargo-
+
+      # ── Build main branch ────────────────────────────────────────────────────
+      - name: Build WASM (main branch)
+        working-directory: main-branch
+        run: |
+          cargo build --target ${{ env.WASM_TARGET }} --release 2>&1
+        continue-on-error: true  # main may not compile if it has its own issues
+
+      - name: Collect main branch sizes
+        id: main-sizes
+        working-directory: main-branch
+        run: |
+          sizes_file="${GITHUB_WORKSPACE}/main_sizes.txt"
+          if [ -d "target/${{ env.WASM_TARGET }}/release" ]; then
+            find "target/${{ env.WASM_TARGET }}/release" -maxdepth 1 -name "*.wasm" | sort | while read -r f; do
+              name=$(basename "$f")
+              size=$(stat -c%s "$f")
+              echo "${name}=${size}" >> "$sizes_file"
+            done
+          fi
+          # Ensure file exists even if no WASMs were found
+          touch "$sizes_file"
+          echo "Sizes collected from main:"
+          cat "$sizes_file" || true
+
+      # ── Build PR branch ──────────────────────────────────────────────────────
+      - name: Build WASM (PR branch)
+        working-directory: pr-branch
+        run: |
+          cargo build --target ${{ env.WASM_TARGET }} --release
+
+      - name: Collect PR branch sizes
+        id: pr-sizes
+        working-directory: pr-branch
+        run: |
+          sizes_file="${GITHUB_WORKSPACE}/pr_sizes.txt"
+          find "target/${{ env.WASM_TARGET }}/release" -maxdepth 1 -name "*.wasm" | sort | while read -r f; do
+            name=$(basename "$f")
+            size=$(stat -c%s "$f")
+            echo "${name}=${size}" >> "$sizes_file"
+          done
+          touch "$sizes_file"
+          echo "Sizes collected from PR:"
+          cat "$sizes_file"
+
+      # ── Generate comparison report ───────────────────────────────────────────
+      - name: Generate size comparison report
+        id: report
+        shell: bash
+        run: |
+          MAIN_SIZES="${GITHUB_WORKSPACE}/main_sizes.txt"
+          PR_SIZES="${GITHUB_WORKSPACE}/pr_sizes.txt"
+
+          THRESHOLD=${{ env.SIZE_INCREASE_THRESHOLD }}
+          MAX_SIZE=${{ env.MAX_WASM_SIZE }}
+
+          # Collect all contract names from both files
+          all_names=$(cat "$MAIN_SIZES" "$PR_SIZES" 2>/dev/null \
+            | sed 's/=.*//' | sort -u)
+
+          # Build markdown table rows and detect violations
+          table_rows=""
+          flagged=0
+          over_limit=0
+
+          while IFS= read -r name; do
+            [ -z "$name" ] && continue
+
+            main_size=$(grep "^${name}=" "$MAIN_SIZES" 2>/dev/null | cut -d= -f2 || echo "")
+            pr_size=$(grep "^${name}=" "$PR_SIZES" 2>/dev/null | cut -d= -f2 || echo "")
+
+            # Format sizes
+            if [ -n "$pr_size" ]; then
+              pr_kb=$(awk "BEGIN { printf \"%.2f\", $pr_size / 1024 }")
+              pr_display="${pr_size} B (${pr_kb} KB)"
+            else
+              pr_display="—"
+              pr_size=0
+            fi
+
+            if [ -n "$main_size" ] && [ "$main_size" -gt 0 ] 2>/dev/null; then
+              main_kb=$(awk "BEGIN { printf \"%.2f\", $main_size / 1024 }")
+              main_display="${main_size} B (${main_kb} KB)"
+            else
+              main_display="N/A (new)"
+              main_size=0
+            fi
+
+            # Compute delta
+            if [ "$pr_size" -gt 0 ] && [ "$main_size" -gt 0 ]; then
+              delta=$(( pr_size - main_size ))
+              if [ "$delta" -gt 0 ]; then
+                delta_display="+${delta} B ⬆️"
+              elif [ "$delta" -lt 0 ]; then
+                abs_delta=$(( -delta ))
+                delta_display="-${abs_delta} B ⬇️"
+              else
+                delta_display="0 B ➡️"
+              fi
+            elif [ "$pr_size" -gt 0 ] && [ "$main_size" -eq 0 ]; then
+              delta=$pr_size
+              delta_display="+${delta} B 🆕"
+            else
+              delta=0
+              delta_display="—"
+            fi
+
+            # Status column
+            status="✅"
+            if [ -n "$pr_size" ] && [ "$pr_size" -gt "$MAX_SIZE" ]; then
+              status="🚫 **OVER LIMIT**"
+              over_limit=$(( over_limit + 1 ))
+            elif [ "$delta" -gt "$THRESHOLD" ]; then
+              status="⚠️ **+>2 KB**"
+              flagged=$(( flagged + 1 ))
+            fi
+
+            table_rows="${table_rows}| \`${name}\` | ${main_display} | ${pr_display} | ${delta_display} | ${status} |"$'\n'
+          done <<< "$all_names"
+
+          # Build the full comment body
+          {
+            echo "## 📦 WASM Size Report"
+            echo ""
+
+            if [ "$flagged" -gt 0 ] || [ "$over_limit" -gt 0 ]; then
+              if [ "$over_limit" -gt 0 ]; then
+                echo "> [!CAUTION]"
+                echo "> **$over_limit contract(s) exceed the 45 KB absolute size limit.**"
+                echo ""
+              fi
+              if [ "$flagged" -gt 0 ]; then
+                echo "> [!WARNING]"
+                echo "> **$flagged contract(s) grew by more than 2 KB compared to \`main\`.**"
+                echo ""
+              fi
+            else
+              echo "> [!NOTE]"
+              echo "> All contracts are within size limits. No significant size increases detected."
+              echo ""
+            fi
+
+            echo "| Contract | main | This PR | Delta | Status |"
+            echo "|----------|------|---------|-------|--------|"
+            printf '%s' "$table_rows"
+            echo ""
+            echo "<details>"
+            echo "<summary>ℹ️ Size check thresholds</summary>"
+            echo ""
+            echo "- **Warning threshold**: increases > 2 KB ($(( THRESHOLD )) bytes) compared to \`main\`"
+            echo "- **Hard limit**: 45 KB ($(( MAX_SIZE )) bytes) per contract"
+            echo "- Sizes shown are for optimised release builds (\`opt-level = \"z\"\`, \`lto = true\`)"
+            echo ""
+            echo "</details>"
+            echo ""
+            echo "_Generated by the [WASM Size Check](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) workflow on $(date -u '+%Y-%m-%d %H:%M UTC')_"
+          } > "${GITHUB_WORKSPACE}/comment_body.md"
+
+          echo "flagged=${flagged}" >> "$GITHUB_OUTPUT"
+          echo "over_limit=${over_limit}" >> "$GITHUB_OUTPUT"
+
+      # ── Post / update PR comment ─────────────────────────────────────────────
+      - name: Post size report as PR comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync(`${process.env.GITHUB_WORKSPACE}/comment_body.md`, 'utf8');
+
+            const marker = '<!-- wasm-size-check -->';
+            const fullBody = `${marker}\n${body}`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c => c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: fullBody,
+              });
+              console.log(`Updated existing comment #${existing.id}`);
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: fullBody,
+              });
+              console.log('Created new comment');
+            }
+
+      # ── Fail the job if hard limit is breached ───────────────────────────────
+      - name: Fail if any contract exceeds the 45 KB hard limit
+        if: steps.report.outputs.over_limit != '0'
+        run: |
+          echo "::error::One or more WASM contracts exceed the 45 KB hard limit. See the PR comment for details."
+          exit 1
+
+      # ── Annotate the check with a warning (non-blocking) for >2KB growth ────
+      - name: Warn if contracts grew by more than 2 KB
+        if: steps.report.outputs.flagged != '0'
+        run: |
+          echo "::warning::One or more WASM contracts grew by more than 2 KB compared to main. Review the PR comment for a full breakdown."

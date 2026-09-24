@@ -15,6 +15,9 @@
               "args": [
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 }
               ]
             }
@@ -69,7 +72,7 @@
   ],
   "ledger": {
     "protocol_version": 20,
-    "sequence_number": 0,
+    "sequence_number": 17280,
     "timestamp": 86400,
     "network_id": "0000000000000000000000000000000000000000000000000000000000000000",
     "base_reserve": 10,
@@ -116,14 +119,6 @@
                             },
                             {
                               "key": {
-                                "symbol": "max_fee_ceiling"
-                              },
-                              "val": {
-                                "u64": 1000000000
-                              }
-                            },
-                            {
-                              "key": {
                                 "symbol": "value"
                               },
                               "val": {
@@ -131,6 +126,14 @@
                               }
                             }
                           ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "TREASURY"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                         }
                       }
                     ]
@@ -206,7 +209,7 @@
             },
             "ext": "v0"
           },
-          0
+          17280
         ]
       ],
       [
@@ -285,7 +288,14 @@
               }
             ],
             "data": {
-              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+              "vec": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                }
+              ]
             }
           }
         }
@@ -461,14 +471,6 @@
                   },
                   "val": {
                     "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
-                  }
-                },
-                {
-                  "key": {
-                    "symbol": "max_fee_ceiling"
-                  },
-                  "val": {
-                    "u64": 1000000000
                   }
                 },
                 {

@@ -134,32 +134,33 @@ mod tests {
         let result = filter_feeds_by_deviation(&twap, feeds, &env);
         assert_eq!(result.len(), 2);
     }
-//! Liquidity volume validation module — flash loan manipulation prevention.
-//!
-//! Aggregating market prices from thinly backed liquidity channels can expose
-//! downstream financial engines to flash loan price manipulations. This module
-//! implements explicit liquidity volume validation checks that terminate
-//! transaction paths early if a validator node's reported pool liquidity falls
-//! below the configured minimum security threshold.
-//!
-//! # Security Model
-//! 
-//! Flash loan attacks exploit temporary price dislocations in low-liquidity pools.
-//! By requiring minimum liquidity thresholds, we ensure that price submissions
-//! come from markets with sufficient depth to resist manipulation.
-//!
-//! # Flow
-//! 1. Admin sets liquidity threshold per asset via `set_liquidity_threshold`.
-//! 2. Provider submits price + liquidity data via `update_price`.
-//! 3. Contract validates liquidity meets threshold before accepting submission.
-//! 4. Submissions below threshold are rejected with `LiquidityBelowThreshold` error.
-//!
-//! # Storage layout
-//! | Key                                  | Type      | Description                                    |
-//! |--------------------------------------|-----------|------------------------------------------------|
-//! | `DataKey::LiquidityThreshold(Symbol)` | `i128`    | Minimum liquidity required per asset (stroops) |
-//! | `DataKey::ProviderReportedLiquidity(Address, Symbol)` | `i128` | Last reported liquidity by provider for asset |
-//! | `DataKey::LastLiquidityValidation(Symbol)` | `u64` | Timestamp of last successful validation |
+}
+// Liquidity volume validation module — flash loan manipulation prevention.
+//
+// Aggregating market prices from thinly backed liquidity channels can expose
+// downstream financial engines to flash loan price manipulations. This module
+// implements explicit liquidity volume validation checks that terminate
+// transaction paths early if a validator node's reported pool liquidity falls
+// below the configured minimum security threshold.
+//
+// # Security Model
+//
+// Flash loan attacks exploit temporary price dislocations in low-liquidity pools.
+// By requiring minimum liquidity thresholds, we ensure that price submissions
+// come from markets with sufficient depth to resist manipulation.
+//
+// # Flow
+// 1. Admin sets liquidity threshold per asset via `set_liquidity_threshold`.
+// 2. Provider submits price + liquidity data via `update_price`.
+// 3. Contract validates liquidity meets threshold before accepting submission.
+// 4. Submissions below threshold are rejected with `LiquidityBelowThreshold` error.
+//
+// # Storage layout
+// | Key                                  | Type      | Description                                    |
+// |--------------------------------------|-----------|------------------------------------------------|
+// | `DataKey::LiquidityThreshold(Symbol)` | `i128`    | Minimum liquidity required per asset (stroops) |
+// | `DataKey::ProviderReportedLiquidity(Address, Symbol)` | `i128` | Last reported liquidity by provider for asset |
+// | `DataKey::LastLiquidityValidation(Symbol)` | `u64` | Timestamp of last successful validation |
 
 use soroban_sdk::{Address, Env, Symbol, Vec};
 

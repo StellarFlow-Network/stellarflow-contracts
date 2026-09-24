@@ -1,0 +1,470 @@
+use crate::ContractError;
+
+/// Low 64-bit mask used to split a `u128` into (lo, hi) halves.
+const MASK_64: u128 = (1u128 << 64) - 1;
+
+/// 256-bit unsigned integer represented as two machine words.
+///
+/// Used internally to hold intermediate products of two `u128` values before
+/// division, preventing precision loss in the constant-product invariant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct U256(u128, u128);
+
+impl U256 {
+    /// Construct the zero value. Reserved for future zero-init scaffolding in
+    /// `div_mod`'s fallback paths; not currently called.
+    #[allow(dead_code)]
+    fn zero() -> Self {
+        U256(0, 0)
+    }
+
+    /// Multiply two `u128` values, returning the full 256-bit product
+    /// `(a * b)` split into `(low 128, high 128)` halves.
+    ///
+    /// Implemented as a four-product u64→u128 decomposition with explicit
+    /// carry propagation across the 64-bit word boundaries. `u128::widening_mul`
+    /// would be the idiomatic solution, but it remains gated behind the
+    /// unstable `bigint_helper_methods` feature as of Rust 1.85
+    /// (rust-lang/rust#85532). The previous, simpler implementation used
+    /// `let mid = cross1 + cross2` which silently overflowed `u128` for
+    /// adversarial boundary inputs (e.g. `a = b = u128::MAX`); the fuzz
+    /// harness in `tests/fuzz/` originally surfaced that bug.
+    ///
+    /// **Carry-bound proof.** Each u64×u64 product widens freely to `u128`,
+    /// then splits into `(low, high) ≤ (MASK_64, MASK_64)`. At every sum, three
+    /// or four such halves combine (one carries a previously-attributable
+    /// ≤ 2 term):
+    ///
+    /// - `mid_lo_sum ≤ 3 · MASK_64                < u128::MAX`     (carry ≤ 2)
+    /// - `mid_hi_sum ≤ 3 · MASK_64 + 2            < u128::MAX`     (carry ≤ 2)
+    /// - `upper      = p_hi_hi_hi + mid_hi_carry ≤ 2^64 − 1`
+    ///
+    /// The two terms of `upper` are mutually exclusive at their individual
+    /// maxima: `p_hi_hi_hi` peaking (requiring `ah = bh = u64::MAX`) caps
+    /// `mid_hi_carry` at 1, while `mid_hi_carry` peaking forces
+    /// `p_hi_hi_hi < 2^64 − 1`. So `upper ≤ 2^64 − 1` globally, and
+    /// `upper << 64` never overflows the u128 `result_hi`. The
+    /// `debug_assert!` re-checks this bound at runtime as defense-in-depth.
+    fn mul(a: u128, b: u128) -> Self {
+        let a_lo = a as u64;
+        let a_hi = (a >> 64) as u64;
+        let b_lo = b as u64;
+        let b_hi = (b >> 64) as u64;
+
+        let p_lo_lo = (a_lo as u128) * (b_lo as u128);
+        let cross1 = (a_hi as u128) * (b_lo as u128);
+        let cross2 = (a_lo as u128) * (b_hi as u128);
+        let p_hi_hi = (a_hi as u128) * (b_hi as u128);
+
+        let (mid, carry_mid) = cross1.overflowing_add(cross2);
+        let mid_lo = mid << 64;
+        let mid_hi = (mid >> 64).wrapping_add((carry_mid as u128) << 64);
+
+        let (result_lo, carry_lo) = p_lo_lo.overflowing_add(mid_lo);
+        let result_hi = p_hi_hi.wrapping_add(mid_hi).wrapping_add(carry_lo as u128);
+
+        debug_assert!(result_hi >> 64 <= u64::MAX as u128);
+
+        U256(result_lo, result_hi)
+    }
+
+    /// Divide a U256 by a u128 divisor, returning the (quotient, remainder).
+    /// Returns `None` when `divisor` is zero or the quotient exceeds u128.
+    fn div_mod(&self, divisor: u128) -> Option<(u128, u128)> {
+        if divisor == 0 {
+            return None;
+        }
+        let d = divisor;
+        let hi = self.1;
+        let lo = self.0;
+
+        if hi >= d {
+            return None;
+        }
+
+        let mut r = hi;
+        let mut q = 0u128;
+
+        for i in (0..128).rev() {
+            r = (r << 1) | ((lo >> i) & 1);
+            if r >= d {
+                r -= d;
+                q |= 1u128 << i;
+            }
+        }
+
+        Some((q, r))
+    }
+}
+
+/// Compute `numerator * denominator / divisor` using full 256-bit intermediate
+/// precision. All rounding truncates toward zero (floor), which always favors
+/// pool reserves.
+fn mul_div(numerator: u128, denominator: u128, divisor: u128) -> Result<u128, ContractError> {
+    if divisor == 0 {
+        return Err(ContractError::DivisionByZero);
+    }
+    let product = U256::mul(numerator, denominator);
+    let (quot, _rem) = product.div_mod(divisor).ok_or(ContractError::Overflow)?;
+    Ok(quot)
+}
+
+/// Supported pool fee tiers in basis points.
+pub const FEE_TIER_0_05_BPS: u64 = 5;
+pub const FEE_TIER_0_30_BPS: u64 = 30;
+pub const FEE_TIER_1_00_BPS: u64 = 100;
+
+/// Minimum and maximum fee tiers that governance may select.
+pub const MIN_FEE_TIER_BPS: u64 = FEE_TIER_0_05_BPS;
+pub const MAX_FEE_TIER_BPS: u64 = FEE_TIER_1_00_BPS;
+
+/// LP / treasury fee split: 80% to LP holders, 20% to protocol treasury.
+pub const LP_FEE_SHARE_BPS: u64 = 8_000;
+pub const TREASURY_FEE_SHARE_BPS: u64 = 2_000;
+
+/// Validate that a proposed fee tier is one of the supported configurable tiers.
+pub fn validate_fee_tier(fee_bps: u64) -> Result<(), ContractError> {
+    if matches!(fee_bps, FEE_TIER_0_05_BPS | FEE_TIER_0_30_BPS | FEE_TIER_1_00_BPS) {
+        Ok(())
+    } else {
+        Err(ContractError::InvalidInput)
+    }
+}
+
+/// Apply a governance vote to adjust the pool fee tier parameter.
+///
+/// The vote result must be a supported fee tier inside the bounded safety range.
+pub fn apply_governance_fee_tier(voted_fee_bps: u64) -> Result<u64, ContractError> {
+    validate_fee_tier(voted_fee_bps)?;
+    Ok(voted_fee_bps)
+}
+
+/// Controller for the pool's configurable fee tier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FeeTierController {
+    pub current_fee_bps: u64,
+}
+
+impl FeeTierController {
+    pub fn new(fee_bps: u64) -> Result<Self, ContractError> {
+        validate_fee_tier(fee_bps)?;
+        Ok(Self { current_fee_bps: fee_bps })
+    }
+
+    pub fn governance_adjust(&mut self, voted_fee_bps: u64) -> Result<u64, ContractError> {
+        let new_fee_bps = apply_governance_fee_tier(voted_fee_bps)?;
+        self.current_fee_bps = new_fee_bps;
+        Ok(new_fee_bps)
+    }
+}
+
+/// Split a collected fee between LP token holders (80%) and the protocol treasury (20%).
+///
+/// Rounding truncates in favor of LPs when fee_amount is not divisible by 5.
+pub fn split_pool_fee(fee_amount: u128) -> (u128, u128) {
+    let treasury_share = fee_amount / 5;
+    let lp_share = fee_amount - treasury_share;
+    (lp_share, treasury_share)
+}
+
+/// Compute the output amount for a constant-product swap with dynamic fee deduction.
+///
+/// First calculates the raw output, then applies the dynamic fee to get the final amount
+/// sent to the trader. Fees are accumulated in the pool to benefit liquidity providers.
+pub fn compute_swap_out(
+    env: &crate::Env,
+    asset: crate::AssetId,
+    amount_in: u128,
+    reserve_in: u128,
+    reserve_out: u128,
+) -> Result<(u128, u128), ContractError> {
+    if amount_in == 0 || reserve_in == 0 || reserve_out == 0 {
+        return Err(ContractError::InvalidInput);
+    }
+    
+    // Update volume history and derive the base dynamic fee, then apply the
+    // volatility-based adaptive scaling (Issue #766) when the pool opted in.
+    let legacy_fee_bps = crate::fees::update_volume_and_adjust_fee(
+        env, 
+        asset, 
+        amount_in as u64
+    )?;
+    let fee_bps = crate::fees::resolve_swap_fee_bps(env, asset, legacy_fee_bps)?;
+    
+    // Calculate raw output before fees
+    let denominator = reserve_in
+        .checked_add(amount_in)
+        .ok_or(ContractError::Overflow)?;
+    let raw_output = mul_div(reserve_out, amount_in, denominator)?;
+    
+    // Apply dynamic fee deduction
+    let (amount_after_fees, fee_amount) = crate::fees::calculate_and_deduct_fee(
+        raw_output, 
+        fee_bps
+    )?;
+    
+    Ok((amount_after_fees, fee_amount))
+}
+
+/// Compute the amount of LP shares to mint for a liquidity deposit.
+///
+/// Formula: `shares = min(a * total_shares / reserve_a, b * total_shares / reserve_b)`
+///
+/// Rounded down to favor existing LPs.
+pub fn compute_lp_shares(
+    amount_a: u128,
+    amount_b: u128,
+    reserve_a: u128,
+    reserve_b: u128,
+    total_shares: u128,
+) -> Result<u128, ContractError> {
+    if amount_a == 0 || amount_b == 0 || total_shares == 0 {
+        return Err(ContractError::InvalidInput);
+    }
+    if reserve_a == 0 || reserve_b == 0 {
+        return Err(ContractError::InvalidInput);
+    }
+    let shares_a = mul_div(amount_a, total_shares, reserve_a)?;
+    let shares_b = mul_div(amount_b, total_shares, reserve_b)?;
+    Ok(shares_a.min(shares_b))
+}
+
+/// Compute the amounts returned when burning `shares` LP tokens.
+///
+/// Formula: `amount_a = shares * reserve_a / total_shares`
+///          `amount_b = shares * reserve_b / total_shares`
+///
+/// Rounded down to favor the pool.
+pub fn compute_remove_liquidity(
+    shares: u128,
+    total_shares: u128,
+    reserve_a: u128,
+    reserve_b: u128,
+) -> Result<(u128, u128), ContractError> {
+    if shares == 0 || total_shares == 0 {
+        return Err(ContractError::InvalidInput);
+    }
+    if shares > total_shares {
+        return Err(ContractError::InvalidInput);
+    }
+    let amount_a = mul_div(shares, reserve_a, total_shares)?;
+    let amount_b = mul_div(shares, reserve_b, total_shares)?;
+    Ok((amount_a, amount_b))
+}
+
+/// Verify that `k_new >= k_old` for a swap, ensuring rounding favors reserves.
+pub fn assert_invariant_stable(
+    reserve_in_before: u128,
+    reserve_out_before: u128,
+    amount_in: u128,
+    amount_out: u128,
+) -> Result<(), ContractError> {
+    let k_before = U256::mul(reserve_in_before, reserve_out_before);
+    let reserve_in_after = reserve_in_before
+        .checked_add(amount_in)
+        .ok_or(ContractError::Overflow)?;
+    let reserve_out_after = reserve_out_before
+        .checked_sub(amount_out)
+        .ok_or(ContractError::Overflow)?;
+    let k_after = U256::mul(reserve_in_after, reserve_out_after);
+
+    if k_after.1 < k_before.1 || (k_after.1 == k_before.1 && k_after.0 < k_before.0) {
+        return Err(ContractError::InvariantViolation);
+    }
+    Ok(())
+}
+
+/// Guard the final output of a trade path against the trader's slippage limit.
+///
+/// Evaluates the realized `amount_out` (the balance actually delivered after all
+/// intermediate pool hops have executed) against the user-defined
+/// `min_amount_out`. If the realized output falls short of the minimum, returns
+/// `ContractError::SlippageExceeded`.
+///
+/// This check is intended to run before the transaction is committed. Returning
+/// `Err` propagates up through the contract call, so the host environment rolls
+/// back every intermediate pool swap atomically — no partial state is persisted
+/// when the guard trips.
+pub fn assert_min_amount_out(
+    amount_out: u128,
+    min_amount_out: u128,
+) -> Result<(), ContractError> {
+    if amount_out < min_amount_out {
+        return Err(ContractError::SlippageExceeded);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mul_div_basic() {
+        let result = mul_div(100, 200, 50).unwrap();
+        assert_eq!(result, 400);
+    }
+
+    #[test]
+    fn test_mul_div_floor_rounding() {
+        let result = mul_div(10, 3, 7).unwrap();
+        assert_eq!(result, 4);
+    }
+
+    #[test]
+    fn test_mul_div_zero_divisor() {
+        assert_eq!(mul_div(100, 200, 0), Err(ContractError::DivisionByZero));
+    }
+
+    #[test]
+    fn test_swap_out_basic() {
+        let out = compute_swap_out(10, 100, 200).unwrap();
+        assert_eq!(out, 18);
+    }
+
+    #[test]
+    fn test_swap_out_floor_reserves_favored() {
+        let out = compute_swap_out(1, 3, 10).unwrap();
+        assert_eq!(out, 2);
+    }
+
+    #[test]
+    fn test_invariant_stable_after_swap() {
+        let reserve_in = 100u128;
+        let reserve_out = 200u128;
+        let amount_in = 10u128;
+        let amount_out = compute_swap_out(amount_in, reserve_in, reserve_out).unwrap();
+        assert!(amount_out < reserve_out);
+        assert_invariant_stable(reserve_in, reserve_out, amount_in, amount_out).unwrap();
+    }
+
+    #[test]
+    fn test_invariant_increases_with_floor_rounding() {
+        let reserve_in = 1000u128;
+        let reserve_out = 2000u128;
+        let amount_in = 1u128;
+        let amount_out = compute_swap_out(amount_in, reserve_in, reserve_out).unwrap();
+        let k_before = U256::mul(reserve_in, reserve_out);
+        let k_after = U256::mul(reserve_in + amount_in, reserve_out - amount_out);
+        assert!(
+            k_after.1 > k_before.1 || (k_after.1 == k_before.1 && k_after.0 >= k_before.0),
+            "k must not decrease"
+        );
+    }
+
+    #[test]
+    fn test_lp_shares_basic() {
+        let shares = compute_lp_shares(50, 100, 100, 200, 1000).unwrap();
+        assert_eq!(shares, 500);
+    }
+
+    #[test]
+    fn test_lp_shares_floor() {
+        let shares = compute_lp_shares(10, 20, 100, 200, 1000).unwrap();
+        assert_eq!(shares, 100);
+    }
+
+    #[test]
+    fn test_lp_shares_min_rule() {
+        let shares = compute_lp_shares(10, 50, 100, 200, 1000).unwrap();
+        assert_eq!(shares, 100);
+    }
+
+    #[test]
+    fn test_remove_liquidity_basic() {
+        let (a, b) = compute_remove_liquidity(500, 1000, 100, 200).unwrap();
+        assert_eq!(a, 50);
+        assert_eq!(b, 100);
+    }
+
+    #[test]
+    fn test_remove_liquidity_floor() {
+        let (a, b) = compute_remove_liquidity(333, 1000, 100, 200).unwrap();
+        assert!(a <= 33);
+        assert!(b <= 66);
+    }
+
+    #[test]
+    fn test_swap_out_zero_input_rejected() {
+        assert_eq!(
+            compute_swap_out(0, 100, 200),
+            Err(ContractError::InvalidInput)
+        );
+    }
+
+    #[test]
+    fn test_lp_shares_zero_input_rejected() {
+        assert_eq!(
+            compute_lp_shares(0, 100, 100, 200, 1000),
+            Err(ContractError::InvalidInput)
+        );
+    }
+
+    #[test]
+    fn test_remove_liquidity_excessive_shares_rejected() {
+        assert_eq!(
+            compute_remove_liquidity(2000, 1000, 100, 200),
+            Err(ContractError::InvalidInput)
+        );
+    }
+
+    #[test]
+    fn test_u256_mul_max_bounds() {
+        // (u128::MAX)^2 = (2^128 − 1)^2 = 2^256 − 2^129 + 1.
+        // Decomposed as U256: (low, high) = (1, 2^128 − 2) = (1, u128::MAX − 1).
+        // This is a positive correctness check, not just a regression guard:
+        // it pins down the exact result for the maximally adversarial input
+        // that the original implementation silently overflowed on.
+        let result = U256::mul(u128::MAX, u128::MAX);
+        assert_eq!(result, U256(1, u128::MAX - 1));
+    }
+
+    #[test]
+    fn test_u256_mul_basic() {
+        let result = U256::mul(5, 7);
+        assert_eq!(result.0, 35);
+        assert_eq!(result.1, 0);
+    }
+
+    #[test]
+    fn test_u256_div_mod_basic() {
+        let u = U256(100, 0);
+        let (q, r) = u.div_mod(7).unwrap();
+        assert_eq!(q, 14);
+        assert_eq!(r, 2);
+    }
+
+    #[test]
+    fn test_u256_div_mod_zero() {
+        let u = U256(100, 0);
+        assert!(u.div_mod(0).is_none());
+    }
+
+    #[test]
+    fn test_u256_div_mod_hi_nonzero() {
+        let u = U256(0, 1);
+        let (q, r) = u.div_mod(2).unwrap();
+        assert_eq!(q, 1u128 << 127);
+        assert_eq!(r, 0);
+    }
+
+    #[test]
+    fn test_invariant_max_bounds() {
+        let reserve_in = u128::MAX / 2;
+        let reserve_out = u128::MAX / 2;
+        let amount_in = 1;
+        let amount_out = compute_swap_out(amount_in, reserve_in, reserve_out).unwrap();
+        assert_eq!(amount_out, 0);
+        assert_invariant_stable(reserve_in, reserve_out, amount_in, amount_out).unwrap();
+    }
+
+    #[test]
+    fn test_invariant_high_volume() {
+        let reserve_in = 1_000_000_000_000_000_000u128;
+        let reserve_out = 2_000_000_000_000_000_000u128;
+        let amount_in = 100_000_000_000_000_000u128;
+        let amount_out = compute_swap_out(amount_in, reserve_in, reserve_out).unwrap();
+        assert!(amount_out > 0);
+        assert_invariant_stable(reserve_in, reserve_out, amount_in, amount_out).unwrap();
+    }
+}

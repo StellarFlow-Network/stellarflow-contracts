@@ -18,9 +18,143 @@
 //! from sufficiently liquid markets that cannot be easily manipulated through
 //! temporary capital injection attacks.
 
+// ── Submodules ────────────────────────────────────────────────────────────────
+
+/// Anti-spam dust transaction guard.
+pub mod dust;
+pub use dust::{check_min_transfer, MIN_TRANSFER_AMOUNT};
+
 use soroban_sdk::{contracttype, symbol_short, Address, Env, Map, Symbol, Vec};
 
-use crate::{AssetId, ContractError, STAKE_REGISTRY_KEY};
+use crate::{AssetId, ContractError, CONSENSUS_CACHE_KEY, STAKE_REGISTRY_KEY};
+/// Maximum number of distinct admin signer addresses allowed on a governing
+/// multi-sig account.
+pub const MAX_ADMIN_SIGNERS: u32 = 32;
+
+/// Persistent multi-sig admin configuration for a governing account.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdminConfig {
+    pub signers: Vec<Address>,
+    pub threshold: u32,
+}
+
+/// Storage key for the current multi-sig admin configuration.
+#[contracttype]
+pub enum AdminStorageKey {
+    Config,
+}
+
+/// Load the current multi-sig admin configuration.
+pub fn get_admin_config(env: &Env) -> AdminConfig {
+    env.storage()
+        .instance()
+        .get(&AdminStorageKey::Config)
+        .unwrap_or_else(|| AdminConfig {
+            signers: Vec::new(env),
+            threshold: 0,
+        })
+}
+
+/// Initialize the multi-sig admin configuration. Used during contract setup.
+pub fn initialize_admin_keys(
+    env: &Env,
+    signers: Vec<Address>,
+    threshold: u32,
+) -> Result<AdminConfig, ContractError> {
+    validate_admin_key_set(env, &signers, threshold)?;
+
+    let config = AdminConfig { signers, threshold };
+    env.storage()
+        .instance()
+        .set(&AdminStorageKey::Config, &config);
+    Ok(config)
+}
+
+/// Rotate the full admin key set and threshold.
+///
+/// The rotation only succeeds if `approvals` contains at least the current
+/// threshold number of distinct signer addresses, and each of those addresses
+/// has authenticated for the current call.
+pub fn rotate_admin_keys(
+    env: &Env,
+    new_signers: Vec<Address>,
+    new_threshold: u32,
+    approvals: Vec<Address>,
+) -> Result<AdminConfig, ContractError> {
+    let current = get_admin_config(env);
+    if current.threshold == 0 {
+        return Err(ContractError::IncompleteQuorum);
+    }
+
+    let mut counted: Vec<Address> = Vec::new(env);
+    for approval in approvals.iter() {
+        let approval = approval.clone();
+        if contains_address(&current.signers, &approval) {
+            approval.require_auth();
+            if !contains_address(&counted, &approval) {
+                counted.push_back(approval.clone());
+            }
+        }
+    }
+
+    if counted.len() < current.threshold {
+        return Err(ContractError::IncompleteQuorum);
+    }
+
+    validate_admin_key_set(env, &new_signers, new_threshold)?;
+
+    let config = AdminConfig {
+        signers: new_signers.clone(),
+        threshold: new_threshold,
+    };
+    env.storage()
+        .instance()
+        .set(&AdminStorageKey::Config, &config);
+
+    env.events().publish(
+        (Symbol::new(env, "AdminKeysRotated"),),
+        new_signers.clone(),
+    );
+
+    Ok(config)
+}
+
+/// Validate that an admin key set is non-empty, duplicate-free, and has a
+/// threshold between one and the total number of signers.
+fn validate_admin_key_set(
+    env: &Env,
+    signers: &Vec<Address>,
+    threshold: u32,
+) -> Result<(), ContractError> {
+    if signers.len() == 0 || signers.len() > MAX_ADMIN_SIGNERS {
+        return Err(ContractError::IncompleteQuorum);
+    }
+    if threshold == 0 || threshold > signers.len() {
+        return Err(ContractError::IncompleteQuorum);
+    }
+
+    let mut unique: Vec<Address> = Vec::new(env);
+    for signer in signers.iter() {
+        let signer = signer.clone();
+        if contains_address(&unique, &signer) {
+            return Err(ContractError::IncompleteQuorum);
+        }
+        unique.push_back(signer);
+    }
+
+    Ok(())
+}
+
+/// Returns true when `target` appears in `addresses`.
+fn contains_address(addresses: &Vec<Address>, target: &Address) -> bool {
+    for i in 0..addresses.len() {
+        if addresses.get(i).unwrap() == target.clone() {
+            return true;
+        }
+    }
+    false
+}
 
 /// Minimum stake (in the same units as `StakeRecord.amount`) required to
 /// update a validator profile for a premium asset pool.
@@ -76,6 +210,178 @@ pub fn verify_payload_freshness(env: &Env, payload_timestamp: u64) -> Result<(),
         return Err(ContractError::StaleTelemetryPayload);
     }
     Ok(())
+}
+
+/// Minimum cumulative pool/corridor volume required before telemetry derived
+/// from an AMM pool may update downstream exchange metrics.
+pub const MIN_POOL_VOLUME_DEPTH: u64 = 1_000_000;
+
+/// Minimum normalized volume score for explicitly configured feed metrics.
+pub const MIN_POOL_VOLUME_SCORE: u32 = 33;
+
+/// Evaluate whether an asset's underlying AMM/corridor has sufficient economic
+/// depth to safely accept telemetry updates.
+///
+/// The gate considers both on-chain cumulative pool activity and any configured
+/// feed volume score. A pool passes if either signal meets the minimum security
+/// threshold.
+pub fn check_liquidity_depth(env: &Env, asset: AssetId) -> Result<(), ContractError> {
+    let corridor = crate::fees::get_corridor_fee_pool(env.clone(), asset);
+    if corridor.collected >= MIN_POOL_VOLUME_DEPTH {
+        return Ok(());
+    }
+
+    let metrics: Option<crate::staking_tiers::AssetFeedMetrics> = env
+        .storage()
+        .persistent()
+        .get(&crate::StakingStorageKey::AssetMetrics(asset));
+
+    if let Some(metrics) = metrics {
+        if u64::from(metrics.volume_score) >= u64::from(MIN_POOL_VOLUME_SCORE) {
+            return Ok(());
+        }
+    }
+
+    Err(ContractError::InsufficientLiquidityDepth)
+}
+
+/// Minimum number of independent validator submissions required for
+/// a valid consensus round.
+pub const MIN_CONSENSUS_DEPTH: u32 = 3;
+
+/// Check that at least `MIN_CONSENSUS_DEPTH` independent validators
+/// have supplied parameters in the current block round.
+///
+/// Reads the consensus participant cache (`CONSENSUS_CACHE_KEY`) from
+/// temporary storage to count active submissions.  Reverts the
+/// transaction early with `ContractError::IncompleteQuorum` when the
+/// count falls below the minimum threshold.
+pub fn check_consensus_depth(env: &Env) -> Result<(), ContractError> {
+    let participants: Vec<Address> = env
+        .storage()
+        .temporary()
+        .get(&CONSENSUS_CACHE_KEY)
+        .unwrap_or_else(|| Vec::new(env));
+
+    if participants.len() < MIN_CONSENSUS_DEPTH {
+        return Err(ContractError::IncompleteQuorum);
+    }
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Gas-Throttled Bundle Processing — Single-Pass Multi-Asset Price Updates
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Maximum number of assets that may be included in a single price-update
+/// bundle.  Hard-capped to keep execution gas within the Soroban transaction
+/// budget during high-density network waves.
+pub const MAX_BUNDLE_ASSETS: u32 = 20;
+
+/// Pre-computed key index pointer for an asset within a price bundle.
+///
+/// Built **once** before the main processing loop so that every subsequent
+/// validation step uses a direct O(1) pointer rather than scanning maps,
+/// recalculating symbols, or performing nested iterations.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BundleAssetIndex {
+    pub asset: AssetId,
+    /// Pre-computed pool Symbol for direct O(1) validation access.
+    pub pool_symbol: Symbol,
+    /// Pre-loaded payload timestamp — avoids re-scanning the update vector
+    /// during the validation loop.
+    pub timestamp: u64,
+}
+
+/// A single asset's price submission inside a bundled multi-asset update.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssetPriceUpdate {
+    pub asset: AssetId,
+    pub price: u64,
+    pub timestamp: u64,
+}
+
+/// Aggregated outcome of a bundle-wide validation pass.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BundleValidationOutcome {
+    pub total_assets: u32,
+    pub accepted: u32,
+}
+
+/// Build a flat index of bundle assets with pre-calculated key pointers.
+///
+/// Computes storage-level pointers (Symbol keys, timestamps) **upfront**
+/// in a single O(n) pass so the main processing loop accesses every asset
+/// via its pre-cached index entry without scanning maps, re-computing
+/// identifiers, or performing matrix-style nested iterations.
+pub fn build_bundle_index(
+    env: &Env,
+    updates: &Vec<AssetPriceUpdate>,
+) -> Result<Vec<BundleAssetIndex>, ContractError> {
+    let n = updates.len() as u32;
+    if n > MAX_BUNDLE_ASSETS {
+        return Err(ContractError::BundleAssetLimitExceeded);
+    }
+
+    let mut index: Vec<BundleAssetIndex> = Vec::new(env);
+    for update in updates.iter() {
+        index.push_back(BundleAssetIndex {
+            asset: update.asset,
+            pool_symbol: asset_id_to_symbol_short(update.asset),
+            timestamp: update.timestamp,
+        });
+    }
+    Ok(index)
+}
+
+/// Validate a bundled multi-asset price submission using a strict
+/// single-pass linear scan with pre-calculated key index pointers.
+///
+/// # Returns
+/// `BundleValidationOutcome` with the count of accepted assets, or:
+/// * `BundleAssetLimitExceeded` – bundle size > `MAX_BUNDLE_ASSETS`.
+/// * `PremiumPoolAccessDenied` – validator's stake is below minimum.
+/// * `StaleTelemetryPayload` – any update's timestamp exceeds the freshness
+///    threshold.
+pub fn process_price_bundle(
+    env: &Env,
+    node: &Address,
+    updates: &Vec<AssetPriceUpdate>,
+) -> Result<BundleValidationOutcome, ContractError> {
+    // Phase 1 — pre-compute key index pointers (single O(n) pass).
+    let index = build_bundle_index(env, updates)?;
+
+    // Phase 2 — single-pass linear scan using pre-computed index fields.
+    let mut accepted: u32 = 0;
+
+    for entry in index.iter() {
+        check_bond_capacity(env, node, &entry.pool_symbol)?;
+        verify_payload_freshness(env, entry.timestamp)?;
+        accepted += 1;
+    }
+
+    Ok(BundleValidationOutcome {
+        total_assets: index.len() as u32,
+        accepted,
+    })
+}
+
+/// Map a numeric `AssetId` back to a `Symbol` for legacy validation calls.
+fn asset_id_to_symbol_short(id: AssetId) -> Symbol {
+    match id {
+        3897123275 => symbol_short!("NGN"),
+        2654435761 => symbol_short!("KES"),
+        4026531840 => symbol_short!("GHS"),
+        4160749568 => symbol_short!("CFA"),
+        3219226362 => symbol_short!("ZAR"),
+        2863311530 => symbol_short!("UGX"),
+        0 => symbol_short!("STAKE"),
+        1 => symbol_short!("VALUE"),
+        _ => symbol_short!("UNK"),
+    }
 }
 
 /// Validate that the reported reserve balance meets the minimum security threshold
@@ -426,19 +732,22 @@ mod validation_tests {
     #[test]
     fn test_telemetry_validation_all_checks_pass() {
         let env = setup();
+        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
         let node = soroban_sdk::Address::generate(&env);
         let pool = soroban_sdk::symbol_short!("XLM_USDC");
 
         // Valid telemetry: fresh, sufficient reserves, good volume
-        let result = validate_telemetry_submission(
-            &env,
-            &node,
-            &pool,
-            999_970,           // 30 seconds old (fresh)
-            2_000_000_000_000, // 200,000 XLM reserve A
-            1_500_000_000_000, // 150,000 USDC reserve B
-            500_000_000_000,   // 50,000 XLM daily volume
-        );
+        let result = env.as_contract(&contract_id, || {
+            validate_telemetry_submission(
+                &env,
+                &node,
+                &pool,
+                999_970,           // 30 seconds old (fresh)
+                2_000_000_000_000, // 200,000 XLM reserve A
+                1_500_000_000_000, // 150,000 USDC reserve B
+                500_000_000_000,   // 50,000 XLM daily volume
+            )
+        });
 
         // Should pass all validations except bond capacity (no stake registered)
         // In real usage, stake would be registered first
@@ -761,8 +1070,10 @@ mod consensus_depth_tests {
     use super::*;
     use soroban_sdk::testutils::Address as _;
 
-    fn setup_env() -> Env {
-        Env::default()
+    fn setup_env() -> (Env, Address) {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
+        (env, contract_id)
     }
 
     fn populate_cache(env: &Env, count: u32) {
@@ -778,40 +1089,50 @@ mod consensus_depth_tests {
 
     #[test]
     fn test_empty_cache_rejected() {
-        let env = setup_env();
-        let result = check_consensus_depth(&env);
-        assert_eq!(result, Err(ContractError::IncompleteQuorum));
+        let (env, contract_id) = setup_env();
+        env.as_contract(&contract_id, || {
+            let result = check_consensus_depth(&env);
+            assert_eq!(result, Err(ContractError::IncompleteQuorum));
+        });
     }
 
     #[test]
     fn test_one_validator_rejected() {
-        let env = setup_env();
-        populate_cache(&env, 1);
-        let result = check_consensus_depth(&env);
-        assert_eq!(result, Err(ContractError::IncompleteQuorum));
+        let (env, contract_id) = setup_env();
+        env.as_contract(&contract_id, || {
+            populate_cache(&env, 1);
+            let result = check_consensus_depth(&env);
+            assert_eq!(result, Err(ContractError::IncompleteQuorum));
+        });
     }
 
     #[test]
     fn test_two_validators_rejected() {
-        let env = setup_env();
-        populate_cache(&env, 2);
-        let result = check_consensus_depth(&env);
-        assert_eq!(result, Err(ContractError::IncompleteQuorum));
+        let (env, contract_id) = setup_env();
+        env.as_contract(&contract_id, || {
+            populate_cache(&env, 2);
+            let result = check_consensus_depth(&env);
+            assert_eq!(result, Err(ContractError::IncompleteQuorum));
+        });
     }
 
     #[test]
     fn test_three_validators_accepted() {
-        let env = setup_env();
-        populate_cache(&env, 3);
-        let result = check_consensus_depth(&env);
-        assert!(result.is_ok());
+        let (env, contract_id) = setup_env();
+        env.as_contract(&contract_id, || {
+            populate_cache(&env, 3);
+            let result = check_consensus_depth(&env);
+            assert!(result.is_ok());
+        });
     }
 
     #[test]
     fn test_many_validators_accepted() {
-        let env = setup_env();
-        populate_cache(&env, 10);
-        let result = check_consensus_depth(&env);
-        assert!(result.is_ok());
+        let (env, contract_id) = setup_env();
+        env.as_contract(&contract_id, || {
+            populate_cache(&env, 10);
+            let result = check_consensus_depth(&env);
+            assert!(result.is_ok());
+        });
     }
 }

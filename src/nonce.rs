@@ -39,9 +39,13 @@ pub fn consume_nonce(
         salt_signature,
     };
 
+    let key = NonceKey::State(coordinator.clone());
+    // Replay-protection state is intentionally durable. Moving this counter
+    // to temporary storage would allow an expired nonce to be replayed.
     env.storage()
         .persistent()
-        .set(&NonceKey::State(coordinator.clone()), &next_state);
+        .set(&key, &next_state);
+    crate::storage::extend_persistent_ttl(env, &key);
     Ok(())
 }
 

@@ -1,0 +1,15 @@
+[package]
+name = "stop-loss-trigger"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { version = "=20.0.0", default-features = false }
+
+[dev-dependencies]
+soroban-sdk = { version = "=20.0.0", default-features = false, features = ["testutils"] }

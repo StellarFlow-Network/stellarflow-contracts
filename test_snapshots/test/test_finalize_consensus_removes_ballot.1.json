@@ -15,6 +15,9 @@
               "args": [
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 }
               ]
             }
@@ -62,6 +65,9 @@
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                },
+                {
+                  "u64": 18446744073709551615
                 }
               ]
             }
@@ -123,14 +129,6 @@
                             },
                             {
                               "key": {
-                                "symbol": "max_fee_ceiling"
-                              },
-                              "val": {
-                                "u64": 1000000000
-                              }
-                            },
-                            {
-                              "key": {
                                 "symbol": "value"
                               },
                               "val": {
@@ -145,14 +143,30 @@
                           "symbol": "SIGNERS"
                         },
                         "val": {
-                          "map": [
+                          "u32": 1
+                        }
+                      },
+                      {
+                        "key": {
+                          "symbol": "TREASURY"
+                        },
+                        "val": {
+                          "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
                             {
-                              "key": {
-                                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-                              },
-                              "val": "void"
+                              "symbol": "SignerByAddress"
+                            },
+                            {
+                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                             }
                           ]
+                        },
+                        "val": {
+                          "bool": true
                         }
                       }
                     ]
@@ -162,7 +176,7 @@
             },
             "ext": "v0"
           },
-          4095
+          105000
         ]
       ],
       [
@@ -282,7 +296,7 @@
             },
             "ext": "v0"
           },
-          4095
+          105000
         ]
       ]
     ]
@@ -307,7 +321,14 @@
               }
             ],
             "data": {
-              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+              "vec": [
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                },
+                {
+                  "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                }
+              ]
             }
           }
         }
@@ -417,6 +438,9 @@
                 },
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
+                },
+                {
+                  "u64": 18446744073709551615
                 }
               ]
             }

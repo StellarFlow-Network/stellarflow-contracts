@@ -1,0 +1,36 @@
+[package]
+name = "stellarflow-contracts-fuzz-cov"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Coverage-guided fuzz targets for AMM math (issue #625 follow-up)"
+
+# This crate is OUTSIDE the root workspace (excluded via Cargo.toml at the
+# repo root) because libfuzzer-sys requires nightly Rust to build, and we
+# don't want nightly-only deps to break stable cargo test / cargo build.
+
+[dependencies]
+libfuzzer-sys = { version = "0.13", features = ["no-link-libstd"] }
+arbitrary = { version = "1", features = ["derive"] }
+
+# Three independent fuzz targets. cargo-fuzz discovers one binary per .rs
+# file under fuzz_targets/; naming each bin explicitly here makes the
+# `cargo fuzz run <name>` invocation obvious in CI logs.
+[[bin]]
+name = "swap_invariants"
+path = "fuzz_targets/swap_invariants.rs"
+
+[[bin]]
+name = "lp_invariants"
+path = "fuzz_targets/lp_invariants.rs"
+
+[[bin]]
+name = "slippage_invariants"
+path = "fuzz_targets/slippage_invariants.rs"
+
+# Release profile tuned for coverage-guided fuzzing: small + fast + debug
+# symbols retained for stack traces in libFuzzer reports.
+[profile.release]
+opt-level = 3
+lto = false
+debug = true

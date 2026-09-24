@@ -127,7 +127,7 @@ fn test_get_price_existing_asset() {
     client.set_price(&asset, &1_000_000_i128);
 
     let result = client.try_get_price(&asset, &true);
-    let retrieved_price = result.unwrap()
+    let retrieved_price = result.unwrap();
     assert_eq!(retrieved_price.price, 1_000_000_i128);
     assert_eq!(retrieved_price.timestamp, 1_234_567_890);
     assert_eq!(retrieved_price.decimals, 6u32);
@@ -156,12 +156,11 @@ fn test_get_price_multiple_assets() {
 
     client
         .try_set_price(&ngn, &1_000_000_i128)
-        .unwrap()
-        
+        .unwrap();
+
     client
         .try_set_price(&kes, &50_000_000_000_i128)
-        .unwrap()
-        
+        .unwrap();
 
     assert_eq!(
         client.try_get_price(&ngn, &true).unwrap().unwrap().price,
@@ -184,17 +183,16 @@ fn test_get_price_after_update() {
     env.ledger().with_mut(|li| li.sequence_number = 1);
     client
         .try_set_price(&asset, &1_000_000_i128, &6u32, &3600u64)
-        .unwrap()
-        
+        .unwrap();
 
-    let initial = client.try_get_price(&asset, &true).unwrap()
+    let initial = client.try_get_price(&asset, &true).unwrap();
     assert_eq!(initial.price, 1_000_000_i128);
     assert_eq!(initial.timestamp, 1_234_567_890);
 
     env.ledger().with_mut(|li| li.timestamp = 1_234_567);
     client.set_price(&asset, &1_500_i128, &2u32, &3_600u64);
 
-    let updated = client.try_get_price(&asset, &true).unwrap()
+    let updated = client.try_get_price(&asset, &true).unwrap();
     assert_eq!(updated.price, 1_200_000_i128);
     assert_eq!(updated.timestamp, 1_234_567_900);
 }
@@ -414,14 +412,13 @@ fn test_set_and_get_price_bounds() {
     set_admin(&env, &contract_id, &admin);
     client.set_price_bounds(&admin, &asset, &500_i128, &2_000_i128);
 
-    let bounds = client.get_price_bounds(&asset)
+    let bounds = client.get_price_bounds(&asset);
     assert_eq!(bounds.min_price, 500_i128);
     assert_eq!(bounds.max_price, 2_000_i128);
 }
 
 #[test]
 fn test_set_price_bounds_emits_indexable_price_bounds_event() {
-fn test_register_assets_with_config_applies_all_config_atomically() {
     let (env, contract_id, client) = setup();
     let admin = Address::generate(&env);
     let asset = symbol_short!("NGN");
@@ -436,8 +433,12 @@ fn test_register_assets_with_config_applies_all_config_atomically() {
 }
 
 #[test]
-fn test_set_price_floor_emits_indexable_price_floor_event() {
+fn test_register_assets_with_config_applies_all_config_atomically() {
+    let (env, contract_id, client) = setup();
+    let admin = Address::generate(&env);
+    let asset = symbol_short!("NGN");
 
+    set_admin(&env, &contract_id, &admin);
     let config = AssetRegistrationConfig {
         asset: asset.clone(),
         name: Symbol::new(&env, "Nigerian Naira"),
@@ -449,19 +450,18 @@ fn test_set_price_floor_emits_indexable_price_floor_event() {
     };
 
     client
-        .register_assets_with_config(&admin, &vec![&env, config], &500_i128)
-        
+        .register_assets_with_config(&admin, &soroban_sdk::vec![&env, config], &500_i128);
 
-    let info = client.get_asset_info(&asset)
+    let info = client.get_asset_info(&asset);
     assert_eq!(info.name, Symbol::new(&env, "Nigerian Naira"));
     assert_eq!(info.base_decimals, 7);
     assert_eq!(info.quote_decimals, 2);
 
-    let meta = client.get_asset_meta(&asset)
+    let meta = client.get_asset_meta(&asset);
     assert_eq!(meta.base_decimals, 7);
     assert_eq!(meta.quote_decimals, 2);
 
-    let bounds = client.get_price_bounds(&asset)
+    let bounds = client.get_price_bounds(&asset);
     assert_eq!(bounds.min_price, 500_i128);
     assert_eq!(bounds.max_price, 2_000_i128);
     assert_eq!(client.get_max_deviation_percentage(), 500_i128);
@@ -492,7 +492,7 @@ fn test_register_assets_with_config_rolls_back_on_invalid_config() {
         price_floor: Some(600_i128),
     };
 
-    let result = client.try_register_assets_with_config(&admin, &vec![&env, bad_config], &500_i128);
+    let result = client.try_register_assets_with_config(&admin, &soroban_sdk::vec![&env, bad_config], &500_i128);
     match result {
         Err(Ok(err)) => assert_eq!(err, Error::InvalidPriceBounds),
         other => panic!("expected InvalidPriceBounds, got {:?}", other),
@@ -1587,7 +1587,7 @@ fn test_get_prices_with_status_marks_stale_entry() {
     let results = client.get_prices_with_status(&assets);
 
     assert_eq!(results.len(), 1);
-    let entry = results.get(0).unwrap()
+    let entry = results.get(0).unwrap();
     assert_eq!(entry.price, 1_500_i128);
     assert!(entry.is_stale);
 }
@@ -1633,7 +1633,7 @@ fn test_set_price_bounds_and_get() {
     let asset = symbol_short!("NGN");
     client.set_price_bounds(&admin, &asset, &500_i128, &2_000_i128);
 
-    let bounds = client.get_price_bounds(&asset)
+    let bounds = client.get_price_bounds(&asset);
     assert_eq!(bounds.min_price, 500_i128);
     assert_eq!(bounds.max_price, 2_000_i128);
 }
@@ -2753,7 +2753,7 @@ fn test_ledger_gap_new_provider_allowed() {
     env.ledger().with_mut(|li| li.sequence_number = 100);
 
     client.init_admin(&admin);
-    client.add_asset(&admin, &asset)
+    client.add_asset(&admin, &asset);
 
     env.as_contract(&contract_id, || {
         crate::auth::_add_provider(&env, &provider);
@@ -2780,7 +2780,7 @@ fn test_ledger_gap_insufficient_gap_rejected() {
     env.ledger().with_mut(|li| li.sequence_number = 100);
 
     client.init_admin(&admin);
-    client.add_asset(&admin, &asset)
+    client.add_asset(&admin, &asset);
 
     env.as_contract(&contract_id, || {
         crate::auth::_add_provider(&env, &provider);
@@ -2822,7 +2822,7 @@ fn test_ledger_gap_exactly_3_blocks_allowed() {
     env.ledger().with_mut(|li| li.sequence_number = 100);
 
     client.init_admin(&admin);
-    client.add_asset(&admin, &asset)
+    client.add_asset(&admin, &asset);
 
     env.as_contract(&contract_id, || {
         crate::auth::_add_provider(&env, &provider);
@@ -2859,7 +2859,7 @@ fn test_ledger_gap_more_than_3_blocks_allowed() {
     env.ledger().with_mut(|li| li.sequence_number = 100);
 
     client.init_admin(&admin);
-    client.add_asset(&admin, &asset)
+    client.add_asset(&admin, &asset);
 
     env.as_contract(&contract_id, || {
         crate::auth::_add_provider(&env, &provider);
@@ -2897,7 +2897,7 @@ fn test_ledger_gap_multiple_providers_independent() {
     env.ledger().with_mut(|li| li.sequence_number = 100);
 
     client.init_admin(&admin);
-    client.add_asset(&admin, &asset)
+    client.add_asset(&admin, &asset);
 
     env.as_contract(&contract_id, || {
         crate::auth::_add_provider(&env, &provider_a);
@@ -2969,7 +2969,7 @@ fn test_ledger_gap_provider_last_seen_ledger_tracking() {
     env.ledger().with_mut(|li| li.sequence_number = 100);
 
     client.init_admin(&admin);
-    client.add_asset(&admin, &asset)
+    client.add_asset(&admin, &asset);
 
     env.as_contract(&contract_id, || {
         crate::auth::_add_provider(&env, &provider);
@@ -2999,35 +2999,6 @@ fn test_ledger_gap_provider_last_seen_ledger_tracking() {
     assert_eq!(
         last_ledger_after_second, 105,
         "Provider's last seen ledger should be updated to 105 after second submission"
-    );
-}
-
-    let contract_id = env.register_contract(None, PriceOracle);
-    let client = PriceOracleClient::new(&env, &contract_id);
-
-    let admin1 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
-    let admin2 = <soroban_sdk::Address as soroban_sdk::testutils::Address>::generate(&env);
-
-    client.init_admin(&admin1);
-    env.as_contract(&contract_id, || {
-        crate::auth::_add_authorized(&env, &admin2);
-    });
-
-    client.self_destruct(&admin1, &admin2);
-
-    let events = env.events().all();
-    let debug_str = alloc::format!("{:?}", events);
-    assert!(
-        debug_str.contains("contract_destroyed"),
-        "Should emit contract_destroyed event"
-    );
-    assert!(
-        debug_str.contains(&format!("{:?}", admin1)),
-        "Event should contain admin1"
-    );
-    assert!(
-        debug_str.contains(&format!("{:?}", admin2)),
-        "Event should contain admin2"
     );
 }
 
@@ -3117,8 +3088,8 @@ fn test_try_unsubscribe_from_price_updates() {
     let callback2 = Address::generate(&env);
 
     // Subscribe both
-    client.try_subscribe_to_price_updates(&callback1)
-    client.try_subscribe_to_price_updates(&callback2)
+    client.try_subscribe_to_price_updates(&callback1);
+    client.try_subscribe_to_price_updates(&callback2);
     assert_eq!(client.get_price_update_subscribers().len(), 2);
 
     // Unsubscribe first
@@ -3138,7 +3109,7 @@ fn test_unsubscribe_nonexistent_fails() {
     let callback2 = Address::generate(&env);
 
     // Subscribe only callback1
-    client.try_subscribe_to_price_updates(&callback1)
+    client.try_subscribe_to_price_updates(&callback1);
 
     // Try to unsubscribe callback2 (not subscribed)
     let result = client.try_unsubscribe_from_price_updates(&callback2);
@@ -3308,7 +3279,7 @@ fn test_buffer_truncation_with_equal_weights() {
     // Have all 13 providers submit prices
     env.ledger().with_mut(|li| li.sequence_number = 300);
     for i in 0..13 {
-        let provider = providers.get(i)
+        let provider = providers.get(i);
         let price = 800_000_i128 + (i as i128 * 10);
         client.update_price(&provider, &asset, &price, &6u32, 90u32, &3600u64, &100_000_i128);
     }
@@ -3317,7 +3288,7 @@ fn test_buffer_truncation_with_equal_weights() {
     let buffer = client.get_price_buffer_data(&asset);
     assert!(buffer.is_some(), "Buffer should exist");
 
-    let buffer_data = buffer
+    let buffer_data = buffer;
     assert_eq!(
         buffer_data.entries.len(),
         11,
@@ -3359,7 +3330,7 @@ fn test_median_calculation_after_truncation() {
     // Have all 12 providers submit prices
     env.ledger().with_mut(|li| li.sequence_number = 400);
     for i in 0..12 {
-        let provider = providers.get(i)
+        let provider = providers.get(i);
         let price = 1_000_000_i128 + (i as i128 * 1000);
         client.update_price(&provider, &asset, &price, &6u32, 90u32, &3600u64, &100_000_i128);
     }
@@ -3372,7 +3343,7 @@ fn test_median_calculation_after_truncation() {
     );
 
     // The low-weight provider (index 11) should have been excluded
-    let buffer = client.get_price_buffer_data(&asset)
+    let buffer = client.get_price_buffer_data(&asset);
     assert_eq!(buffer.entries.len(), 11, "Buffer should contain 11 entries");
 }
 
@@ -3631,7 +3602,7 @@ fn test_graceful_recovery_clears_metrics() {
 
     assert_eq!(client.get_twap(&asset), Some(1000));
     assert_eq!(client.get_last_n_events(&5).len(), 1);
-    assert_eq!(client.get_provider_consecutive_missed_blocks(&provider), 5);
+    assert_eq!(client.get_missed_blocks(&provider), 5);
 
     // 2. Emergency Halt
     client.set_emergency_halt(&admin1, &admin2, &true);
@@ -3645,6 +3616,6 @@ fn test_graceful_recovery_clears_metrics() {
     // 4. Verify Metrics Cleared
     assert_eq!(client.get_twap(&asset), None);
     assert_eq!(client.get_last_n_events(&5).len(), 0);
-    assert_eq!(client.get_provider_consecutive_missed_blocks(&provider), 0);
+    assert_eq!(client.get_missed_blocks(&provider), 0);
     assert_eq!(client.get_provider_last_seen_ledger(&provider), 500);
 }

@@ -1,7 +1,10 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::{Ledger, LedgerInfo}, Env};
+use soroban_sdk::{
+    testutils::{Ledger, LedgerInfo},
+    Env,
+};
 
 #[test]
 fn test_current_ledger_timestamp() {

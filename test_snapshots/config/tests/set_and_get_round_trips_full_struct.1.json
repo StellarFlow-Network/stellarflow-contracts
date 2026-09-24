@@ -132,6 +132,14 @@
                             },
                             {
                               "key": {
+                                "symbol": "max_fee_ceiling"
+                              },
+                              "val": {
+                                "u64": 10000
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "value"
                               },
                               "val": {
@@ -189,6 +197,18 @@
                         "val": {
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                         }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "SchemaVersion"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 2
+                        }
                       }
                     ]
                   }
@@ -197,7 +217,7 @@
             },
             "ext": "v0"
           },
-          105000
+          4095
         ]
       ],
       [
@@ -284,7 +304,7 @@
             },
             "ext": "v0"
           },
-          105000
+          4095
         ]
       ]
     ]

@@ -180,6 +180,21 @@
                         "val": {
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
                         }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "StakeByNode"
+                            },
+                            {
+                              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u64": 1000
+                        }
                       }
                     ]
                   }
@@ -495,7 +510,7 @@
             ],
             "data": {
               "error": {
-                "contract": 35
+                "contract": 30
               }
             }
           }
@@ -516,7 +531,7 @@
               },
               {
                 "error": {
-                  "contract": 35
+                  "contract": 30
                 }
               }
             ],
@@ -541,7 +556,7 @@
               },
               {
                 "error": {
-                  "contract": 35
+                  "contract": 30
                 }
               }
             ],

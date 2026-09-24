@@ -1,0 +1,13 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc e14560bc20b4e56ee4d85691b025984127c94626d44a12cc0334d7b1a16e44fe # shrinks to amount_a = 340282366920938463463374607431768211455, amount_b = 1, reserve_a = 1, reserve_b = 1, total_shares = 340282366920938463463374607431768211455
+cc 90bb0ff1197c65359998a204d94e3f5a62bc9c9b29fab9f980ccd2e341c0e846 # shrinks to reserve_in = 1, reserve_out = 340282366920938463463374607431768211455, amount_in = 340282366920938463463374607431768211454
+cc c8e3d19e747c3090e88c7dc4cdae4d449a276c71b817b62818bff6ef102a73c5 # shrinks to reserve_in_before = 340282366920938463463374607431768211455, reserve_out_before = 340282366920938463463374607431768211455, amount_in = 0, amount_out = 0
+cc 8f8ba1f192b47c958f1df7b0e64babb3f9c1c8d009aaecf10a0b58f5b3e6867d # shrinks to shares = 340282366920938463463374607431768211455, total_shares = 340282366920938463463374607431768211455, reserve_a = 0, reserve_b = 340282366920938463463374607431768211455
+cc 0b485798f04e322b8a1204657234a15ef822c392354ea1bacc011c5c5a0d0db0 # shrinks to amount_in = 170141183460469231731687303715884105727, reserve_in = 1, reserve_out = 243622705781881063091400931132831378339
+cc 7c8e2a1d4f5b090c3e8a7d6f2c4b18e9a3f7c5d2b4e18a7c9f3d6b2e5a18c4f7 # shrinks to amount_out = 0, min = 1 ; MARKER-ONLY: hand-authored seeds; see proptest-shrunk lines 1-5 for contrast.
+cc 9a3b7e2c5f8d4a18c6e7b3f9d2a5c8e4b1f7d6a3c9e2b5f8d4a7c1e3b6f9d2a5 # shrinks to amount_out = 1, min = 340282366920938463463374607431768211455 ; MARKER-ONLY: hand-authored seeds; see proptest-shrunk lines 1-5 for contrast.

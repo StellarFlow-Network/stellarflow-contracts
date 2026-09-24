@@ -1,0 +1,73 @@
+# Workflow that runs the coverage-guided cargo-fuzz harness on a nightly
+# schedule and on demand. Sister to whatever runs `tests/fuzz/src/lib.rs`'s
+# proptest suite on stable Rust.
+name: cargo-fuzz (nightly)
+
+on:
+  # Run on-demand via the Actions tab.
+  workflow_dispatch:
+  # Daily at 03:00 UTC so a fresh bug report can be triaged the next morning.
+  schedule:
+    - cron: "0 3 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-fuzz:
+    name: cargo +nightly fuzz run ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      # Don't cancel all three targets if one finds a regression — let
+      # each target surface its own bugs independently.
+      fail-fast: false
+      matrix:
+        target:
+          - swap_invariants
+          - lp_invariants
+          - slippage_invariants
+        # Short default for resource-bounded CI; override per-run via
+        # `workflow_dispatch` inputs if needed.
+        max_total_time: ["120"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (stable + nightly)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchains: stable,nightly
+          components: rustfmt,clippy
+
+      - name: Cache cargo registry & target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            tests/fuzz/fuzz/target
+          key: cargo-fuzz-${{ matrix.target }}-${{ hashFiles('tests/fuzz/fuzz/Cargo.toml') }}
+          restore-keys: |
+            cargo-fuzz-${{ matrix.target }}-
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
+      - name: cargo +nightly fuzz run ${{ matrix.target }}
+        working-directory: tests/fuzz/fuzz
+        run: |
+          cargo +nightly fuzz run ${{ matrix.target }} \
+            -- \
+            -max_total_time=${{ matrix.max_total_time }} \
+            -print_final_stats=1
+        # If fuzzing finds a regression, save the corpus and artifacts
+        # for debugging as a workflow artifact. Manual triage will
+        # follow.
+      - name: Upload corpus & artifacts (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: |
+            tests/fuzz/fuzz/corpus/${{ matrix.target }}
+            tests/fuzz/fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore

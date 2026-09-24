@@ -1,0 +1,17 @@
+[package]
+name = "stellarflow-benchmarks"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+price-oracle = { path = "../../contracts/price-oracle" }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+price-oracle = { path = "../../contracts/price-oracle" }

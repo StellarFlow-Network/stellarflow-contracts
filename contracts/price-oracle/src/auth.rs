@@ -27,6 +27,18 @@ pub enum DataKey {
     ProposedAction(u64),
     /// Stores the list of voters for a proposed multi-sig action.
     ActionVotes(u64),
+    /// Stores affirmative and negative voter addresses separately.
+    ActionAffirmativeVotes(u64),
+    ActionNegativeVotes(u64),
+    /// Stores weighted totals for each side of a proposal.
+    ActionAffirmativeWeight(u64),
+    ActionNegativeWeight(u64),
+    /// Stores the snapshot weight recorded for a voter on a proposal.
+    ActionVoteWeight(u64, Address),
+    /// veFLOW lock contract used to read proposal-time voting power.
+    VeflowLockContract,
+    /// Circulating veFLOW supply used for quorum calculations.
+    VeflowCirculatingSupply,
     /// Maps an admin address to their ephemeral submission delegate.
     SubmissionDelegate(Address),
     /// Maps a delegate address back to the admin who authorized it.
@@ -46,6 +58,10 @@ pub enum DataKey {
     /// Per-asset circuit-breaker override flag (Symbol → bool).
     /// When true the asset is individually paused regardless of the global flag.
     CircuitBreakerPairedAsset(soroban_sdk::Symbol),
+    /// Stores the current WASM code hash of the contract
+    CurrentWasmHash,
+    /// Stores the previous WASM code hash for rollback capabilities
+    PreviousWasmHash,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -77,12 +93,11 @@ pub fn _is_authorized(env: &Env, caller: &Address) -> bool {
         return false;
     }
 
-    env.storage()
+    let admins = env
+        .storage()
         .instance()
         .get::<DataKey, Vec<Address>>(&DataKey::Admin)
-    else {
-        return false;
-    };
+        .unwrap_or_else(|| Vec::new(env));
 
     // Stack-local fixed buffer — avoids any BTreeMap / HashMap heap allocation.
     const CAP: usize = 16;
@@ -101,6 +116,15 @@ pub fn _is_authorized(env: &Env, caller: &Address) -> bool {
         }
     }
     false
+}
+
+pub fn _require_auth_for_args<T: soroban_sdk::IntoVal>(
+    env: &Env,
+    caller: &Address,
+    args: &[T],
+) {
+    caller.require_auth_for_args(args);
+    let _ = env;
 }
 
 pub fn _require_authorized(env: &Env, caller: &Address) {
@@ -295,7 +319,6 @@ pub fn _is_provider(env: &Env, addr: &Address) -> bool {
         return false;
     }
 
-    env.storage()
     // 1. Direct provider whitelist check
     if env
         .storage()

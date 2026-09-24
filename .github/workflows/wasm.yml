@@ -1,0 +1,86 @@
+name: WASM Release Build
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  WASM_TARGET: wasm32-unknown-unknown
+
+jobs:
+  build-wasm:
+    name: Build WASM & Upload Release Assets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.WASM_TARGET }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-wasm-
+
+      - name: Build WASM contracts
+        run: cargo build --target ${{ env.WASM_TARGET }} --release
+
+      - name: Collect WASM binaries
+        id: collect
+        run: |
+          mkdir -p artifacts
+          find target/${{ env.WASM_TARGET }}/release -maxdepth 1 -name "*.wasm" -exec cp {} artifacts/ \;
+
+          echo "Collected WASM binaries:"
+          ls -lh artifacts/
+
+          count=$(find artifacts -name "*.wasm" | wc -l)
+          if [ "$count" -eq 0 ]; then
+            echo "::error::No WASM binaries found after build"
+            exit 1
+          fi
+          echo "wasm_count=$count" >> "$GITHUB_OUTPUT"
+
+      - name: Generate SHA-256 checksums
+        run: |
+          cd artifacts
+          for file in *.wasm; do
+            sha256sum "$file" > "${file}.sha256"
+          done
+
+          echo "Checksums:"
+          cat *.sha256
+
+      - name: Verify WASM size limits
+        run: |
+          chmod +x check_size.sh
+          ./check_size.sh
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          echo "Uploading assets for release: $tag"
+
+          cd artifacts
+          for file in *.wasm; do
+            gh release upload "$tag" "$file" --clobber
+            echo "  Uploaded: $file"
+          done
+          for file in *.sha256; do
+            gh release upload "$tag" "$file" --clobber
+            echo "  Uploaded: $file"
+          done

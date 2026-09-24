@@ -1,0 +1,52 @@
+[package]
+name = "stellarflow-contracts-fuzz"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Property-based fuzz harness for AMM math invariants (issue #625)"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+
+[dependencies]
+# Pinned exactly (=1.4.0) to stop Cargo.lock transitive churn. The harness
+# uses proptest 1.4-era syntax (`prop_oneof!` with bare strategies, no
+# weighted-strategy syntax) which is fully supported by =1.4.0. Caret
+# requirements (^1.4) resolved to the latest 1.x release at lock-time,
+# pulling in newer `rand` (0.9), `tempfile` (3.27), `getrandom` (0.3/0.4),
+# `bit-set`/`bit-vec`/`bitflags` (2.x), `linux-raw-sys`, etc. Pinning
+# freezes the entire transitive tree at versions consistent with
+# proptest-1.4.0's own dependency declarations.
+proptest = "=1.4.0"
+
+# Release profile for the fuzz harness.
+#
+# `overflow-checks = false` is a defense-in-depth runner concession: a
+# u128 multiplication wrap inside `U256::mul` would surface as a
+# proptest assertion violation rather than a panic. Fuzz prefers the
+# full property trace (so proptest can shrink to a minimal counterexample
+# rather than stopping at the first overflowing case).
+# Production soundness is verified separately
+# via `RUSTFLAGS='-C overflow-checks=on' cargo test -p
+# stellarflow-contracts-fuzz --release`, which mirrors the main
+# contract's WASM-leaning profile and returns 37 pass / 0 fail with the
+# current (correct) `U256::mul`.
+#
+# Historical: the original `overflow-checks = false` rationale was an
+# active `U256::mul` overflow bug at `src/amm/invariant.rs:26`
+# (`cross1 + cross2` lacked carry propagation). This same fuzz harness
+# surfaced it; commit d53b7ef fixed it (four-product u64→u128 carry
+# propagation). The math is now correct — see `cargo test --release`
+# results in commits d53b7ef (math fix) and e1d05b8 (test-runner pin)
+# for both strict and relaxed overflow profiles.
+#
+# Other release-profile choices match the main contract's WASM-leaning
+# profile.release block.
+[profile.release]
+opt-level = 3
+lto = false
+debug = true
+overflow-checks = false

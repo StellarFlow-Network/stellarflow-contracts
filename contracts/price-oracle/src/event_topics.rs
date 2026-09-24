@@ -2,7 +2,14 @@
 //! Events use structured topics so frontends can index updates and configuration
 //! changes by event type and asset without scanning all transaction logs.
 
-use soroban_sdk::{Address, Env, String, Symbol};
+use soroban_sdk::{symbol_short, Address, Env, String, Symbol};
+
+// Event topic constants for dynamic slippage protection
+pub const VOLATILITY: Symbol = symbol_short!("volatility");
+pub const UPDATED: Symbol = symbol_short!("updated");
+pub const SWAP: Symbol = symbol_short!("swap");
+pub const EXECUTED: Symbol = symbol_short!("executed");
+pub const REJECTED: Symbol = symbol_short!("rejected");
 
 /// Publish a canonical price update event for frontend indexing.
 pub fn publish_price_update(env: &Env, asset: Symbol, price: i128, timestamp: u64) {
@@ -95,5 +102,25 @@ pub fn publish_emergency_halt(env: &Env, admin1: Address, admin2: Address, statu
     env.events().publish(
         (Symbol::new(&env, "emergency_halt"),),
         (admin1, admin2, status),
+    );
+}
+
+/// Publish a swap event for indexer optimization.
+///
+/// Uses a uniform topic `[Symbol::new(&env, "swap"), pool_id]` and a structured
+/// tuple payload `(sender, amount_in, amount_out, fee_paid)` so that the
+/// `stellarflow-backend` Horizon event parsers can ingest swap activity
+/// consistently across all core contract functions.
+pub fn publish_swap(
+    env: &Env,
+    pool_id: Symbol,
+    sender: Address,
+    amount_in: i128,
+    amount_out: i128,
+    fee_paid: i128,
+) {
+    env.events().publish(
+        (Symbol::new(&env, "swap"), pool_id),
+        (sender, amount_in, amount_out, fee_paid),
     );
 }

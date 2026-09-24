@@ -70,7 +70,11 @@
           "contract_data": {
             "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
             "key": {
-              "symbol": "HBEAT"
+              "vec": [
+                {
+                  "u32": 2699528942
+                }
+              ]
             },
             "durability": "temporary"
           }
@@ -83,26 +87,21 @@
                 "ext": "v0",
                 "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
                 "key": {
-                  "symbol": "HBEAT"
+                  "vec": [
+                    {
+                      "u32": 2699528942
+                    }
+                  ]
                 },
                 "durability": "temporary",
                 "val": {
-                  "map": [
-                    {
-                      "key": {
-                        "u32": 4026531840
-                      },
-                      "val": {
-                        "u64": 0
-                      }
-                    }
-                  ]
+                  "u64": 0
                 }
               }
             },
             "ext": "v0"
           },
-          17280
+          15
         ]
       ],
       [
@@ -147,7 +146,7 @@
                                 "symbol": "max_fee_ceiling"
                               },
                               "val": {
-                                "u64": 1000000000
+                                "u64": 10000
                               }
                             },
                             {
@@ -163,10 +162,70 @@
                       },
                       {
                         "key": {
+                          "symbol": "LASTACT"
+                        },
+                        "val": {
+                          "u64": 0
+                        }
+                      },
+                      {
+                        "key": {
                           "symbol": "TREASURY"
                         },
                         "val": {
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "CorridorPool"
+                            },
+                            {
+                              "u32": 2699528942
+                            }
+                          ]
+                        },
+                        "val": {
+                          "map": [
+                            {
+                              "key": {
+                                "symbol": "asset"
+                              },
+                              "val": {
+                                "u32": 2699528942
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "collected"
+                              },
+                              "val": {
+                                "u64": 1000000
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "variable_pool"
+                              },
+                              "val": {
+                                "u64": 0
+                              }
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "SchemaVersion"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 2
                         }
                       }
                     ]
@@ -176,7 +235,7 @@
             },
             "ext": "v0"
           },
-          105000
+          535680
         ]
       ],
       [
@@ -263,7 +322,7 @@
             },
             "ext": "v0"
           },
-          105000
+          535680
         ]
       ]
     ]

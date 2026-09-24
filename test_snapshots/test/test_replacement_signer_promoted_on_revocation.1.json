@@ -216,7 +216,7 @@
                       },
                       {
                         "key": {
-                          "symbol": "TREASURY"
+                          "symbol": "TREASUR"
                         },
                         "val": {
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
@@ -229,7 +229,7 @@
             },
             "ext": "v0"
           },
-          105000
+          6000
         ]
       ],
       [
@@ -415,7 +415,7 @@
             },
             "ext": "v0"
           },
-          105000
+          6000
         ]
       ]
     ]
@@ -793,7 +793,7 @@
             ],
             "data": {
               "error": {
-                "contract": 32
+                "contract": 31
               }
             }
           }
@@ -814,7 +814,7 @@
               },
               {
                 "error": {
-                  "contract": 32
+                  "contract": 31
                 }
               }
             ],
@@ -839,7 +839,7 @@
               },
               {
                 "error": {
-                  "contract": 32
+                  "contract": 31
                 }
               }
             ],

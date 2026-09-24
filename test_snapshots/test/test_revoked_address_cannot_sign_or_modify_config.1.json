@@ -217,7 +217,7 @@
                       },
                       {
                         "key": {
-                          "symbol": "TREASURY"
+                          "symbol": "TREASUR"
                         },
                         "val": {
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
@@ -230,7 +230,7 @@
             },
             "ext": "v0"
           },
-          105000
+          6000
         ]
       ],
       [
@@ -416,7 +416,7 @@
             },
             "ext": "v0"
           },
-          105000
+          6000
         ]
       ]
     ]
@@ -794,7 +794,7 @@
             ],
             "data": {
               "error": {
-                "contract": 30
+                "contract": 32
               }
             }
           }
@@ -815,7 +815,7 @@
               },
               {
                 "error": {
-                  "contract": 30
+                  "contract": 32
                 }
               }
             ],
@@ -840,7 +840,7 @@
               },
               {
                 "error": {
-                  "contract": 30
+                  "contract": 32
                 }
               }
             ],
@@ -919,7 +919,7 @@
             ],
             "data": {
               "error": {
-                "contract": 30
+                "contract": 32
               }
             }
           }
@@ -940,7 +940,7 @@
               },
               {
                 "error": {
-                  "contract": 30
+                  "contract": 32
                 }
               }
             ],
@@ -965,7 +965,7 @@
               },
               {
                 "error": {
-                  "contract": 30
+                  "contract": 32
                 }
               }
             ],
