@@ -1,3 +1,4 @@
+pub mod cleanup_accounts;
 pub mod cleanup {
     use super::*;
 
