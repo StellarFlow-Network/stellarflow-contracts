@@ -8,6 +8,7 @@ description = "StellarFlow smart contracts with time-locked upgrade mechanism"
 [workspace]
 members = [
     "contracts/analytics-engine",
+    "contracts/governance-vote-archive",
     "contracts/hello-world",
     "contracts/ledger-time-helper",
     "contracts/liquidity-lock",
@@ -30,6 +31,16 @@ soroban-sdk = { version = "=20.0.0", features = ["testutils"] }
 
 [lib]
 crate-type = ["cdylib"]
+
+# `soroban-env-common 20.0.0` pins `ethnum = "=1.5.0"`. That exact pin cannot be
+# resolved to a version that builds on current stable Rust, because ethnum
+# 1.5.0's error constructors use a `mem::transmute` that is now a hard E0512
+# error (see third-party/ethnum-compat/README.md). Upstream fixed it in 1.5.3.
+# The patch below satisfies the pin with a shim that re-exports the fixed
+# upstream release, so the workspace builds. Remove it once the SDK allows
+# `ethnum >= 1.5.3`.
+[patch.crates-io]
+ethnum = { path = "third-party/ethnum-compat" }
 
 [profile.release]
 opt-level = "z"

@@ -407,10 +407,15 @@ checksum = "2bfcf67fea2815c2fc3b90873fae90957be12ff417335dfadc7f52927feb03b2"
 
 [[package]]
 name = "ethnum"
-version = "1.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28d49f71c19fe2225f65a127a69a04a37a934d40a23be699d7a224a1bfaee455"
+version = "1.5.0"
+dependencies = [
+ "ethnum 1.5.3",
+]
 
+[[package]]
+name = "ethnum"
+version = "1.5.3"
+source = "git+https://github.com/nlordell/ethnum-rs?tag=v1.5.3#712d6393b07a1f2cf2eb31d6a9edad1ea2a32159"
 
 [[package]]
 name = "ff"
@@ -476,6 +481,13 @@ name = "gimli"
 version = "0.28.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4271d37baee1b8c7e4b708028c57d816cf9d2434acb33a549475f78c181f6253"
+
+[[package]]
+name = "governance-vote-archive"
+version = "0.0.0"
+dependencies = [
+ "soroban-sdk",
+]
 
 [[package]]
 name = "group"
@@ -1037,7 +1049,7 @@ checksum = "5bb493483fa3e3ebfb4c081472495d14b0abcfbe04ba142a56ff63056cc62700"
 dependencies = [
  "arbitrary",
  "crate-git-revision",
- "ethnum",
+ "ethnum 1.5.0",
  "num-derive",
  "num-traits",
  "serde",
