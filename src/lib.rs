@@ -243,6 +243,19 @@ pub enum ContractError {
     NotEmergencySigner = 80,
     /// Emergency override vote threshold not yet reached.
     OverrideThresholdNotReached = 81,
+    /// The supplied concentrated-liquidity tick range is empty, unaligned, or
+    /// outside the pool's permitted price bounds.
+    InvalidTickRange = 82,
+    /// No concentrated liquidity position exists for the pool and tick range.
+    PositionNotFound = 83,
+    /// The caller does not own the concentrated liquidity position.
+    PositionNotOwned = 84,
+    /// A concentrated liquidity position cannot be transferred to its owner.
+    PositionTransferToSelf = 85,
+    /// The position is pledged as collateral and is locked against transfer.
+    PositionCollateralLocked = 86,
+    /// A concentrated liquidity position already exists for this tick range.
+    PositionAlreadyExists = 87,
 }
 
 impl ContractError {
@@ -1057,6 +1070,53 @@ impl TimeLockedUpgradeContract {
         provider: Address,
     ) -> Option<settlement::fees::LiquidityPosition> {
         settlement::fees::get_position(&env, asset, provider)
+    }
+
+    /// Open a concentrated liquidity position over `[lower_tick, upper_tick]`.
+    pub fn open_concentrated_position(
+        env: Env,
+        owner: Address,
+        asset: AssetId,
+        lower_tick: i32,
+        upper_tick: i32,
+        liquidity: u64,
+    ) -> Result<amm::positions::ConcentratedPosition, ContractError> {
+        amm::positions::open_position(&env, owner, asset, lower_tick, upper_tick, liquidity)
+    }
+
+    /// Fetch a concentrated liquidity position for a pool tick range.
+    pub fn get_concentrated_position(
+        env: Env,
+        asset: AssetId,
+        lower_tick: i32,
+        upper_tick: i32,
+    ) -> Option<amm::positions::ConcentratedPosition> {
+        amm::positions::get_position(&env, asset, lower_tick, upper_tick)
+    }
+
+    /// Transfer a concentrated liquidity position to `new_owner`, preserving the
+    /// position's uncollected fee-growth accumulators.
+    pub fn transfer_concentrated_position(
+        env: Env,
+        owner: Address,
+        asset: AssetId,
+        lower_tick: i32,
+        upper_tick: i32,
+        new_owner: Address,
+    ) -> Result<amm::positions::ConcentratedPosition, ContractError> {
+        amm::positions::transfer_position(&env, owner, asset, lower_tick, upper_tick, new_owner)
+    }
+
+    /// Pledge or release a concentrated liquidity position as collateral.
+    pub fn set_concentrated_position_collateral(
+        env: Env,
+        owner: Address,
+        asset: AssetId,
+        lower_tick: i32,
+        upper_tick: i32,
+        locked: bool,
+    ) -> Result<amm::positions::ConcentratedPosition, ContractError> {
+        amm::positions::set_collateral_lock(&env, owner, asset, lower_tick, upper_tick, locked)
     }
 
     /// Record flash loan fee revenue for an asset.
