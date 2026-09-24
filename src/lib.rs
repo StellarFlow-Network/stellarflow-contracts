@@ -2655,6 +2655,14 @@ impl TimeLockedUpgradeContract {
         admin::prune::prune_expired_keys(&env, &admin, &targets)
     }
 
+    pub fn cleanup_inactive_accounts(
+        env: Env,
+        caller: Address,
+        targets: Vec<Address>,
+    ) -> Result<u32, ContractError> {
+        Ok(admin::cleanup_accounts::cleanup_inactive_accounts(&env, &caller, &targets))
+    }
+
     // ── Dynamic Liquidity Pool Swap Fee Tier Controller ─────────────────────
 
     /// Initialize the fee tier controller with bounded safety ranges.
