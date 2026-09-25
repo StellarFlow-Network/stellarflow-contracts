@@ -20,6 +20,14 @@ pub const PRICE_SCALE: i128 = 10_000_000;
 pub const PROTOCOL_FEE_BPS: i128 = 30;
 const BPS_SCALE: i128 = 10_000;
 
+/// Dust threshold for resting order volume, expressed in basis points of the
+/// order's original (post-placement) volume. A partial fill that leaves
+/// `V_remaining < 1% * V_initial` is economically meaningless, so the order is
+/// cancelled and purged — its remaining escrow is returned to the maker. Being
+/// relative to `V_initial` keeps the guard correct for any token-decimal
+/// footprint and any order size.
+pub const ORDER_DUST_BPS: i128 = 100;
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AssetPair {
@@ -55,8 +63,6 @@ pub struct LimitOrder {
     /// Expiry ledger sequence; zero means the order does not expire.
     pub expiry: u32,
     pub active: bool,
-    /// Bid (Buy) or ask (Sell) side of the book.
-    pub side: OrderSide,
 }
 
 #[contracttype]
@@ -67,6 +73,23 @@ pub struct FillResult {
     pub paid_amount: i128,
     pub remaining_amount: i128,
     pub order_closed: bool,
+}
+
+/// Bookkeeping outcome of applying a partial fill to a resting order.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct FillUpdateOutcome {
+    /// True when the order no longer rests after this fill (fully filled or
+    /// cancelled + purged as dust).
+    pub closed: bool,
+    /// True when the order storage record was purged from persistent storage
+    /// because its remaining volume fell below the `ORDER_DUST_BPS` guard.
+    pub purged: bool,
+    /// Remaining base volume removed from the tick index by the purge.
+    pub dust_remaining_base: i128,
+    /// Locked collateral refunded to the maker by the purge — base units for
+    /// a `Sell` order, quote units for a `Buy` order.
+    pub dust_refund: i128,
 }
 
 #[contracttype]
@@ -238,6 +261,137 @@ fn bucket_remove(env: &Env, pair: &AssetPair, price_tick: i128, order_id: u64) {
     }
 }
 
+/// Incomplete-fill invariant guard (#964): a partial fill must trade an exact
+/// proportion of the resting price — `ΔA` base units for
+/// `ΔB = floor(ΔA * P_order / PRICE_SCALE)` quote units. The fixed-point
+/// truncation residual must stay strictly below one `PRICE_SCALE` unit so that
+/// rounding can never drift across successive partial fills of the same order.
+///
+/// Panics on violation: the transaction immediately rolls back (invariant-check
+/// pattern used across the contract).
+fn assert_fill_ratio_invariant(price_tick: i128, base_amount: i128, quote_amount: i128) {
+    let scaled_base = base_amount
+        .checked_mul(price_tick)
+        .expect("fill ratio invariant: base_amount * price_tick overflow");
+    let scaled_quote = quote_amount
+        .checked_mul(PRICE_SCALE)
+        .expect("fill ratio invariant: quote_amount * PRICE_SCALE overflow");
+    assert!(
+        scaled_base >= scaled_quote,
+        "fill ratio invariant violated: quote {} exceeds proportional floor {}",
+        quote_amount,
+        scaled_base / PRICE_SCALE
+    );
+    assert!(
+        scaled_base - scaled_quote < PRICE_SCALE,
+        "fill ratio invariant violated: fixed-point residual >= one PRICE_SCALE unit"
+    );
+}
+
+/// Volume-conservation invariant guard (#964): after any fill the persisted
+/// remaining volume must satisfy `V_remaining = V_initial - ΔV_filled`, for
+/// both the in-memory order and the on-chain persistent record.
+fn assert_volume_invariant(order: &LimitOrder) {
+    let expected_remaining = order
+        .original_amount
+        .checked_sub(order.filled_amount)
+        .expect("volume invariant: original_amount - filled_amount underflow");
+    assert_eq!(
+        order.remaining_amount,
+        expected_remaining,
+        "volume invariant violated: V_remaining {} != V_initial {} - V_filled {}",
+        order.remaining_amount,
+        order.original_amount,
+        order.filled_amount,
+    );
+}
+
+/// True when a remaining volume is below the dust threshold relative to the
+/// order's original volume: `V_remaining < ORDER_DUST_BPS bps * V_initial`.
+fn is_dust_remainder(remaining_amount: i128, original_amount: i128) -> bool {
+    remaining_amount
+        .checked_mul(BPS_SCALE)
+        .expect("dust check: remaining_amount * BPS_SCALE overflow")
+        < original_amount
+            .checked_mul(ORDER_DUST_BPS)
+            .expect("dust check: original_amount * ORDER_DUST_BPS overflow")
+}
+
+/// Apply a partial fill of `fill_amount` (base units) to a resting `order`:
+///
+/// 1. Persist the consumed volume: `V_remaining -= fill_amount`,
+///    `V_filled += fill_amount`, so `V_remaining = V_initial - ΔV_filled`,
+///    then extend the TTL of the order record.
+/// 2. Close the order when `V_remaining == 0` (full fill) and de-list it from
+///    its price-tick FIFO bucket.
+/// 3. Cancel + purge the order when the remaining volume falls below
+///    `ORDER_DUST_BPS` basis points of `V_initial`: de-list the bucket index,
+///    remove both persistent storage records, and report the collateral to
+///    refund to the maker (`dust_refund`) plus the base volume to drain from
+///    `V_tick` (`dust_remaining_base`).
+///
+/// Price-time priority is preserved: a partially-filled (non-dust) order keeps
+/// its position in the tick bucket, so later fills still walk the book in
+/// `(price_tick, created_at_ledger, id)` order.
+fn apply_partial_fill(
+    env: &Env,
+    order: &mut LimitOrder,
+    fill_amount: i128,
+) -> Result<FillUpdateOutcome, ContractError> {
+    let new_remaining = order
+        .remaining_amount
+        .checked_sub(fill_amount)
+        .ok_or(ContractError::MathOverflow)?;
+    let new_filled = order
+        .filled_amount
+        .checked_add(fill_amount)
+        .ok_or(ContractError::MathOverflow)?;
+    order.remaining_amount = new_remaining;
+    order.amount = new_remaining;
+    order.filled_amount = new_filled;
+
+    assert_volume_invariant(order);
+
+    let mut outcome = FillUpdateOutcome {
+        closed: false,
+        purged: false,
+        dust_remaining_base: 0,
+        dust_refund: 0,
+    };
+
+    if order.remaining_amount == 0 {
+        outcome.closed = true;
+        order.active = false;
+        bucket_remove(env, &order.pair, order.price_tick, order.id);
+        save_order(env, order);
+    } else if is_dust_remainder(order.remaining_amount, order.original_amount) {
+        // Cancel + purge the dust order: return the remaining escrowed
+        // collateral to the maker and evict both storage footprints so the
+        // order is fully removed from the book (no resurrectable state).
+        outcome.closed = true;
+        outcome.purged = true;
+        outcome.dust_remaining_base = order.remaining_amount;
+        outcome.dust_refund = if order.side == OrderSide::Buy {
+            quote_amount(order.remaining_amount, order.price_tick)?
+        } else {
+            order.remaining_amount
+        };
+        order.remaining_amount = 0;
+        order.amount = 0;
+        order.active = false;
+        bucket_remove(env, &order.pair, order.price_tick, order.id);
+        let key = OrderStorageKey::Order(order.pair.clone(), order.price_tick, order.id);
+        env.storage().persistent().remove(&key);
+        env.storage()
+            .persistent()
+            .remove(&OrderStorageKey::OrderIndex(order.id));
+    } else {
+        save_order(env, order);
+    }
+
+    Ok(outcome)
+}
+
 /// Post a new limit order: locks `sell_amount` of `pair.sell_asset` from
 /// `maker` into the contract until filled or cancelled.
 pub fn place_order(
@@ -285,7 +439,6 @@ pub fn place_order_with_expiry(
         created_at_ledger: env.ledger().sequence(),
         expiry,
         active: true,
-        side: OrderSide::Sell,
     };
 
     save_order(env, &order);
@@ -333,7 +486,6 @@ pub fn place_buy_order(
         created_at_ledger: env.ledger().sequence(),
         expiry: 0,
         active: true,
-        side: OrderSide::Buy,
     };
 
     save_order(env, &order);
@@ -371,6 +523,7 @@ pub fn fill_order(env: &Env, filler: Address, order_id: u64, fill_amount: i128) 
         .ok_or(ContractError::MathOverflow)?
         .checked_div(PRICE_SCALE)
         .ok_or(ContractError::DivisionByZero)?;
+    assert_fill_ratio_invariant(order.price_tick, fill_amount, paid_amount);
 
     let buy_client = token::Client::new(env, &order.pair.buy_asset);
     buy_client.transfer(&filler, &order.maker, &paid_amount);
@@ -378,30 +531,43 @@ pub fn fill_order(env: &Env, filler: Address, order_id: u64, fill_amount: i128) 
     let sell_client = token::Client::new(env, &order.pair.sell_asset);
     sell_client.transfer(&env.current_contract_address(), &filler, &fill_amount);
 
-    order.remaining_amount = order
-        .remaining_amount
-        .checked_sub(fill_amount)
-        .ok_or(ContractError::MathOverflow)?;
-    order.amount = order.remaining_amount;
-    order.filled_amount = order
-        .filled_amount
-        .checked_add(fill_amount)
-        .ok_or(ContractError::MathOverflow)?;
-
-    let order_closed = order.remaining_amount == 0;
-    if order_closed {
-        order.active = false;
-        bucket_remove(env, &order.pair, order.price_tick, order.id);
-    }
-    save_order(env, &order);
-
     let book_is_bid = order.side == OrderSide::Buy;
-    remove_tick_liquidity(env, &order.pair, order.price_tick, fill_amount, book_is_bid);
+    let outcome = apply_partial_fill(env, &mut order, fill_amount)?;
+
+    // Dust purge refund: return the remaining escrowed collateral to the maker
+    // (base for a Sell order, quote for a Buy order).
+    if outcome.dust_refund > 0 {
+        let refund_asset = if order.side == OrderSide::Buy {
+            order.pair.buy_asset.clone()
+        } else {
+            order.pair.sell_asset.clone()
+        };
+        let refund_client = token::Client::new(env, &refund_asset);
+        refund_client.transfer(
+            &env.current_contract_address(),
+            &order.maker,
+            &outcome.dust_refund,
+        );
+    }
+
+    // V_tick -= ΔV, and additionally drain the purged base remainder when the
+    // order was cancelled for dust.
+    let tick_delta = fill_amount + outcome.dust_remaining_base;
+    remove_tick_liquidity(env, &order.pair, order.price_tick, tick_delta, book_is_bid);
+
+    let order_closed = outcome.closed;
 
     env.events().publish(
         (soroban_sdk::symbol_short!("ord_fill"), order.id),
         (filler.clone(), fill_amount, paid_amount, order.remaining_amount),
     );
+
+    if outcome.purged {
+        env.events().publish(
+            (soroban_sdk::symbol_short!("ord_dust"), order.id),
+            (order.maker.clone(), outcome.dust_refund),
+        );
+    }
 
     if !order_closed {
         env.events().publish(
@@ -473,56 +639,58 @@ pub fn match_orders(
     let price_improvement = buyer_locked_quote
         .checked_sub(quote_paid)
         .ok_or(ContractError::MathOverflow)?;
+    // Incomplete-fill invariant: settlement value must equal
+    // floor(fill_amount * P_sell / PRICE_SCALE) — the executed price.
+    assert_fill_ratio_invariant(seller.price_tick, fill_amount, quote_paid);
 
     let quote_fee = protocol_fee(quote_paid)?;
     let base_fee = protocol_fee(fill_amount)?;
     let seller_net = quote_paid.checked_sub(quote_fee).ok_or(ContractError::MathOverflow)?;
     let buyer_net = fill_amount.checked_sub(base_fee).ok_or(ContractError::MathOverflow)?;
 
-    seller.remaining_amount = seller
-        .remaining_amount
-        .checked_sub(fill_amount)
-        .ok_or(ContractError::MathOverflow)?;
-    buyer.remaining_amount = buyer
-        .remaining_amount
-        .checked_sub(fill_amount)
-        .ok_or(ContractError::MathOverflow)?;
-    seller.filled_amount = seller
-        .filled_amount
-        .checked_add(fill_amount)
-        .ok_or(ContractError::MathOverflow)?;
-    buyer.filled_amount = buyer
-        .filled_amount
-        .checked_add(fill_amount)
-        .ok_or(ContractError::MathOverflow)?;
+    // Apply the fill to each resting order: persists V_remaining = V_initial -
+    // ΔV, closes full fills, and cancels + purges below-dust remainders.
+    let seller_outcome = apply_partial_fill(env, &mut seller, fill_amount)?;
+    let buyer_outcome = apply_partial_fill(env, &mut buyer, fill_amount)?;
 
-    let seller_closed = seller.remaining_amount == 0;
-    let buyer_closed = buyer.remaining_amount == 0;
-    if seller_closed {
-        seller.active = false;
-        bucket_remove(env, &seller.pair, seller.price_tick, seller.id);
-    }
-    if buyer_closed {
-        buyer.active = false;
-        bucket_remove(env, &buyer.pair, buyer.price_tick, buyer.id);
-    }
+    let seller_closed = seller_outcome.closed;
+    let buyer_closed = buyer_outcome.closed;
 
     credit_balance(env, &seller.maker, &seller.pair.buy_asset, seller_net)?;
     credit_balance(env, &buyer.maker, &buyer.pair.sell_asset, buyer_net)?;
     credit_balance(env, &buyer.maker, &buyer.pair.buy_asset, price_improvement)?;
+
+    // Dust purge refunds: return the remaining escrowed collateral to the maker
+    // as a withdrawable book balance (base for the Sell side, quote for Buy).
+    if seller_outcome.dust_refund > 0 {
+        credit_balance(env, &seller.maker, &seller.pair.sell_asset, seller_outcome.dust_refund)?;
+    }
+    if buyer_outcome.dust_refund > 0 {
+        credit_balance(env, &buyer.maker, &buyer.pair.buy_asset, buyer_outcome.dust_refund)?;
+    }
 
     if let Some(treasury) = env.storage().instance().get::<_, Address>(&crate::TREASURY_KEY) {
         credit_balance(env, &treasury, &seller.pair.buy_asset, quote_fee)?;
         credit_balance(env, &treasury, &seller.pair.sell_asset, base_fee)?;
     }
 
-    save_order(env, &seller);
-    save_order(env, &buyer);
-
     env.events().publish(
         (soroban_sdk::symbol_short!("ord_mtch"), seller.id, buyer.id),
         (fill_amount, quote_paid, seller_net, buyer_net, quote_fee, base_fee),
     );
+
+    if seller_outcome.purged {
+        env.events().publish(
+            (soroban_sdk::symbol_short!("ord_dust"), seller.id),
+            (seller.maker.clone(), seller_outcome.dust_refund),
+        );
+    }
+    if buyer_outcome.purged {
+        env.events().publish(
+            (soroban_sdk::symbol_short!("ord_dust"), buyer.id),
+            (buyer.maker.clone(), buyer_outcome.dust_refund),
+        );
+    }
 
     Ok(SettlementResult {
         seller_order_id: seller.id,
@@ -874,6 +1042,7 @@ pub fn match_market_order(
                 order.remaining_amount
             };
             let paid = quote_amount(fill_qty, order.price_tick)?;
+            assert_fill_ratio_invariant(order.price_tick, fill_qty, paid);
 
             if is_buy {
                 // Market buy: taker → maker (quote), escrow → taker (base).
@@ -889,23 +1058,27 @@ pub fn match_market_order(
                 buy_client.transfer(&env.current_contract_address(), &taker, &paid);
             }
 
-            order.remaining_amount = order
-                .remaining_amount
-                .checked_sub(fill_qty)
-                .ok_or(ContractError::MathOverflow)?;
-            order.amount = order.remaining_amount;
-            order.filled_amount = order
-                .filled_amount
-                .checked_add(fill_qty)
-                .ok_or(ContractError::MathOverflow)?;
-            if order.remaining_amount == 0 {
-                order.active = false;
-                bucket_remove(env, &order.pair, order.price_tick, order.id);
+            // Persist V_remaining = V_initial - ΔV and cancel + purge dust
+            // remainders; a purge refunds the remaining escrow to the maker
+            // (base for a Sell order, quote for a Buy order).
+            let outcome = apply_partial_fill(env, &mut order, fill_qty)?;
+            if outcome.dust_refund > 0 {
+                let refund_asset = if order.side == OrderSide::Buy {
+                    order.pair.buy_asset.clone()
+                } else {
+                    order.pair.sell_asset.clone()
+                };
+                let refund_client = token::Client::new(env, &refund_asset);
+                refund_client.transfer(
+                    &env.current_contract_address(),
+                    &order.maker,
+                    &outcome.dust_refund,
+                );
             }
-            save_order(env, &order);
 
-            // V_tick = V_tick - ΔV_filled
-            remove_tick_liquidity(env, &pair, price_tick, fill_qty, book_is_bid);
+            // V_tick = V_tick - ΔV_filled (plus the purged base remainder).
+            let tick_delta = fill_qty + outcome.dust_remaining_base;
+            remove_tick_liquidity(env, &pair, price_tick, tick_delta, book_is_bid);
             let tick_volume_after = get_tick_volume(env, pair.clone(), price_tick, book_is_bid);
 
             fills.push_back(TickMatchFill {
@@ -928,6 +1101,12 @@ pub fn match_market_order(
                 (soroban_sdk::symbol_short!("mkt_fill"), order.id),
                 (taker.clone(), fill_qty, paid, price_tick),
             );
+            if outcome.purged {
+                env.events().publish(
+                    (soroban_sdk::symbol_short!("ord_dust"), order.id),
+                    (order.maker.clone(), outcome.dust_refund),
+                );
+            }
         }
     }
 
@@ -1201,5 +1380,187 @@ mod tests {
         let pair = AssetPair { sell_asset, buy_asset };
         let result = client.try_match_market_order(&taker, &pair, &10, &true);
         assert_eq!(result, Err(Ok(ContractError::InsufficientLiquidityDepth)));
+    }
+
+    #[test]
+    fn partial_fill_maintains_exact_proportional_locked_asset_ratio() {
+        let (env, client, sell_asset, buy_asset, _) = setup();
+        let maker = Address::generate(&env);
+        let taker = Address::generate(&env);
+        mint(&env, &sell_asset, &maker, 1_000);
+        mint(&env, &buy_asset, &taker, 5_000);
+        let pair = AssetPair {
+            sell_asset: sell_asset.clone(),
+            buy_asset: buy_asset.clone(),
+        };
+        // P_order = 0.25, stored fixed-point (0.25 * PRICE_SCALE).
+        let order = client.place_limit_order(&maker, &pair, &(PRICE_SCALE / 4), &1_000);
+
+        // ΔV = 401 yields ΔB = floor(401 * 0.25) = 100 exactly — the ratio
+        // `ΔA / ΔB = P_order` holds with a bounded <1-unit rounding residual.
+        let result = client.fill_limit_order(&taker, &order.id, &401);
+        assert_eq!(result.filled_amount, 401);
+        assert_eq!(result.paid_amount, 100);
+
+        let sell_token = soroban_sdk::token::Client::new(&env, &sell_asset);
+        let buy_token = soroban_sdk::token::Client::new(&env, &buy_asset);
+        // Taker received ΔA=401; maker was paid ΔB=100 (0.25 ratio).
+        assert_eq!(sell_token.balance(&taker), 401);
+        assert_eq!(buy_token.balance(&maker), 100);
+
+        let order_after = client.get_limit_order(&order.id).unwrap();
+        // V_remaining = V_initial - ΔV.
+        assert_eq!(order_after.remaining_amount, 599);
+        assert_eq!(order_after.filled_amount, 401);
+        assert!(order_after.active);
+    }
+
+    #[test]
+    fn partial_fill_preserves_price_time_priority() {
+        let (env, client, sell_asset, buy_asset, _) = setup();
+        let maker_a = Address::generate(&env);
+        let maker_b = Address::generate(&env);
+        let taker = Address::generate(&env);
+        mint(&env, &sell_asset, &maker_a, 100);
+        mint(&env, &sell_asset, &maker_b, 100);
+        mint(&env, &buy_asset, &taker, 2_000);
+        let pair = AssetPair {
+            sell_asset: sell_asset.clone(),
+            buy_asset: buy_asset.clone(),
+        };
+        let first = client.place_limit_order(&maker_a, &pair, &(2 * PRICE_SCALE), &100);
+        let second = client.place_limit_order(&maker_b, &pair, &(2 * PRICE_SCALE), &100);
+
+        // Partially fill the first order; it must keep its FIFO slot at the tick.
+        client.fill_limit_order(&taker, &first.id, &40);
+        let bucket = client.get_orders_at_tick(&pair, &(2 * PRICE_SCALE));
+        assert_eq!(bucket.len(), 2);
+        assert_eq!(bucket.get(0).unwrap(), first.id);
+        assert_eq!(bucket.get(1).unwrap(), second.id);
+        let remaining_first = client.get_limit_order(&first.id).unwrap();
+        assert_eq!(remaining_first.remaining_amount, 60);
+
+        // A later fill still resolves to the earlier order first (time priority).
+        let fill = client.fill_limit_order(&taker, &first.id, &10);
+        assert_eq!(fill.order_id, first.id);
+        assert_eq!(fill.remaining_amount, 50);
+    }
+
+    #[test]
+    fn fill_below_dust_threshold_purges_order_and_refunds_maker() {
+        let (env, client, sell_asset, buy_asset, _) = setup();
+        let maker = Address::generate(&env);
+        let taker = Address::generate(&env);
+        let original = 100_000;
+        mint(&env, &sell_asset, &maker, original);
+        mint(&env, &buy_asset, &taker, 500_000);
+        let pair = AssetPair {
+            sell_asset: sell_asset.clone(),
+            buy_asset: buy_asset.clone(),
+        };
+        let order = client.place_limit_order(&maker, &pair, &PRICE_SCALE, &original);
+
+        // Leaves V_remaining = 400 < 1% of V_initial (1000) → cancel + purge.
+        let result = client.fill_limit_order(&taker, &order.id, &(original - 400));
+        assert!(result.order_closed);
+        assert_eq!(result.remaining_amount, 0);
+
+        // Order storage is purged — no resurrectable record remains.
+        assert_eq!(client.get_limit_order(&order.id), None);
+        assert_eq!(client.get_orders_at_tick(&pair, &PRICE_SCALE).len(), 0);
+        assert_eq!(client.get_tick_volume(&pair, &PRICE_SCALE, &false), 0);
+
+        let sell_token = soroban_sdk::token::Client::new(&env, &sell_asset);
+        let buy_token = soroban_sdk::token::Client::new(&env, &buy_asset);
+        // Maker recovers the dust remainder (400) back from escrow.
+        assert_eq!(sell_token.balance(&maker), 400);
+        // Filler keeps the filled units.
+        assert_eq!(sell_token.balance(&taker), original - 400);
+        // Maker received quote for the filled units (P_order = 1.0).
+        assert_eq!(buy_token.balance(&maker), original - 400);
+    }
+
+    #[test]
+    fn market_buy_purges_dust_book_without_skipping_volume() {
+        let (env, client, sell_asset, buy_asset, _) = setup();
+        let maker_a = Address::generate(&env);
+        let maker_b = Address::generate(&env);
+        let taker = Address::generate(&env);
+        mint(&env, &sell_asset, &maker_a, 100_000);
+        mint(&env, &sell_asset, &maker_b, 120_000);
+        mint(&env, &buy_asset, &taker, 1_000_000);
+        let pair = AssetPair {
+            sell_asset: sell_asset.clone(),
+            buy_asset: buy_asset.clone(),
+        };
+        let a = client.place_limit_order(&maker_a, &pair, &(2 * PRICE_SCALE), &100_000);
+        let b = client.place_limit_order(&maker_b, &pair, &(2 * PRICE_SCALE), &120_000);
+
+        // Market buy 219_000: A fully fills (100_000); B partially fills
+        // 119_000 leaving V_remaining = 1_000 < 1% of V_initial → purged
+        // mid-sweep. The cursor must keep walking the snapshot without
+        // skipping or re-visiting any order.
+        let result = client.match_market_order(&taker, &pair, &219_000, &true);
+        assert!(result.fully_filled);
+        assert_eq!(result.filled_amount, 219_000);
+        assert_eq!(result.fills.len(), 2);
+        assert_eq!(result.fills.get(0).unwrap().order_id, a.id);
+        assert_eq!(result.fills.get(1).unwrap().order_id, b.id);
+
+        assert_eq!(client.get_tick_volume(&pair, &(2 * PRICE_SCALE), &false), 0);
+        assert_eq!(client.get_orders_at_tick(&pair, &(2 * PRICE_SCALE)).len(), 0);
+        // A fully-filled order stays as a closed record; B was purged.
+        let closed_a = client.get_limit_order(&a.id).unwrap();
+        assert!(!closed_a.active);
+        assert_eq!(closed_a.remaining_amount, 0);
+        assert_eq!(client.get_limit_order(&b.id), None);
+
+        let sell_token = soroban_sdk::token::Client::new(&env, &sell_asset);
+        let buy_token = soroban_sdk::token::Client::new(&env, &buy_asset);
+        assert_eq!(sell_token.balance(&taker), 219_000);
+        assert_eq!(buy_token.balance(&maker_a), 200_000);
+        assert_eq!(buy_token.balance(&maker_b), 238_000);
+        // Maker B refunded remaining escrow of 1_000 sell_asset.
+        assert_eq!(sell_token.balance(&maker_b), 1_000);
+    }
+
+    #[test]
+    fn market_sell_purges_dust_bid_and_refunds_quote_escrow() {
+        let (env, client, sell_asset, buy_asset, _) = setup();
+        let maker = Address::generate(&env);
+        let taker = Address::generate(&env);
+        // Bid of 150_000 base at P=2 locks quote = 300_000 buy_asset.
+        mint(&env, &buy_asset, &maker, 300_000);
+        mint(&env, &sell_asset, &taker, 200_000);
+        mint(&env, &buy_asset, &taker, 1_000_000);
+        let pair = AssetPair {
+            sell_asset: sell_asset.clone(),
+            buy_asset: buy_asset.clone(),
+        };
+        let bid = client.place_buy_limit_order(&maker, &pair, &(2 * PRICE_SCALE), &150_000);
+
+        // Market sell 149_000 base against the bid: fill 149_000 (paid
+        // 298_000 quote), leaving V_remaining = 1_000 < 1% of V_initial →
+        // purge refunds the remaining escrowed quote (quote_amount(1_000, 2*SCALE)
+        // = 2_000) to the maker.
+        let result = client.match_market_order(&taker, &pair, &149_000, &false);
+        assert!(result.fully_filled);
+        assert_eq!(result.fills.len(), 1);
+        assert_eq!(result.fills.get(0).unwrap().order_id, bid.id);
+        assert_eq!(result.fills.get(0).unwrap().tick_volume_after, 0);
+
+        assert_eq!(client.get_tick_volume(&pair, &(2 * PRICE_SCALE), &true), 0);
+        assert_eq!(client.get_orders_at_tick(&pair, &(2 * PRICE_SCALE)).len(), 0);
+        assert_eq!(client.get_limit_order(&bid.id), None);
+
+        let sell_token = soroban_sdk::token::Client::new(&env, &sell_asset);
+        let buy_token = soroban_sdk::token::Client::new(&env, &buy_asset);
+        // Taker disposed 149_000 base and received 298_000 quote.
+        assert_eq!(sell_token.balance(&taker), 51_000);
+        assert_eq!(buy_token.balance(&taker), 1_298_000);
+        // Maker received 149_000 base and was refunded the 2_000 quote dust
+        // remainder (contract released 298_000 + 2_000 = 300_000 in total).
+        assert_eq!(sell_token.balance(&maker), 149_000);
+        assert_eq!(buy_token.balance(&maker), 2_000);
     }
 }
