@@ -28,6 +28,7 @@ pub mod prune {
                     &EMERGENCY_REVOCATION_TEMP_KEY,
                 ) {
                     if proposal_state(env, proposal.proposed_at) == ProposalState::Expired {
+                        env.storage().temporary().remove(&EMERGENCY_REVOCATION_QUORUM_KEY);
                         remove_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY);
                         pruned += 1;
                     }
@@ -45,7 +46,8 @@ pub use action_queue::{
 };
 pub use prune::{prune_expired_keys, PruneTarget};
 
-use soroban_sdk::{contracttype, symbol_short, Address, Env, Symbol, TryFromVal, Val, Vec};
+use soroban_sdk::{contracttype, symbol_short, Address, Bytes, BytesN, Env, Map, Symbol, TryFromVal, Val, Vec};
+use soroban_sdk::xdr::ToXdr;
 use crate::{ContractData, ContractError, DATA_KEY, SIGNERS_KEY, REVOKED_SIGNER_KEY};
 use crate::storage::{SignerKey, RevokedSignerKey};
 use crate::temp_governance::{
@@ -123,8 +125,31 @@ fn _is_signer(env: &Env, addr: &Address) -> bool {
 
 /// Helper function to calculate the revocation threshold.
 fn _revocation_threshold(env: &Env) -> u32 {
-    let signer_count: u32 = env.storage().instance().get(&SIGNERS_KEY).unwrap_or(0u32);
+    let signer_count: u32 = env
+        .storage()
+        .instance()
+        .get::<_, Map<Address, ()>>(&SIGNERS_KEY)
+        .map(|signers| signers.len())
+        .unwrap_or(0u32);
     if signer_count == 0 { 1 } else { signer_count / 2 + 1 }
+}
+
+fn _effective_quorum(env: &Env, quorum: u32) -> u32 {
+    let signer_count = env
+        .storage()
+        .instance()
+        .get::<_, Map<Address, ()>>(&SIGNERS_KEY)
+        .map(|signers| signers.len())
+        .unwrap_or(0u32);
+    core::cmp::min(quorum, signer_count.max(1))
+}
+
+fn _signer_set_hash(env: &Env, signers: &Map<Address, ()>) -> BytesN<32> {
+    let mut encoded = Bytes::new(env);
+    for signer in signers.keys().iter() {
+        encoded.append(&signer.to_xdr(env));
+    }
+    env.crypto().sha256(&encoded)
 }
 
 // ── Emergency key revocation ─────────────────────────────────────────────
@@ -135,6 +160,7 @@ fn _revocation_threshold(env: &Env) -> u32 {
 /// Kept for the Issue #410 typed storage-key symbol audit; no longer used to
 /// read/write proposals directly (see `EMERGENCY_REVOCATION_TEMP_KEY`).
 pub(crate) const EMERGENCY_REVOCATION_KEY: Symbol = symbol_short!("EMERREV");
+const EMERGENCY_REVOCATION_QUORUM_KEY: Symbol = symbol_short!("EMREVQ");
 
 /// Proposal raised by the multi-sig coordinator group to revoke a hot-wallet key.
 ///
@@ -204,10 +230,27 @@ fn execute_emergency_revocation(
 
     let signer_key = SignerKey::SignerByAddress(proposal.target.clone());
     env.storage().instance().remove(&signer_key);
+
+    let mut updated_signers = env
+        .storage()
+        .instance()
+        .get::<_, Map<Address, ()>>(&SIGNERS_KEY)
+        .unwrap_or_else(|| Map::new(env));
+    updated_signers.remove(proposal.target.clone());
     if proposal.replacement != proposal.target {
         let replacement_key = SignerKey::SignerByAddress(proposal.replacement.clone());
         env.storage().instance().set(&replacement_key, &true);
+        updated_signers.set(proposal.replacement.clone(), ());
     }
+    env.storage().instance().set(&SIGNERS_KEY, &updated_signers);
+
+    let updated_signer_set_hash = _signer_set_hash(env, &updated_signers);
+    let original_quorum: u32 = env
+        .storage()
+        .temporary()
+        .get(&EMERGENCY_REVOCATION_QUORUM_KEY)
+        .unwrap_or_else(|| _revocation_threshold(env));
+    let updated_quorum = _effective_quorum(env, original_quorum);
 
     let mut contract_data = data;
     if contract_data.admin == proposal.target {
@@ -215,6 +258,12 @@ fn execute_emergency_revocation(
         env.storage().instance().set(&DATA_KEY, &contract_data);
     }
 
+    env.events().publish(
+        (Symbol::new(env, "SignerRevokedEmergency"),),
+        (proposal.target, updated_signer_set_hash, updated_quorum),
+    );
+
+    env.storage().temporary().remove(&EMERGENCY_REVOCATION_QUORUM_KEY);
     remove_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY);
 }
 
@@ -276,8 +325,10 @@ pub fn propose_emergency_revocation(
         proposed_at: env.ledger().timestamp(),
         votes,
     };
+    let quorum = _revocation_threshold(env);
+    env.storage().temporary().set(&EMERGENCY_REVOCATION_QUORUM_KEY, &quorum);
 
-    if proposal.votes.len() >= _revocation_threshold(env) {
+    if proposal.votes.len() >= _effective_quorum(env, quorum) {
         execute_emergency_revocation(env, data, proposal);
     } else {
         store_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY, &proposal, DEFAULT_PROPOSAL_TTL);
@@ -330,6 +381,7 @@ pub fn vote_emergency_revocation(
         .ok_or(ContractError::NoActiveEmergencyRevocation)?;
 
     if proposal_state(env, proposal.proposed_at) == ProposalState::Expired {
+        env.storage().temporary().remove(&EMERGENCY_REVOCATION_QUORUM_KEY);
         remove_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY);
         return Err(ContractError::NoActiveEmergencyRevocation);
     }
@@ -348,7 +400,12 @@ pub fn vote_emergency_revocation(
 
     proposal.votes.push_back(voter);
 
-    let threshold = _revocation_threshold(env);
+    let original_quorum: u32 = env
+        .storage()
+        .temporary()
+        .get(&EMERGENCY_REVOCATION_QUORUM_KEY)
+        .unwrap_or_else(|| _revocation_threshold(env));
+    let threshold = _effective_quorum(env, original_quorum);
 
     if proposal.votes.len() >= threshold {
         execute_emergency_revocation(env, data, proposal);
@@ -414,6 +471,7 @@ pub fn purge_emergency_revocation_proposal(env: &Env) -> Result<(), ContractErro
         .ok_or(ContractError::NotInitialized)?;
 
     if has_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY) {
+        env.storage().temporary().remove(&EMERGENCY_REVOCATION_QUORUM_KEY);
         remove_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY);
     }
 
