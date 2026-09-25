@@ -1,5 +1,5 @@
 use soroban_sdk::{symbol_short, Bytes, Env};
-use soroban_sdk::testutils::{Address as _, Ledger, LedgerInfo}; // Removed Symbol as _
+use soroban_sdk::testutils::{Address as _, Events, Ledger, LedgerInfo}; // Removed Symbol as _
 use crate::{
     ContractError, StakingTier, StakingTierConfig, TimeLockedUpgradeContract,
     TimeLockedUpgradeContractClient, DEFAULT_HEARTBEAT_INTERVAL, 
@@ -1265,6 +1265,9 @@ fn test_replacement_signer_promoted_on_revocation() {
     // is recognised as a valid participant.
     let result = client.try_vote_emergency_revocation(&replacement, &u64::MAX);
     assert_eq!(result, Err(Ok(ContractError::NoActiveEmergencyRevocation)));
+
+    let event_debug = alloc::format!("{:?}", env.events().all());
+    assert!(event_debug.contains("SignerRevokedEmergency"));
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
