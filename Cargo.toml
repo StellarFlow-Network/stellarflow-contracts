@@ -18,6 +18,7 @@ members = [
     "contracts/remittance-escrow",
     "contracts/reward-splitter",
     "contracts/gas-tank",
+    "contracts/governance_executer",
     "contracts/vault-health-monitor",
 ]
 # tests/fuzz/fuzz/ is the cargo-fuzz coverage-guided target subcrate.
