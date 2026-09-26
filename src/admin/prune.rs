@@ -53,6 +53,101 @@ pub enum PruneTarget {
     CorridorPool(AssetId),
 }
 
+/// Persisted state for a helper instance that has exhausted its live state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub struct HelperRentRecord {
+    pub active_state_entries: u32,
+    pub byte_balance: u64,
+}
+
+/// Storage keys used by the bulk rent collector.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[contracttype]
+pub enum StorageRentKey {
+    HelperRent(Address),
+    TreasuryBalance,
+}
+
+/// Sweep rent deposits from helper contracts whose live state set has already
+/// been exhausted. The remaining byte balance is attributed to the protocol
+/// treasury and the helper slot is removed.
+pub fn sweep_inactive_helper_contract_rent(
+    env: &Env,
+    admin: &Address,
+    treasury: &Address,
+    helpers: &Vec<Address>,
+) -> Result<u64, ContractError> {
+    let data: ContractData = env
+        .storage()
+        .instance()
+        .get(&DATA_KEY)
+        .ok_or(ContractError::NotInitialized)?;
+
+    if &data.admin != admin {
+        return Err(ContractError::NotAdmin);
+    }
+    admin.require_auth();
+
+    crate::instance::bump_instance_ttl(env);
+    crate::recovery::update_admin_activity(env);
+
+    let mut swept_bytes: u64 = 0;
+    let mut treasury_bytes: u64 = env
+        .storage()
+        .instance()
+        .get(&StorageRentKey::TreasuryBalance)
+        .unwrap_or(0u64);
+
+    for helper in helpers.iter() {
+        let key = StorageRentKey::HelperRent(helper.clone());
+        if let Some(record) = env.storage().persistent().get::<_, HelperRentRecord>(&key) {
+            if record.active_state_entries == 0 && record.byte_balance > 0 {
+                swept_bytes = swept_bytes.saturating_add(record.byte_balance);
+                treasury_bytes = treasury_bytes.saturating_add(record.byte_balance);
+                env.storage().persistent().remove(&key);
+                env.events().publish(
+                    (symbol_short!("rent"), symbol_short!("sweep")),
+                    (helper.clone(), treasury.clone(), record.byte_balance),
+                );
+            }
+        }
+    }
+
+    env.storage()
+        .instance()
+        .set(&StorageRentKey::TreasuryBalance, &treasury_bytes);
+
+    Ok(swept_bytes)
+}
+
+pub fn collect_expired_storage_rent(
+    env: &Env,
+    admin: &Address,
+    treasury: &Address,
+    helpers: &Vec<Address>,
+) -> Result<u64, ContractError> {
+    sweep_inactive_helper_contract_rent(env, admin, treasury, helpers)
+}
+
+pub fn bulk_collect_storage_rent(
+    env: &Env,
+    admin: &Address,
+    treasury: &Address,
+    helpers: &Vec<Address>,
+) -> Result<u64, ContractError> {
+    sweep_inactive_helper_contract_rent(env, admin, treasury, helpers)
+}
+
+pub fn sweep_expired_contract_rent(
+    env: &Env,
+    admin: &Address,
+    treasury: &Address,
+    helpers: &Vec<Address>,
+) -> Result<u64, ContractError> {
+    sweep_inactive_helper_contract_rent(env, admin, treasury, helpers)
+}
+
 /// Prune obsolete persistent storage entries to reduce state bloat and reclaim storage deposits.
 ///
 /// # Authorization
@@ -547,6 +642,57 @@ mod tests {
                 .storage()
                 .persistent()
                 .has(&FeesStorageKey::CorridorPool(1)));
+        });
+    }
+
+    #[test]
+    fn test_sweep_inactive_helper_contract_rent_collects_byte_balance() {
+        let (env, client, contract_id, admin, treasury, _sell_asset, _buy_asset) = setup();
+        let inactive = Address::generate(&env);
+        let active = Address::generate(&env);
+
+        env.as_contract(&contract_id, || {
+            env.storage().persistent().set(
+                &StorageRentKey::HelperRent(inactive.clone()),
+                &HelperRentRecord {
+                    active_state_entries: 0,
+                    byte_balance: 1_280,
+                },
+            );
+            env.storage().persistent().set(
+                &StorageRentKey::HelperRent(active.clone()),
+                &HelperRentRecord {
+                    active_state_entries: 3,
+                    byte_balance: 640,
+                },
+            );
+        });
+
+        let mut helpers = Vec::new(&env);
+        helpers.push_back(inactive.clone());
+        helpers.push_back(active.clone());
+
+        let swept = env.as_contract(&contract_id, || {
+            sweep_inactive_helper_contract_rent(&env, &admin, &treasury, &helpers).unwrap()
+        });
+
+        assert_eq!(swept, 1_280);
+        env.as_contract(&contract_id, || {
+            assert!(!env
+                .storage()
+                .persistent()
+                .has(&StorageRentKey::HelperRent(inactive.clone())));
+            assert!(env
+                .storage()
+                .persistent()
+                .has(&StorageRentKey::HelperRent(active.clone())));
+            assert_eq!(
+                env.storage()
+                    .instance()
+                    .get::<_, u64>(&StorageRentKey::TreasuryBalance)
+                    .unwrap_or(0),
+                1_280
+            );
         });
     }
 

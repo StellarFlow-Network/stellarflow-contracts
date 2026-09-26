@@ -939,6 +939,164 @@ pub fn match_market_order(
     })
 }
 
+
+// ── On-chain limit order book spread imbalance monitor (Issue #1014) ─────────
+//
+// Tracks bid-ask spread expansion for each resting book: computes the relative
+// spread S = (P_ask_min - P_bid_max) / P_bid_max at the top of the book and
+// raises a liquidity-provider alert when S exceeds 5% so keepers/LPs can react
+// to a degraded market. When the book is too thin to price reliably, callers
+// can fall back to a defensive market-maker pricing curve.
+
+/// Alert threshold for the relative bid-ask spread, scaled like every other
+/// price in this module: 5% = 0.05 * [`PRICE_SCALE`].
+pub const SPREAD_ALERT_THRESHOLD: i128 = PRICE_SCALE / 20;
+
+/// Minimum top-of-book depth (in base units) each side must rest before the
+/// book is considered sufficiently liquid for spread monitoring.
+pub const MIN_TOP_OF_BOOK_DEPTH: i128 = 1_000;
+
+/// Fallback market-maker reprice factor (2%) applied when the book is thin:
+/// `fallback = base * (1 + FALLBACK_REPRICE_BPS / BPS_SCALE)`.
+pub const FALLBACK_REPRICE_BPS: i128 = 200;
+
+/// Snapshot of a pair's top-of-book spread state.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpreadImbalance {
+    pub pair: AssetPair,
+    /// Highest resting bid tick (`P_bid_max`).
+    pub best_bid: i128,
+    /// Lowest resting ask tick (`P_ask_min`).
+    pub best_ask: i128,
+    /// Relative spread S = (ask_min - bid_max) / bid_max, scaled by
+    /// [`PRICE_SCALE`]; `0.05` → 5%.
+    pub spread_ratio: i128,
+    /// `false` when one side of the book is empty so `spread_ratio` is
+    /// undefined and a fallback pricing curve should be used.
+    pub has_liquidity: bool,
+}
+
+/// Compute the relative bid-ask spread ratio
+/// `S = (P_ask_min - P_bid_max) / P_bid_max`.
+///
+/// Returns `S` fixed-point scaled by [`PRICE_SCALE`] so `S > SPREAD_ALERT_THRESHOLD`
+/// means the spread has expanded beyond 5%.
+pub fn calculate_spread_ratio(best_bid: i128, best_ask: i128) -> Result<i128, ContractError> {
+    if best_bid <= 0 {
+        return Err(ContractError::DivisionByZero);
+    }
+    let spread = best_ask
+        .checked_sub(best_bid)
+        .ok_or(ContractError::MathOverflow)?;
+    spread
+        .checked_mul(PRICE_SCALE)
+        .ok_or(ContractError::MathOverflow)?
+        .checked_div(best_bid)
+        .ok_or(ContractError::DivisionByZero)
+}
+
+/// Return the current top-of-book bid (max bid tick) and ask (min ask tick)
+/// for `pair`. Active bid ticks are sorted descending and ask ticks ascending,
+/// so the head of each slice is the respective best price.
+pub fn get_best_bid_ask(env: &Env, pair: &AssetPair) -> (Option<i128>, Option<i128>) {
+    let bid_ticks: Vec<i128> = env
+        .storage()
+        .persistent()
+        .get(&LiquidityStorageKey::ActiveTicks(pair.clone(), true))
+        .unwrap_or_else(|| Vec::new(env));
+    let best_bid = if bid_ticks.is_empty() {
+        None
+    } else {
+        Some(bid_ticks.get(0).unwrap())
+    };
+
+    let ask_ticks: Vec<i128> = env
+        .storage()
+        .persistent()
+        .get(&LiquidityStorageKey::ActiveTicks(pair.clone(), false))
+        .unwrap_or_else(|| Vec::new(env));
+    let best_ask = if ask_ticks.is_empty() {
+        None
+    } else {
+        Some(ask_ticks.get(0).unwrap())
+    };
+
+    (best_bid, best_ask)
+}
+
+/// Returns `true` when the book cannot be relied on for pricing: either side is
+/// empty or its top-of-book depth is below [`MIN_TOP_OF_BOOK_DEPTH`].
+pub fn is_liquidity_thin(env: &Env, pair: &AssetPair) -> bool {
+    match get_best_bid_ask(env, pair) {
+        (Some(best_bid), Some(best_ask)) => {
+            get_tick_volume(env, pair.clone(), best_bid, true) < MIN_TOP_OF_BOOK_DEPTH
+                || get_tick_volume(env, pair.clone(), best_ask, false) < MIN_TOP_OF_BOOK_DEPTH
+        }
+        _ => true,
+    }
+}
+
+/// Publish a `LiquidityProviderAlert` event carrying the offending book state.
+pub fn emit_liquidity_provider_alert(
+    env: &Env,
+    pair: &AssetPair,
+    best_bid: i128,
+    best_ask: i128,
+    spread_ratio: i128,
+) -> Result<(), ContractError> {
+    crate::events::liquidity::publish_liquidity_provider_alert(
+        env, pair, best_bid, best_ask, spread_ratio,
+    );
+    Ok(())
+}
+
+/// Inspect the top of `pair`'s book, evaluate the spread ratio, and raise a
+/// liquidity-provider alert when the spread has expanded beyond
+/// [`SPREAD_ALERT_THRESHOLD`] (S > 0.05).
+pub fn check_spread_imbalance(env: &Env, pair: &AssetPair) -> Result<SpreadImbalance, ContractError> {
+    match get_best_bid_ask(env, pair) {
+        (Some(best_bid), Some(best_ask)) => {
+            let spread_ratio = calculate_spread_ratio(best_bid, best_ask)?;
+            if spread_ratio > SPREAD_ALERT_THRESHOLD {
+                emit_liquidity_provider_alert(env, pair, best_bid, best_ask, spread_ratio)?;
+            }
+            Ok(SpreadImbalance {
+                pair: pair.clone(),
+                best_bid,
+                best_ask,
+                spread_ratio,
+                has_liquidity: true,
+            })
+        }
+        _ => Ok(SpreadImbalance {
+            pair: pair.clone(),
+            best_bid: 0,
+            best_ask: 0,
+            spread_ratio: 0,
+            has_liquidity: false,
+        }),
+    }
+}
+
+/// Enforce a fallback market-maker pricing curve when the order book is too
+/// thin to price reliably. When the book has reasonable depth the `base_price`
+/// is returned untouched; otherwise the quote is repriced against the fallback
+/// curve (a defensive markup band) so callers never trade on an illiquid book.
+pub fn enforce_fallback_pricing(env: &Env, pair: &AssetPair, base_price: i128) -> Result<i128, ContractError> {
+    if !is_liquidity_thin(env, pair) || base_price <= 0 {
+        return Ok(base_price);
+    }
+    // Fallback market-maker curve: quote a markup band above the reference so
+    // a thin/one-sided book cannot be gamed into distorted executions.
+    let markup = base_price
+        .checked_mul(FALLBACK_REPRICE_BPS)
+        .ok_or(ContractError::MathOverflow)?;
+    base_price
+        .checked_add(markup / BPS_SCALE)
+        .ok_or(ContractError::MathOverflow)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1198,4 +1356,130 @@ mod tests {
         let result = client.try_match_market_order(&taker, &pair, &10, &true);
         assert_eq!(result, Err(Ok(ContractError::InsufficientLiquidityDepth)));
     }
+
+    // ── Spread imbalance monitor (Issue #1014) ───────────────────────────────
+
+    #[test]
+    fn spread_ratio_uses_best_bid_and_ask() {
+        let (env, client, sell_asset, buy_asset, _) = setup();
+        let seller = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        mint(&env, &sell_asset, &seller, 2_000);
+        mint(&env, &buy_asset, &buyer, 300_000);
+        let pair = AssetPair { sell_asset: sell_asset.clone(), buy_asset: buy_asset.clone() };
+
+        // Ask at 1.01, bid at 1.00 -> S = 1%.
+        client.place_limit_order(&seller, &pair, &((PRICE_SCALE * 101) / 100), &1_000);
+        client.place_buy_limit_order(&buyer, &pair, &PRICE_SCALE, &1_000);
+
+        let (best_bid, best_ask) = client.get_best_bid_ask(&pair);
+        assert_eq!(best_bid, Some(PRICE_SCALE));
+        assert_eq!(best_ask, Some((PRICE_SCALE * 101) / 100));
+
+        let ratio = client.calculate_spread_ratio(&pair).unwrap();
+        assert_eq!(ratio, PRICE_SCALE / 100);
+
+        let spread = client.check_spread_imbalance(&pair).unwrap();
+        assert!(spread.has_liquidity);
+        assert_eq!(spread.best_bid, PRICE_SCALE);
+        assert_eq!(spread.best_ask, (PRICE_SCALE * 101) / 100);
+        assert_eq!(spread.spread_ratio, PRICE_SCALE / 100);
+    }
+
+    #[test]
+    fn spread_expansion_over_five_percent_emits_liquidity_provider_alert() {
+        let (env, client, sell_asset, buy_asset, _) = setup();
+        let seller = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        mint(&env, &sell_asset, &seller, 2_000);
+        mint(&env, &buy_asset, &buyer, 300_000);
+        let pair = AssetPair { sell_asset: sell_asset.clone(), buy_asset: buy_asset.clone() };
+
+        // Sparse book: ask at 1.10, bid at 1.00 -> S = 10% > 5%.
+        client.place_limit_order(&seller, &pair, &((PRICE_SCALE * 110) / 100), &1_000);
+        client.place_buy_limit_order(&buyer, &pair, &PRICE_SCALE, &1_000);
+
+        let spread = client.check_spread_imbalance(&pair).unwrap();
+        assert!(spread.spread_ratio > SPREAD_ALERT_THRESHOLD);
+
+        let mut alert_seen = false;
+        let events = env.events().all();
+        for i in 0..events.len() {
+            let (_, topics, _) = events.get(i).unwrap();
+            if topics
+                .get(1)
+                == Some(soroban_sdk::Symbol::new(&env, "liquidity_provider_alert").into_val(&env))
+            {
+                alert_seen = true;
+            }
+        }
+        assert!(alert_seen, "liquidity provider alert event was not emitted");
+    }
+
+    #[test]
+    fn spread_below_threshold_does_not_emit_alert() {
+        let (env, client, sell_asset, buy_asset, _) = setup();
+        let seller = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        mint(&env, &sell_asset, &seller, 2_000);
+        mint(&env, &buy_asset, &buyer, 300_000);
+        let pair = AssetPair { sell_asset: sell_asset.clone(), buy_asset: buy_asset.clone() };
+
+        // Ask at 1.02, bid at 1.00 -> S = 2% < 5%.
+        client.place_limit_order(&seller, &pair, &((PRICE_SCALE * 102) / 100), &1_000);
+        client.place_buy_limit_order(&buyer, &pair, &PRICE_SCALE, &1_000);
+
+        let spread = client.check_spread_imbalance(&pair).unwrap();
+        assert!(spread.spread_ratio <= SPREAD_ALERT_THRESHOLD);
+
+        let events = env.events().all();
+        let mut alert_seen = false;
+        for i in 0..events.len() {
+            let (_, topics, _) = events.get(i).unwrap();
+            if topics
+                .get(1)
+                == Some(soroban_sdk::Symbol::new(&env, "liquidity_provider_alert").into_val(&env))
+            {
+                alert_seen = true;
+            }
+        }
+        assert!(!alert_seen, "alert should not fire for a healthy spread");
+    }
+
+    #[test]
+    fn thin_book_flags_and_enforces_fallback_pricing() {
+        let (env, client, sell_asset, buy_asset, _) = setup();
+        let seller = Address::generate(&env);
+        mint(&env, &sell_asset, &seller, 2_000);
+        let pair = AssetPair { sell_asset: sell_asset.clone(), buy_asset };
+
+        // Ask-only book: no bid side at all -> thin.
+        client.place_limit_order(&seller, &pair, &PRICE_SCALE, &1_000);
+        assert!(client.is_liquidity_thin(&pair));
+
+        let base = 10 * PRICE_SCALE;
+        let fallback = client.enforce_fallback_pricing(&pair, &base).unwrap();
+        assert!(fallback > base);
+
+        // Adding both sides with real depth un-thins the book.
+        let buyer = Address::generate(&env);
+        mint(&env, &pair.buy_asset, &buyer, 200_000);
+        client.place_buy_limit_order(&buyer, &pair, &PRICE_SCALE, &2_000);
+        assert!(!client.is_liquidity_thin(&pair));
+        assert_eq!(client.enforce_fallback_pricing(&pair, &base).unwrap(), base);
+    }
+
+    #[test]
+    fn one_sided_book_reports_no_spread_liquidity() {
+        let (env, client, sell_asset, buy_asset, _) = setup();
+        let seller = Address::generate(&env);
+        mint(&env, &sell_asset, &seller, 1_000);
+        let pair = AssetPair { sell_asset, buy_asset };
+        client.place_limit_order(&seller, &pair, &PRICE_SCALE, &1_000);
+
+        let spread = client.check_spread_imbalance(&pair).unwrap();
+        assert!(!spread.has_liquidity);
+        assert_eq!(spread.spread_ratio, 0);
+    }
 }
+

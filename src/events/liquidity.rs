@@ -181,3 +181,46 @@ mod tests {
         });
     }
 }
+
+/// Structured payload for a liquidity-provider alert raised when the bid-ask
+/// spread of an order book expands beyond the 5% safety threshold.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LiquidityProviderAlert {
+    /// Asset pair whose book is reporting the imbalance.
+    pub pair: crate::orders::limit::AssetPair,
+    /// Highest resting bid price (`P_bid_max`), fixed-point at
+    /// `orders::limit::PRICE_SCALE`.
+    pub best_bid: i128,
+    /// Lowest resting ask price (`P_ask_min`), fixed-point at
+    /// `orders::limit::PRICE_SCALE`.
+    pub best_ask: i128,
+    /// Relative spread `S = (ask_min - bid_max) / bid_max`, fixed-point at
+    /// `orders::limit::PRICE_SCALE`.
+    pub spread_ratio: i128,
+}
+
+/// Publish a `LiquidityProviderAlert` for a spread-imbalance monitor.
+///
+/// Topics follow the RPC-friendly schema used by the other liquidity events:
+/// `("stellarflow", "liquidity_provider_alert")`, with the offending book state
+/// carried in the payload.
+pub fn publish_liquidity_provider_alert(
+    env: &Env,
+    pair: &crate::orders::limit::AssetPair,
+    best_bid: i128,
+    best_ask: i128,
+    spread_ratio: i128,
+) {
+    let topics = (
+        Symbol::new(env, "stellarflow"),
+        Symbol::new(env, "liquidity_provider_alert"),
+    );
+    let payload = LiquidityProviderAlert {
+        pair: pair.clone(),
+        best_bid,
+        best_ask,
+        spread_ratio,
+    };
+    env.events().publish(topics, payload);
+}

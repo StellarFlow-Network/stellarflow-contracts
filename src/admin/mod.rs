@@ -7,7 +7,11 @@ pub use action_queue::{
     queue_admin_action, DynamicFeeConfigParams, FeeCeilingUpdateParams, QueuedActionPayload,
     QueuedAdminAction, ADMIN_ACTION_DELAY_SECONDS,
 };
-pub use prune::{prune_expired_keys, PruneTarget};
+pub use prune::{
+    bulk_collect_storage_rent, collect_expired_storage_rent, prune_expired_keys,
+    sweep_expired_contract_rent, sweep_inactive_helper_contract_rent, HelperRentRecord,
+    PruneTarget, StorageRentKey,
+};
 
 use soroban_sdk::{contracttype, symbol_short, Address, Env, Symbol, TryFromVal, Val, Vec};
 use crate::{ContractData, ContractError, DATA_KEY, SIGNERS_KEY, REVOKED_SIGNER_KEY};

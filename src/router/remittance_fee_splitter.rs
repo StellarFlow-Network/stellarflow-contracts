@@ -22,7 +22,9 @@
 
 use soroban_sdk::{contracttype, symbol_short, Address, Bytes, Env, Map, Vec};
 
-use crate::events::{emit_event, EV_REMITTANCE_FEES_ROUTED};
+use crate::events::{
+    emit_event, EV_REMITTANCE_FEE_SPLIT_CALCULATED, EV_REMITTANCE_FEES_ROUTED,
+};
 use crate::{AssetId, ContractError, TimeLockedUpgradeContract};
 
 // ---------------------------------------------------------------------------
@@ -107,6 +109,32 @@ pub struct RemittanceFeesRoutedEvent {
     /// Percentage allocated to protocol treasury (basis points)
     pub treasury_bps: u32,
     /// Timestamp when fees were routed
+    pub timestamp: u64,
+}
+
+/// Exact dynamic fee-sharing breakdown computed for a remittance route.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RemittanceFeeSplitCalculated {
+    /// Correlation ID for the transfer being split.
+    pub transfer_id: Bytes,
+    /// Asset being routed.
+    pub asset: AssetId,
+    /// Original total fee base amount.
+    pub total_fee: u64,
+    /// Base anchor fee share, in basis points.
+    pub base_fee_bps: u32,
+    /// Delivery-time performance multiplier, in basis points, used to scale the anchor share.
+    pub speed_multiplier_bps: u32,
+    /// Anchor allocation share after the speed adjustment.
+    pub anchor_share_bps: u32,
+    /// Remaining share allocated to protocol yield stakers.
+    pub yield_staker_share_bps: u32,
+    /// Exact anchor fee amount in stroops.
+    pub anchor_amount: u64,
+    /// Exact yield-staker fee amount in stroops.
+    pub yield_staker_amount: u64,
+    /// Timestamp when the split was calculated.
     pub timestamp: u64,
 }
 
@@ -308,6 +336,60 @@ pub fn distribute_fees(
     Ok(result)
 }
 
+/// Compute the anchor/yield-staker fee matrix using the delivery-time speed
+/// multiplier. `base_fee_bps` is the anchor base rate and `speed_multiplier_bps`
+/// encodes the bonus factor applied to the anchor share. The remaining share is
+/// allocated to protocol yield stakers.
+pub fn calculate_dynamic_fee_sharing_matrix(
+    env: &Env,
+    transfer_id: Bytes,
+    asset: AssetId,
+    total_fee: u64,
+    base_fee_bps: u32,
+    speed_multiplier_bps: u32,
+) -> Result<RemittanceFeeSplitCalculated, ContractError> {
+    let scaled_anchor_share = base_fee_bps
+        .checked_mul(
+            MAX_FEE_BPS
+                .checked_add(speed_multiplier_bps)
+                .ok_or(ContractError::MathOverflow)?,
+        )
+        .ok_or(ContractError::MathOverflow)?
+        .checked_div(MAX_FEE_BPS)
+        .ok_or(ContractError::DivisionByZero)?;
+
+    let anchor_share_bps = scaled_anchor_share.min(MAX_FEE_BPS);
+    let yield_staker_share_bps = MAX_FEE_BPS.saturating_sub(anchor_share_bps);
+
+    let anchor_amount = calculate_fee_share(total_fee, anchor_share_bps)?;
+    let yield_staker_amount = total_fee
+        .checked_sub(anchor_amount)
+        .ok_or(ContractError::MathOverflow)?;
+
+    let split = RemittanceFeeSplitCalculated {
+        transfer_id: transfer_id.clone(),
+        asset,
+        total_fee,
+        base_fee_bps,
+        speed_multiplier_bps,
+        anchor_share_bps,
+        yield_staker_share_bps,
+        anchor_amount,
+        yield_staker_amount,
+        timestamp: env.ledger().timestamp(),
+    };
+
+    let asset_symbol = crate::asset_id_to_symbol(env, asset);
+    emit_event(
+        env,
+        EV_REMITTANCE_FEE_SPLIT_CALCULATED,
+        &[&asset_symbol],
+        &split,
+    )?;
+
+    Ok(split)
+}
+
 /// Calculate fee share from total amount using basis points.
 ///
 /// Uses interior scaling to maintain precision during division.
@@ -371,7 +453,7 @@ fn emit_remittance_fees_routed_event(
         timestamp: env.ledger().timestamp(),
     };
 
-    let asset_symbol = crate::asset_id_to_symbol(asset);
+    let asset_symbol = crate::asset_id_to_symbol(env, asset);
     
     emit_event(env, EV_REMITTANCE_FEES_ROUTED, &[&asset_symbol], event_data)
 }

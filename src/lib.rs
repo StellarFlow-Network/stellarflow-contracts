@@ -252,55 +252,10 @@ pub enum ContractError {
     NotEmergencySigner = 80,
     /// Emergency override vote threshold not yet reached.
     OverrideThresholdNotReached = 81,
-    // ── Module-specific errors added by later feature sets ─────────────────
-    BridgeRateLimitExceeded = 100,
-    InvalidBridgeRateLimit = 101,
-    CapacityExceeded = 102,
-    InvalidMerkleProof = 103,
-    CommitmentExpired = 104,
-    CommitmentHashMismatch = 105,
-    CommitmentNotActive = 106,
-    CommitmentNotExpired = 107,
-    CommitmentNotFound = 108,
-    CommitmentNotRevealWindow = 109,
-    CommitmentWindowTooLong = 110,
-    CommitmentWindowTooShort = 111,
-    TooManyActiveCommitments = 112,
-    DeadlineNotReached = 113,
-    DeadlineReached = 114,
-    DeadlineTooFar = 115,
-    DeadlineTooSoon = 116,
-    EmergencyRevocationAlreadyActive = 117,
-    EventTopicLimitExceeded = 118,
-    FeeDistributionMismatch = 119,
-    FlashLoanArbitrageDetected = 120,
-    HtlcNotActive = 121,
-    HtlcNotFound = 122,
-    InvalidArgument = 123,
-    InvalidDelegate = 124,
-    InvalidFeeSplitConfig = 125,
-    InvalidFlashLoanFeeDiscount = 126,
-    InvalidFlashLoanFeeTier = 127,
-    InvalidPreImage = 128,
-    InvalidPublicInputs = 129,
-    InvalidThreshold = 130,
-    InvariantViolation = 131,
-    NoActiveDelegation = 132,
-    NoPreviousUpgrade = 133,
-    NoVotingWeight = 134,
-    NotEmergencyAdmin = 135,
-    NotRecoveryKey = 136,
-    PayloadHashMismatch = 137,
-    PoolNotFound = 138,
-    ProposalAlreadyCancelledOrExecuted = 139,
-    RecoveryKeyNotConfigured = 140,
-    RecoveryNotAvailableYet = 141,
-    RollbackWindowExpired = 142,
-    RouteExecutionFailed = 143,
-    TimelockNotExpired = 144,
-    TooManyActiveHtlcs = 145,
-    UpgradeHealthCheckFailed = 146,
-    ZeroSwapAmount = 147,
+    /// Dynamic remittance fee split configuration is invalid.
+    InvalidFeeSplitConfig = 82,
+    /// A fee allocation does not add up to the original total.
+    FeeDistributionMismatch = 83,
 }
 
 impl ContractError {
@@ -2132,6 +2087,45 @@ impl TimeLockedUpgradeContract {
     ) -> soroban_sdk::Vec<orders::limit::LiquidityLevel> {
         orders::limit::get_liquidity_depth(&env, pair, is_bid)
     }
+    /// Calculate spread ratio for a trading pair: S = (P_ask_min - P_bid_max) / P_bid_max
+    pub fn calculate_spread_ratio(env: Env, pair: orders::limit::AssetPair) -> Result<i128, ContractError> {
+        let (best_bid_opt, best_ask_opt) = orders::limit::get_best_bid_ask(&env, &pair);
+        if best_bid_opt.is_none() || best_ask_opt.is_none() {
+            return Err(ContractError::InsufficientLiquidityDepth);
+        }
+        orders::limit::calculate_spread_ratio(best_bid_opt.unwrap(), best_ask_opt.unwrap())
+    }
+
+    /// Get best bid and best ask prices for a trading pair
+    pub fn get_best_bid_ask(env: Env, pair: orders::limit::AssetPair) -> (Option<i128>, Option<i128>) {
+        orders::limit::get_best_bid_ask(&env, &pair)
+    }
+
+    /// Check spread imbalance and trigger alert if spread > 5%
+    pub fn check_spread_imbalance(env: Env, pair: orders::limit::AssetPair) -> Result<orders::limit::SpreadImbalance, ContractError> {
+        orders::limit::check_spread_imbalance(&env, &pair)
+    }
+
+    /// Emit liquidity provider alert
+    pub fn emit_liquidity_provider_alert(
+        env: Env,
+        pair: orders::limit::AssetPair,
+        best_bid: i128,
+        best_ask: i128,
+        spread_ratio: i128,
+    ) -> Result<(), ContractError> {
+        orders::limit::emit_liquidity_provider_alert(&env, &pair, best_bid, best_ask, spread_ratio)
+    }
+
+    /// Check if liquidity is thin
+    pub fn is_liquidity_thin(env: Env, pair: orders::limit::AssetPair) -> bool {
+        orders::limit::is_liquidity_thin(&env, &pair)
+    }
+
+    /// Enforce fallback market maker pricing curves when liquidity is thin
+    pub fn enforce_fallback_pricing(env: Env, pair: orders::limit::AssetPair, base_price: i128) -> Result<i128, ContractError> {
+        orders::limit::enforce_fallback_pricing(&env, &pair, base_price)
+    }
 
     // ── Anti-frontrunning Commit-Reveal Order Scheme (Issue #761) ───────────
 
@@ -2683,6 +2677,44 @@ impl TimeLockedUpgradeContract {
         targets: Vec<admin::prune::PruneTarget>,
     ) -> Result<u32, ContractError> {
         admin::prune::prune_expired_keys(&env, &admin, &targets)
+    }
+
+    /// Bulk sweep rent deposits from helper contracts whose live state set has
+    /// already been exhausted. Returns the total bytes reclaimed.
+    pub fn sweep_inactive_helper_rent(
+        env: Env,
+        admin: Address,
+        treasury: Address,
+        helpers: Vec<Address>,
+    ) -> Result<u64, ContractError> {
+        admin::prune::sweep_inactive_helper_contract_rent(&env, &admin, &treasury, &helpers)
+    }
+
+    pub fn collect_expired_storage_rent(
+        env: Env,
+        admin: Address,
+        treasury: Address,
+        helpers: Vec<Address>,
+    ) -> Result<u64, ContractError> {
+        admin::prune::collect_expired_storage_rent(&env, &admin, &treasury, &helpers)
+    }
+
+    pub fn bulk_collect_storage_rent(
+        env: Env,
+        admin: Address,
+        treasury: Address,
+        helpers: Vec<Address>,
+    ) -> Result<u64, ContractError> {
+        admin::prune::bulk_collect_storage_rent(&env, &admin, &treasury, &helpers)
+    }
+
+    pub fn sweep_expired_contract_rent(
+        env: Env,
+        admin: Address,
+        treasury: Address,
+        helpers: Vec<Address>,
+    ) -> Result<u64, ContractError> {
+        admin::prune::sweep_expired_contract_rent(&env, &admin, &treasury, &helpers)
     }
 
     // ── Dynamic Liquidity Pool Swap Fee Tier Controller ─────────────────────
