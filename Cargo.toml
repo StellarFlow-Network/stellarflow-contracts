@@ -17,6 +17,7 @@ members = [
     "contracts/price-oracle",
     "contracts/remittance-escrow",
     "contracts/reward-splitter",
+    "contracts/shielded-remittance-escrow",
     "contracts/gas-tank",
     "contracts/vault-health-monitor",
 ]
