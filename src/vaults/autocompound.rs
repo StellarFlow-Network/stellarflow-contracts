@@ -636,7 +636,7 @@ mod tests {
         mint(&env, &asset, &keeper, 500);
         let res = client.try_vault_harvest(&keeper, &500);
         assert!(res.is_err());
-        assert_eq!(client.vault_is_circuit_breaker_triggered(), true);
+        assert!(client.vault_circuit_breaker_triggered());
     }
 
     #[test]
@@ -655,7 +655,7 @@ mod tests {
         // Current share price is 1.0e18 (50% loss from peak)
         let triggered = client.vault_check_circuit_breaker().unwrap();
         assert_eq!(triggered, true);
-        assert_eq!(client.vault_is_circuit_breaker_triggered(), true);
+        assert!(client.vault_circuit_breaker_triggered());
 
         // Vault is now paused & in emergency withdrawal mode
         env.as_contract(&client.address, || {

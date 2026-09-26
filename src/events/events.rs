@@ -21,7 +21,7 @@
 //! emit_event(env, EventName::PriceUpdate, &[&asset_sym], &(price, timestamp));
 //! ```
 
-use soroban_sdk::{symbol_short, Env, Symbol, Vec};
+use soroban_sdk::{contracttype, symbol_short, Env, Symbol, Vec};
 
 use crate::ContractError;
 
@@ -70,6 +70,12 @@ pub const EV_ASSET_INFO_SET: Symbol = symbol_short!("info_set");
 
 /// Price oracle: asset description was stored.
 pub const EV_ASSET_DESC_SET: Symbol = symbol_short!("desc_set");
+/// Adaptive AMM fee updated event.
+pub const EV_ADAPTIVE_FEE: Symbol = symbol_short!("adp_fee");
+/// Flash loan fees distributed event.
+pub const EV_FLASH_FEES_DISTRIBUTED: Symbol = symbol_short!("fl_fees");
+/// Governance proposal created event.
+pub const EV_PROPOSAL_CREATED: Symbol = symbol_short!("prop_new");
 
 /// Price oracle: emergency halt was toggled.
 pub const EV_EMERGENCY_HALT: Symbol = symbol_short!("emrg_halt");
@@ -354,7 +360,7 @@ pub fn emit_proposal_vetoed(
     vetoed_at: u64,
     reason: soroban_sdk::String,
 ) -> Result<(), ContractError> {
-    let proposal_id_sym = soroban_sdk::Symbol::new(env, &format!("prop_{}", proposal_id));
+    let proposal_id_sym = symbol_short!("proposal");
     
     let event = ProposalVetoedEvent {
         proposal_id,
@@ -400,7 +406,7 @@ pub fn emit_proposal_created(
     ipfs_cid: soroban_sdk::Bytes,
     created_at: u64,
 ) -> Result<(), ContractError> {
-    let proposal_id_sym = soroban_sdk::Symbol::new(env, &format!("prop_{}", proposal_id));
+    let proposal_id_sym = symbol_short!("proposal");
     
     let event = ProposalCreatedEvent {
         proposal_id,

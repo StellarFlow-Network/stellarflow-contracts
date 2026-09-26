@@ -370,10 +370,12 @@ fn remove_tick_sorted(list: &mut Vec<i32>, tick: i32) {
 /// Returns `DEFAULT_FEE_TIER` if the pool has no explicitly configured tier.
 pub fn get_pool_fee_tier(env: &Env, asset: AssetId) -> u16 {
     let key = FeeTierKey(asset);
-    env.storage()
+    let stored: u32 = env
+        .storage()
         .persistent()
         .get(&key)
-        .unwrap_or(DEFAULT_FEE_TIER)
+        .unwrap_or(DEFAULT_FEE_TIER as u32);
+    stored as u16
 }
 
 /// Update a pool's swap fee tier. In production this is called by governance
@@ -388,7 +390,7 @@ pub fn set_pool_fee_tier(
         return Err(ContractError::Overflow);
     }
     let key = FeeTierKey(asset);
-    env.storage().persistent().set(&key, &fee_tier);
+    env.storage().persistent().set(&key, &(fee_tier as u32));
     Ok(fee_tier)
 }
 
@@ -560,7 +562,7 @@ pub fn simulate_swap_across_ticks(
             .ok_or(ContractError::Overflow)?
             .checked_div(10_000)
             .ok_or(ContractError::DivisionByZero)?;
-        let net_in = step_in
+        let net_in = (step_in as u128)
             .checked_sub(fee)
             .ok_or(ContractError::Overflow)? as u64;
 

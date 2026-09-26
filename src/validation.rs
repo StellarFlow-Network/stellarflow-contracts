@@ -234,7 +234,9 @@ pub fn check_liquidity_depth(env: &Env, asset: AssetId) -> Result<(), ContractEr
     let metrics: Option<crate::staking_tiers::AssetFeedMetrics> = env
         .storage()
         .persistent()
-        .get(&crate::StakingStorageKey::AssetMetrics(asset));
+        .get(&crate::StakingStorageKey::AssetMetrics(
+            crate::asset_id_to_symbol(env, asset),
+        ));
 
     if let Some(metrics) = metrics {
         if u64::from(metrics.volume_score) >= u64::from(MIN_POOL_VOLUME_SCORE) {
