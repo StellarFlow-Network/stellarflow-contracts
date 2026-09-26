@@ -1396,6 +1396,22 @@ impl TimeLockedUpgradeContract {
         storage::preflight_rent_check(&env);
     }
 
+    // ── Instance storage rent-expiry monitor (Issue #953) ────────────────
+
+    /// Returns the remaining ledger lifetime of the watched instance-storage
+    /// key `key`, emitting a `ttl_warn` event when fewer than 10,000 ledgers
+    /// remain. Keys that were never refreshed report `0`.
+    pub fn check_key_ttl(env: Env, key: Symbol) -> u32 {
+        storage::check_key_ttl(&env, key)
+    }
+
+    /// (Re)starts the watch on the instance-storage key `key`, extending the
+    /// contract instance TTL and recording the current ledger. Returns the
+    /// refreshed remaining lifetime.
+    pub fn refresh_key_ttl(env: Env, key: Symbol) -> u32 {
+        storage::refresh_key_ttl(&env, key)
+    }
+
     // ── Governance Proposal Execution Timelock Cancellation (Issue #796) ──
 
     /// Submit a governance proposal for contract upgrade with timelock.
