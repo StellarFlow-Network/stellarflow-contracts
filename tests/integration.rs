@@ -5,6 +5,9 @@ use soroban_sdk::{
 };
 
 mod mocks;
+use mocks::oracle_failure_matrix::{
+    setup_failure_matrix, FailureMatrixProtocolClient, FailureMode,
+};
 use mocks::oracle_mocks::{
     mock_oracle_advance_time, mock_oracle_get_price, mock_oracle_has_price, mock_oracle_set_prices,
     mock_oracle_update_price, setup_mock_oracle,
@@ -208,4 +211,57 @@ fn test_offline_trade_with_token_and_oracle_mocks() {
         mock_oracle_get_price(&env, &oracle_id, ngn.clone()).unwrap(),
         1_500_000_i128
     );
+}
+
+#[test]
+fn test_oracle_failure_matrix_rejects_all_state_changing_entrypoints() {
+    let modes = [
+        FailureMode::Stale,
+        FailureMode::Corrupted,
+        FailureMode::Malicious,
+    ];
+
+    for mode in modes {
+        for entrypoint in ["borrow", "swap", "liquidate"] {
+            let env = Env::default();
+            let fixture = setup_failure_matrix(&env, mode.clone());
+            let client = FailureMatrixProtocolClient::new(&env, &fixture.protocol);
+            let asset = symbol_short!("NGN");
+
+            let accepted = match entrypoint {
+                "borrow" => client.borrow(&fixture.oracle, &asset, &25),
+                "swap" => client.swap(&fixture.oracle, &asset, &25),
+                "liquidate" => client.liquidate(&fixture.oracle, &asset, &25),
+                _ => unreachable!(),
+            };
+
+            assert!(!accepted, "{entrypoint} must reject {mode:?} oracle data");
+            assert_eq!(client.processed(&symbol_short!("operation")), 0);
+            assert!(
+                client.is_paused(),
+                "{entrypoint} must latch emergency pause"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_oracle_failure_matrix_allows_fresh_data_without_pause() {
+    for entrypoint in ["borrow", "swap", "liquidate"] {
+        let env = Env::default();
+        let fixture = setup_failure_matrix(&env, FailureMode::Fresh);
+        let client = FailureMatrixProtocolClient::new(&env, &fixture.protocol);
+        let asset = symbol_short!("NGN");
+
+        let accepted = match entrypoint {
+            "borrow" => client.borrow(&fixture.oracle, &asset, &25),
+            "swap" => client.swap(&fixture.oracle, &asset, &25),
+            "liquidate" => client.liquidate(&fixture.oracle, &asset, &25),
+            _ => unreachable!(),
+        };
+
+        assert!(accepted, "{entrypoint} should accept fresh oracle data");
+        assert_eq!(client.processed(&symbol_short!("operation")), 25);
+        assert!(!client.is_paused());
+    }
 }
