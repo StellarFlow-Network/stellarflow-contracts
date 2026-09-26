@@ -1,6 +1,8 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, contracterror, token, Address, Env, Symbol, symbol_short};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, Symbol,
+};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -68,7 +70,11 @@ impl LinearVestingContract {
         cliff_duration: u32,
         vesting_duration: u32,
     ) -> Result<(), VestingError> {
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).ok_or(VestingError::NotInitialized)?;
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(VestingError::NotInitialized)?;
         if admin != stored_admin {
             return Err(VestingError::NotAdmin);
         }
@@ -97,7 +103,11 @@ impl LinearVestingContract {
         };
 
         // Transfer tokens from admin to this contract
-        let token_addr: Address = env.storage().instance().get(&DataKey::Token).ok_or(VestingError::NotInitialized)?;
+        let token_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
+            .ok_or(VestingError::NotInitialized)?;
         let token_client = token::Client::new(&env, &token_addr);
         token_client.transfer(&admin, &env.current_contract_address(), &total_amount);
 
@@ -106,7 +116,13 @@ impl LinearVestingContract {
         // Emit event
         env.events().publish(
             (symbol_short!("vest_new"),),
-            (identifier, beneficiary, total_amount, cliff_duration, vesting_duration),
+            (
+                identifier,
+                beneficiary,
+                total_amount,
+                cliff_duration,
+                vesting_duration,
+            ),
         );
 
         Ok(())
@@ -184,9 +200,17 @@ impl LinearVestingContract {
         env.storage().instance().set(&schedule_key, &schedule);
 
         // Transfer tokens to beneficiary
-        let token_addr: Address = env.storage().instance().get(&DataKey::Token).ok_or(VestingError::NotInitialized)?;
+        let token_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
+            .ok_or(VestingError::NotInitialized)?;
         let token_client = token::Client::new(&env, &token_addr);
-        token_client.transfer(&env.current_contract_address(), &schedule.beneficiary, &claimable);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &schedule.beneficiary,
+            &claimable,
+        );
 
         // Emit event
         env.events().publish(
@@ -284,14 +308,7 @@ mod tests {
         client.initialize(&admin, &token);
         let id = symbol_short!("team1");
 
-        client.create_vesting(
-            &admin,
-            &id,
-            &beneficiary,
-            &1000_0000000,
-            &100,
-            &1000,
-        );
+        client.create_vesting(&admin, &id, &beneficiary, &1000_0000000, &100, &1000);
 
         // Advance 50 ledgers (still within cliff)
         advance_ledgers(&env, 50);
@@ -308,14 +325,7 @@ mod tests {
         client.initialize(&admin, &token);
         let id = symbol_short!("team1");
 
-        client.create_vesting(
-            &admin,
-            &id,
-            &beneficiary,
-            &1000_0000000,
-            &100,
-            &1000,
-        );
+        client.create_vesting(&admin, &id, &beneficiary, &1000_0000000, &100, &1000);
 
         // Advance past cliff (100 ledgers) + halfway through vesting range (450 more = 550 total)
         // Post-cliff range = 900, elapsed post-cliff = 450
@@ -335,14 +345,7 @@ mod tests {
         client.initialize(&admin, &token);
         let id = symbol_short!("team1");
 
-        client.create_vesting(
-            &admin,
-            &id,
-            &beneficiary,
-            &1000_0000000,
-            &100,
-            &1000,
-        );
+        client.create_vesting(&admin, &id, &beneficiary, &1000_0000000, &100, &1000);
 
         // Advance fully past vesting
         advance_ledgers(&env, 1000);
@@ -363,14 +366,7 @@ mod tests {
         client.initialize(&admin, &token);
         let id = symbol_short!("team1");
 
-        client.create_vesting(
-            &admin,
-            &id,
-            &beneficiary,
-            &1000_0000000,
-            &100,
-            &1000,
-        );
+        client.create_vesting(&admin, &id, &beneficiary, &1000_0000000, &100, &1000);
 
         advance_ledgers(&env, 50);
         let result = client.try_claim_vested(&id);

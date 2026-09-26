@@ -1,10 +1,10 @@
 #![cfg(test)]
 
-use soroban_sdk::{testutils::Address as _, Address, Env, Symbol, Vec, Val, IntoVal};
+use soroban_sdk::{testutils::Address as _, Address, Env, IntoVal, Symbol, Val, Vec};
 use stellarflow_contracts::{
-    TimeLockedUpgradeContract, TimeLockedUpgradeContractClient,
-    vaults::interest::{InterestRateConfig, PoolState},
     orders::limit::AssetPair,
+    vaults::interest::{InterestRateConfig, PoolState},
+    TimeLockedUpgradeContract, TimeLockedUpgradeContractClient,
 };
 
 fn setup_env() -> (Env, TimeLockedUpgradeContractClient<'static>, Address) {
@@ -28,9 +28,9 @@ fn test_interest_rate_controller_utilization() {
 fn test_interest_rate_controller_rates() {
     let (_, client, _) = setup_env();
     let config = InterestRateConfig {
-        base_rate_bps: 200, // 2%
-        multiplier_bps: 1000, // 10%
-        jump_multiplier_bps: 5000, // 50%
+        base_rate_bps: 200,            // 2%
+        multiplier_bps: 1000,          // 10%
+        jump_multiplier_bps: 5000,     // 50%
         optimal_utilization_bps: 8000, // 80%
         ledgers_per_year: 6307200,
     };
@@ -116,6 +116,10 @@ fn test_auth_context_isolation_guard() {
 
     // Call execute_isolated_call towards self
     let args: Vec<Val> = Vec::new(&env);
-    let result = client.try_execute_isolated_call(&client.address, &Symbol::new(&env, "get_recovery_key"), &args);
+    let result = client.try_execute_isolated_call(
+        &client.address,
+        &Symbol::new(&env, "get_recovery_key"),
+        &args,
+    );
     assert!(result.is_ok());
 }

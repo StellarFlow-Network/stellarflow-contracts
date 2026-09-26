@@ -214,10 +214,7 @@ pub fn remove_circuit_breaker_coordinator(
 /// # Errors
 /// * `ContractError::NotCoordinator`          — caller lacks the role.
 /// * `ContractError::CircuitBreakerAlreadyActive` — already tripped.
-pub fn trip_circuit_breaker(
-    env: &Env,
-    coordinator: &Address,
-) -> Result<(), ContractError> {
+pub fn trip_circuit_breaker(env: &Env, coordinator: &Address) -> Result<(), ContractError> {
     coordinator.require_auth();
     _require_coordinator(env, coordinator);
 
@@ -253,10 +250,7 @@ pub fn trip_circuit_breaker(
 /// # Errors
 /// * `ContractError::NotCoordinator`      — caller lacks the role.
 /// * `ContractError::CircuitBreakerNotActive` — nothing to reset.
-pub fn reset_circuit_breaker(
-    env: &Env,
-    coordinator: &Address,
-) -> Result<(), ContractError> {
+pub fn reset_circuit_breaker(env: &Env, coordinator: &Address) -> Result<(), ContractError> {
     coordinator.require_auth();
     _require_coordinator(env, coordinator);
 
@@ -435,8 +429,7 @@ mod tests {
         let (env, contract_id, admin, coordinator) = setup();
         env.as_contract(&contract_id, || {
             register_circuit_breaker_coordinator(&env, &admin, &coordinator).unwrap();
-            remove_circuit_breaker_coordinator(&env, &admin, &coordinator)
-                .expect("should succeed");
+            remove_circuit_breaker_coordinator(&env, &admin, &coordinator).expect("should succeed");
             assert!(!_has_role(&env, Role::Coordinator, &coordinator));
             assert_eq!(_get_coordinators(&env).len(), 0);
         });

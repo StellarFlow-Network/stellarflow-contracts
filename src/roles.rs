@@ -16,10 +16,16 @@ use crate::{ContractData, ContractError, DATA_KEY};
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Role {
+    /// Legacy role names retained for compatibility with existing tests and APIs.
     PauseAdmin,
     FeeAdmin,
     UpgradeAdmin,
     TreasuryAdmin,
+    /// Granular RBAC names required by the administrative access-control issue.
+    ROLE_PAUSER,
+    ROLE_FEE_SETTER,
+    ROLE_ORACLE_MANAGER,
+    ROLE_ADMIN,
 }
 
 /// A single role grant, scoped to one `(grantee, role)` pair.
@@ -27,6 +33,7 @@ pub enum Role {
 #[derive(Clone, Debug, PartialEq)]
 pub struct RoleGrant {
     pub role: Role,
+    pub role_hash: BytesN<32>,
     pub grantee: Address,
     pub granted_by: Address,
     pub granted_at_ledger: u32,
@@ -35,9 +42,63 @@ pub struct RoleGrant {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoleAuditEvent {
+    pub event_name: Symbol,
+    pub role: Role,
+    pub role_hash: BytesN<32>,
+    pub actor: Address,
+    pub grantee: Address,
+    pub ledger: u32,
+}
+
+#[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RoleStorageKey {
     Grant(Address, Role),
+    ActiveRoleHash(Address, BytesN<32>),
+    AuditLog,
+}
+
+pub fn role_hash(env: &Env, role: Role) -> BytesN<32> {
+    let name = match role {
+        Role::PauseAdmin | Role::ROLE_PAUSER => "ROLE_PAUSER",
+        Role::FeeAdmin | Role::ROLE_FEE_SETTER => "ROLE_FEE_SETTER",
+        Role::UpgradeAdmin => "ROLE_UPGRADE_ADMIN",
+        Role::TreasuryAdmin => "ROLE_TREASURY_ADMIN",
+        Role::ROLE_ORACLE_MANAGER => "ROLE_ORACLE_MANAGER",
+        Role::ROLE_ADMIN => "ROLE_ADMIN",
+    };
+    let bytes = name.as_bytes();
+    env.crypto().sha256(bytes)
+}
+
+fn append_role_audit_event(env: &Env, event_name: Symbol, grant: &RoleGrant, actor: &Address) {
+    let event = RoleAuditEvent {
+        event_name: event_name.clone(),
+        role: grant.role,
+        role_hash: grant.role_hash,
+        actor: actor.clone(),
+        grantee: grant.grantee.clone(),
+        ledger: env.ledger().sequence(),
+    };
+
+    let mut log: Vec<RoleAuditEvent> = env
+        .storage()
+        .instance()
+        .get(&RoleStorageKey::AuditLog)
+        .unwrap_or_else(|| Vec::new(env));
+    log.push_back(event);
+    env.storage()
+        .instance()
+        .set(&RoleStorageKey::AuditLog, &log);
+}
+
+pub fn get_role_audit_events(env: &Env) -> Vec<RoleAuditEvent> {
+    env.storage()
+        .instance()
+        .get(&RoleStorageKey::AuditLog)
+        .unwrap_or_else(|| Vec::new(env))
 }
 
 fn require_admin(env: &Env, caller: &Address) -> Result<(), ContractError> {
@@ -46,11 +107,11 @@ fn require_admin(env: &Env, caller: &Address) -> Result<(), ContractError> {
         .instance()
         .get(&DATA_KEY)
         .ok_or(ContractError::NotInitialized)?;
-    if &data.admin != caller {
-        return Err(ContractError::NotAdmin);
+    if &data.admin == caller || has_role(env, caller, Role::ROLE_ADMIN) {
+        caller.require_auth();
+        return Ok(());
     }
-    caller.require_auth();
-    Ok(())
+    Err(ContractError::NotAdmin)
 }
 
 /// Grant `role` to `grantee`, valid up until (but excluding) `expiration_ledger`.
@@ -69,21 +130,33 @@ pub fn grant_role(
         return Err(ContractError::RoleExpirationInPast);
     }
 
+    let role_id = role_hash(env, role);
     let grant = RoleGrant {
         role,
+        role_hash: role_id,
         grantee: grantee.clone(),
-        granted_by: admin,
+        granted_by: admin.clone(),
         granted_at_ledger: current_ledger,
         expiration_ledger,
     };
 
-    let key = RoleStorageKey::Grant(grantee, role);
+    let key = RoleStorageKey::Grant(grantee.clone(), role);
     env.storage().persistent().set(&key, &grant);
     env.storage().persistent().extend_ttl(
         &key,
         crate::storage::PERSISTENT_TTL_THRESHOLD,
         crate::storage::PERSISTENT_TTL_THRESHOLD,
     );
+    env.storage().instance().set(
+        &RoleStorageKey::ActiveRoleHash(grantee.clone(), role_id),
+        &true,
+    );
+
+    env.events().publish(
+        (Symbol::new(env, "RoleGranted"), role, grantee.clone()),
+        (admin.clone(), current_ledger),
+    );
+    append_role_audit_event(env, Symbol::new(env, "RoleGranted"), &grant, &admin);
 
     Ok(grant)
 }
@@ -98,11 +171,26 @@ pub fn revoke_role(
 ) -> Result<(), ContractError> {
     require_admin(env, &admin)?;
 
-    let key = RoleStorageKey::Grant(grantee, role);
-    if !env.storage().persistent().has(&key) {
-        return Err(ContractError::RoleNotFound);
-    }
+    let key = RoleStorageKey::Grant(grantee.clone(), role);
+    let grant = env
+        .storage()
+        .persistent()
+        .get::<_, RoleGrant>(&key)
+        .ok_or(ContractError::RoleNotFound)?;
+
     env.storage().persistent().remove(&key);
+    env.storage()
+        .instance()
+        .remove(&RoleStorageKey::ActiveRoleHash(
+            grantee.clone(),
+            grant.role_hash,
+        ));
+
+    env.events().publish(
+        (Symbol::new(env, "RoleRevoked"), grant.role, grantee.clone()),
+        (admin.clone(), env.ledger().sequence()),
+    );
+    append_role_audit_event(env, Symbol::new(env, "RoleRevoked"), &grant, &admin);
     Ok(())
 }
 
@@ -111,7 +199,17 @@ pub fn revoke_role(
 pub fn has_role(env: &Env, grantee: &Address, role: Role) -> bool {
     let key = RoleStorageKey::Grant(grantee.clone(), role);
     match env.storage().persistent().get::<_, RoleGrant>(&key) {
-        Some(grant) => env.ledger().sequence() < grant.expiration_ledger,
+        Some(grant) => {
+            let active = env.ledger().sequence() < grant.expiration_ledger;
+            active
+                && env
+                    .storage()
+                    .instance()
+                    .has(&RoleStorageKey::ActiveRoleHash(
+                        grantee.clone(),
+                        grant.role_hash,
+                    ))
+        }
         None => false,
     }
 }
@@ -197,7 +295,11 @@ mod tests {
     use super::*;
     use soroban_sdk::testutils::{Address as _, Ledger, LedgerInfo};
 
-    fn setup() -> (Env, crate::TimeLockedUpgradeContractClient<'static>, Address) {
+    fn setup() -> (
+        Env,
+        crate::TimeLockedUpgradeContractClient<'static>,
+        Address,
+    ) {
         let env = Env::default();
         env.mock_all_auths();
         let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
@@ -287,5 +389,30 @@ mod tests {
         client.grant_role(&admin, &grantee, &Role::PauseAdmin, &expiry);
         assert!(client.has_role(&grantee, &Role::PauseAdmin));
         assert!(!client.has_role(&grantee, &Role::FeeAdmin));
+    }
+
+    #[test]
+    fn named_rbac_roles_are_active_and_audited() {
+        let (env, client, admin) = setup();
+        let pauser = Address::generate(&env);
+        let fee_setter = Address::generate(&env);
+        let oracle_manager = Address::generate(&env);
+        let expiry = env.ledger().sequence() + 120;
+
+        client.grant_role(&admin, &pauser, &Role::ROLE_PAUSER, &expiry);
+        client.grant_role(&admin, &fee_setter, &Role::ROLE_FEE_SETTER, &expiry);
+        client.grant_role(&admin, &oracle_manager, &Role::ROLE_ORACLE_MANAGER, &expiry);
+
+        assert!(client.has_role(&pauser, &Role::ROLE_PAUSER));
+        assert!(client.has_role(&fee_setter, &Role::ROLE_FEE_SETTER));
+        assert!(client.has_role(&oracle_manager, &Role::ROLE_ORACLE_MANAGER));
+
+        client.revoke_role(&admin, &pauser, &Role::ROLE_PAUSER);
+        assert!(!client.has_role(&pauser, &Role::ROLE_PAUSER));
+
+        let events = env.events().all();
+        let event_debug = format!("{:?}", events);
+        assert!(event_debug.contains("RoleGranted"));
+        assert!(event_debug.contains("RoleRevoked"));
     }
 }

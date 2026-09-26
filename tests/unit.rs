@@ -6,8 +6,8 @@ use soroban_sdk::{
 
 /// The main contract from the root crate.
 use stellarflow_contracts::{
-    symbol_to_asset_id, ContractError, PriceVarianceConfig, StakingTierConfig, TimeLockedUpgradeContract,
-    TimeLockedUpgradeContractClient, DEFAULT_HEARTBEAT_INTERVAL,
+    symbol_to_asset_id, ContractError, PriceVarianceConfig, StakingTierConfig,
+    TimeLockedUpgradeContract, TimeLockedUpgradeContractClient, DEFAULT_HEARTBEAT_INTERVAL,
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

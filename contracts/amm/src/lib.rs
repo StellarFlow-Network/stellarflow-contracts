@@ -1,7 +1,7 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracterror, Address, Env, symbol_short};
 use soroban_sdk::token::TokenClient;
+use soroban_sdk::{contract, contracterror, contractimpl, symbol_short, Address, Env};
 
 /// Compute the high 128 bits of the full 256-bit product `a * b`.
 ///
@@ -69,12 +69,24 @@ impl AmmContract {
             return Err(AmmError::AlreadyInitialized);
         }
         env.storage().instance().set(&key_init, &true);
-        env.storage().instance().set(&symbol_short!("token_a"), &token_a);
-        env.storage().instance().set(&symbol_short!("token_b"), &token_b);
-        env.storage().instance().set(&symbol_short!("lp_token"), &lp_token);
-        env.storage().instance().set(&symbol_short!("res_a"), &0i128);
-        env.storage().instance().set(&symbol_short!("res_b"), &0i128);
-        env.storage().instance().set(&symbol_short!("tot_sh"), &0i128);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("token_a"), &token_a);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("token_b"), &token_b);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("lp_token"), &lp_token);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("res_a"), &0i128);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("res_b"), &0i128);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("tot_sh"), &0i128);
         Ok(())
     }
 
@@ -91,13 +103,37 @@ impl AmmContract {
             return Err(AmmError::ZeroDeposit);
         }
 
-        let token_a_addr: Address = env.storage().instance().get(&symbol_short!("token_a")).ok_or(AmmError::NotInitialized)?;
-        let token_b_addr: Address = env.storage().instance().get(&symbol_short!("token_b")).ok_or(AmmError::NotInitialized)?;
-        let lp_token_addr: Address = env.storage().instance().get(&symbol_short!("lp_token")).ok_or(AmmError::NotInitialized)?;
+        let token_a_addr: Address = env
+            .storage()
+            .instance()
+            .get(&symbol_short!("token_a"))
+            .ok_or(AmmError::NotInitialized)?;
+        let token_b_addr: Address = env
+            .storage()
+            .instance()
+            .get(&symbol_short!("token_b"))
+            .ok_or(AmmError::NotInitialized)?;
+        let lp_token_addr: Address = env
+            .storage()
+            .instance()
+            .get(&symbol_short!("lp_token"))
+            .ok_or(AmmError::NotInitialized)?;
 
-        let mut reserve_a: i128 = env.storage().instance().get(&symbol_short!("res_a")).unwrap_or(0);
-        let mut total_shares: i128 = env.storage().instance().get(&symbol_short!("tot_sh")).unwrap_or(0);
-        let mut reserve_b: i128 = env.storage().instance().get(&symbol_short!("res_b")).unwrap_or(0);
+        let mut reserve_a: i128 = env
+            .storage()
+            .instance()
+            .get(&symbol_short!("res_a"))
+            .unwrap_or(0);
+        let mut total_shares: i128 = env
+            .storage()
+            .instance()
+            .get(&symbol_short!("tot_sh"))
+            .unwrap_or(0);
+        let mut reserve_b: i128 = env
+            .storage()
+            .instance()
+            .get(&symbol_short!("res_b"))
+            .unwrap_or(0);
 
         let (deposit_a, deposit_b, minted_shares) = if total_shares == 0 {
             let initial_shares = amount_a_desired;
@@ -136,9 +172,15 @@ impl AmmContract {
         reserve_b += deposit_b;
         total_shares += minted_shares;
 
-        env.storage().instance().set(&symbol_short!("res_a"), &reserve_a);
-        env.storage().instance().set(&symbol_short!("res_b"), &reserve_b);
-        env.storage().instance().set(&symbol_short!("tot_sh"), &total_shares);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("res_a"), &reserve_a);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("res_b"), &reserve_b);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("tot_sh"), &total_shares);
 
         Ok(minted_shares)
     }
@@ -228,8 +270,7 @@ impl AmmContract {
         let k_new_hi = mul_high(k_new_a, k_new_b);
 
         // --- Revert if k_new < k_old (compare as (hi, lo) big-endian pairs) ---
-        let invariant_holds = k_new_hi > k_old_hi
-            || (k_new_hi == k_old_hi && k_new_lo >= k_old_lo);
+        let invariant_holds = k_new_hi > k_old_hi || (k_new_hi == k_old_hi && k_new_lo >= k_old_lo);
         if !invariant_holds {
             return Err(AmmError::InvariantViolation);
         }
@@ -253,21 +294,32 @@ impl AmmContract {
     }
 
     pub fn get_reserves(env: Env) -> (i128, i128) {
-        let reserve_a: i128 = env.storage().instance().get(&symbol_short!("res_a")).unwrap_or(0);
-        let reserve_b: i128 = env.storage().instance().get(&symbol_short!("res_b")).unwrap_or(0);
+        let reserve_a: i128 = env
+            .storage()
+            .instance()
+            .get(&symbol_short!("res_a"))
+            .unwrap_or(0);
+        let reserve_b: i128 = env
+            .storage()
+            .instance()
+            .get(&symbol_short!("res_b"))
+            .unwrap_or(0);
         (reserve_a, reserve_b)
     }
 
     pub fn get_total_shares(env: Env) -> i128 {
-        env.storage().instance().get(&symbol_short!("tot_sh")).unwrap_or(0)
+        env.storage()
+            .instance()
+            .get(&symbol_short!("tot_sh"))
+            .unwrap_or(0)
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::{Env, Address};
     use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::{Address, Env};
 
     /// Verify the mul_high helper returns the correct high word.
     /// (u128::MAX)^2 = (2^128-1)^2 = 2^256 - 2^129 + 1
@@ -308,8 +360,12 @@ mod test {
 
         // Seed reserves directly so we don't need deposit's LP-mint path.
         env.as_contract(&contract_id, || {
-            env.storage().instance().set(&symbol_short!("res_a"), &1000i128);
-            env.storage().instance().set(&symbol_short!("res_b"), &2000i128);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("res_a"), &1000i128);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("res_b"), &2000i128);
         });
 
         // Provide token A to the trader so the transfer can succeed.
@@ -326,7 +382,10 @@ mod test {
         let (new_ra, new_rb) = client.get_reserves();
         let k_old: i128 = 1000 * 2000;
         let k_new: i128 = new_ra * new_rb;
-        assert!(k_new >= k_old, "invariant violated: k_new={k_new} < k_old={k_old}");
+        assert!(
+            k_new >= k_old,
+            "invariant violated: k_new={k_new} < k_old={k_old}"
+        );
     }
 
     #[test]
@@ -346,8 +405,12 @@ mod test {
         client.initialize(&token_a, &token_b, &lp_token);
 
         env.as_contract(&contract_id, || {
-            env.storage().instance().set(&symbol_short!("res_a"), &1000i128);
-            env.storage().instance().set(&symbol_short!("res_b"), &2000i128);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("res_a"), &1000i128);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("res_b"), &2000i128);
         });
 
         let trader = Address::generate(&env);

@@ -27,7 +27,10 @@ fn within_threshold(price: i128, baseline: i128) -> bool {
     }
     let delta = (price - baseline).unsigned_abs() as i128;
     // deviation_bps = delta * 10_000 / baseline
-    match delta.checked_mul(10_000).and_then(|n| n.checked_div(baseline)) {
+    match delta
+        .checked_mul(10_000)
+        .and_then(|n| n.checked_div(baseline))
+    {
         Some(deviation_bps) => deviation_bps <= DEVIATION_THRESHOLD_BPS,
         None => false, // overflow means wildly out of range — reject
     }
@@ -64,8 +67,8 @@ pub fn filter_feeds_by_deviation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, Address, Env};
     use crate::types::PriceBufferEntry;
+    use soroban_sdk::{testutils::Address as _, Address, Env};
 
     fn make_twap(env: &Env, prices: &[i128]) -> soroban_sdk::Vec<(u64, i128)> {
         let mut v = soroban_sdk::Vec::new(env);
@@ -130,7 +133,7 @@ mod tests {
         let mut feeds = soroban_sdk::Vec::new(&env);
         feeds.push_back(make_entry(&env, 1_050_000_000)); // +5% — keep
         feeds.push_back(make_entry(&env, 1_200_000_000)); // +20% — drop
-        feeds.push_back(make_entry(&env, 950_000_000));   // -5% — keep
+        feeds.push_back(make_entry(&env, 950_000_000)); // -5% — keep
         let result = filter_feeds_by_deviation(&twap, feeds, &env);
         assert_eq!(result.len(), 2);
     }
@@ -267,7 +270,10 @@ pub fn get_last_validation_timestamp(env: &Env, asset: &Symbol) -> Option<u64> {
 ///
 /// Returns `Err(ContractError::MinimumQuorumNotMet)` if fewer than 3 unique
 /// node operators have submitted data points during the current cycle window.
-pub fn validate_consensus_quorum(env: &Env, buffer: &crate::types::PriceBuffer) -> Result<(), ContractError> {
+pub fn validate_consensus_quorum(
+    env: &Env,
+    buffer: &crate::types::PriceBuffer,
+) -> Result<(), ContractError> {
     let mut unique_sources = soroban_sdk::Map::new(env);
 
     for entry in buffer.entries.iter() {
