@@ -25,7 +25,7 @@ pub fn verify_storage_ttl_bumps(env: &Env) -> Result<(), ContractError> {
             .get(&symbol_short!("NODES"))
             .unwrap_or_else(|| Map::new(env));
         for (node, _) in nodes.iter() {
-            let key = NodeProfileKey(node.clone());
+            let key = NodeProfileKey::ProfileByNode(node.clone());
             env.storage().persistent().extend_ttl(
                 &key,
                 crate::storage::PERSISTENT_TTL_THRESHOLD,

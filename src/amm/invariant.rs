@@ -100,7 +100,7 @@ impl U256 {
 /// Compute `numerator * denominator / divisor` using full 256-bit intermediate
 /// precision. All rounding truncates toward zero (floor), which always favors
 /// pool reserves.
-fn mul_div(numerator: u128, denominator: u128, divisor: u128) -> Result<u128, ContractError> {
+pub(crate) fn mul_div(numerator: u128, denominator: u128, divisor: u128) -> Result<u128, ContractError> {
     if divisor == 0 {
         return Err(ContractError::DivisionByZero);
     }

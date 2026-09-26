@@ -88,7 +88,7 @@ pub struct EmergencyOverrideConfig {
 impl Default for EmergencyOverrideConfig {
     fn default() -> Self {
         Self {
-            emergency_signers: Vec::new(env),
+            emergency_signers: Vec::new(&Env::default()),
             threshold_bps: DEFAULT_EMERGENCY_OVERRIDE_THRESHOLD_BPS,
             enabled: true,
         }
@@ -208,7 +208,7 @@ pub fn veto_proposal(
         proposal_id,
         vetoed_by: caller.clone(),
         vetoed_at: env.ledger().timestamp(),
-        reason_hash: reason,
+        reason_hash: reason.clone(),
     };
 
     // Store veto record
@@ -244,7 +244,7 @@ fn load_emergency_override_config(env: &Env) -> EmergencyOverrideConfig {
         .instance()
         .get(&EMERGENCY_OVERRIDE_CONFIG_KEY)
         .unwrap_or_else(|| EmergencyOverrideConfig {
-            emergency_signers: Vec::new(env),
+            emergency_signers: Vec::new(&Env::default()),
             threshold_bps: DEFAULT_EMERGENCY_OVERRIDE_THRESHOLD_BPS,
             enabled: true,
         })

@@ -1,42 +1,6 @@
-pub mod cleanup {
-    use super::*;
-
-    pub fn cleanup_expired_proposals(env: &Env) -> Result<u32, ContractError> {
-        super::prune::prune_expired_keys(env, super::prune::PruneTarget::EmergencyRevocation)
-    }
-
-    pub fn reclaim_expired_proposal_deposit(env: &Env, maker: &Address) -> Result<u32, ContractError> {
-        maker.require_auth();
-        cleanup_expired_proposals(env)
-    }
-}
-
-pub mod prune {
-    use super::*;
-
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    pub enum PruneTarget {
-        EmergencyRevocation,
-    }
-
-    pub fn prune_expired_keys(env: &Env, target: PruneTarget) -> Result<u32, ContractError> {
-        let mut pruned = 0u32;
-        match target {
-            PruneTarget::EmergencyRevocation => {
-                if let Some(proposal) = get_temp_proposal::<EmergencyRevocationProposal>(
-                    env,
-                    &EMERGENCY_REVOCATION_TEMP_KEY,
-                ) {
-                    if proposal_state(env, proposal.proposed_at) == ProposalState::Expired {
-                        remove_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY);
-                        pruned += 1;
-                    }
-                }
-            }
-        }
-        Ok(pruned)
-    }
-}
+pub mod action_queue;
+pub mod cleanup;
+pub mod prune;
 
 pub use action_queue::{
     cancel_action, execute_action, get_action_timelock_remaining, get_queued_action,
@@ -235,7 +199,6 @@ pub fn propose_emergency_revocation(
     proposer: Address,
     target: Address,
     replacement: Address,
-    nonce: u64,
 ) -> Result<(), ContractError> {
     crate::staging::check_staging_access(env, &proposer)?;
     let data: ContractData = env
@@ -255,10 +218,16 @@ pub fn propose_emergency_revocation(
         return Err(ContractError::Unauthorized);
     }
     proposer.require_auth();
-    consume_admin_nonce(env, &proposer, AdminAction::ProposeEmergencyRevocation, nonce)?;
 
-    // Guard: only one active emergency proposal at a time.
-    prune::prune_expired_keys(env, prune::PruneTarget::EmergencyRevocation)?;
+    // Guard: only one active emergency proposal at a time. Purge any expired
+    // temporary proposal first so it cannot mask a fresh one.
+    if let Some(proposal) =
+        get_temp_proposal::<EmergencyRevocationProposal>(env, &EMERGENCY_REVOCATION_TEMP_KEY)
+    {
+        if proposal_state(env, proposal.proposed_at) == ProposalState::Expired {
+            remove_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY);
+        }
+    }
     if has_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY) {
         return Err(ContractError::EmergencyRevocationAlreadyActive);
     }
@@ -308,7 +277,6 @@ pub fn vote_emergency_revocation(
     env: &Env,
     voter: Address,
     sig_expires_at: u64,
-    nonce: u64,
 ) -> Result<(), ContractError> {
     // Reject stale signatures up-front.
     if env.ledger().timestamp() > sig_expires_at {
@@ -328,7 +296,6 @@ pub fn vote_emergency_revocation(
     if data.admin != voter && !is_signer {
         return Err(ContractError::Unauthorized);
     }
-    consume_admin_nonce(env, &voter, AdminAction::VoteEmergencyRevocation, nonce)?;
 
     let mut proposal: EmergencyRevocationProposal = get_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY)
         .ok_or(ContractError::NoActiveEmergencyRevocation)?;
@@ -369,7 +336,8 @@ pub fn vote_emergency_revocation(
 /// Returns the active emergency revocation proposal, if one exists.
 /// Proposals are stored in temporary storage and will auto-purge after TTL.
 pub fn get_emergency_revocation_proposal(env: &Env) -> Option<EmergencyRevocationProposal> {
-    let proposal = get_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY)?;
+    let proposal: EmergencyRevocationProposal =
+        get_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY)?;
     if proposal_state(env, proposal.proposed_at) == ProposalState::Expired {
         None
     } else {
@@ -443,7 +411,6 @@ pub fn propose_ownership_transfer(
     env: &Env,
     current_admin: Address,
     nominee: Address,
-    nonce: u64,
 ) -> Result<(), ContractError> {
     let data: ContractData = env
         .storage()
@@ -455,7 +422,6 @@ pub fn propose_ownership_transfer(
         return Err(ContractError::NotAdmin);
     }
     current_admin.require_auth();
-    consume_admin_nonce(env, &current_admin, AdminAction::ProposeOwnershipTransfer, nonce)?;
 
     if env.storage().instance().has(&PENDING_OWNER_KEY) {
         return Err(ContractError::TransferAlreadyPending);
@@ -473,7 +439,7 @@ pub fn propose_ownership_transfer(
 
 /// Phase 2: nominee claims ownership, proving key access.
 /// Only succeeds when a pending transfer exists and caller is the nominee.
-pub fn claim_ownership(env: &Env, claimer: Address, nonce: u64) -> Result<(), ContractError> {
+pub fn claim_ownership(env: &Env, claimer: Address) -> Result<(), ContractError> {
     let pending: PendingOwner = env
         .storage()
         .instance()
@@ -484,7 +450,6 @@ pub fn claim_ownership(env: &Env, claimer: Address, nonce: u64) -> Result<(), Co
         return Err(ContractError::NotAdmin);
     }
     claimer.require_auth();
-    consume_admin_nonce(env, &claimer, AdminAction::ClaimOwnership, nonce)?;
 
     let mut data: ContractData = env
         .storage()
@@ -650,7 +615,7 @@ pub fn get_pending_admin_change(env: &Env) -> Option<AdminChangeProposal> {
 // ── Emergency pause ───────────────────────────────────────────────────────
 
 /// Emergency stop: verified admin sets the global is_paused flag.
-pub fn set_paused(env: &Env, caller: Address, paused: bool, nonce: u64) -> Result<(), ContractError> {
+pub fn set_paused(env: &Env, caller: Address, paused: bool) -> Result<(), ContractError> {
     let data: ContractData = env
         .storage()
         .instance()
@@ -661,7 +626,6 @@ pub fn set_paused(env: &Env, caller: Address, paused: bool, nonce: u64) -> Resul
         return Err(ContractError::NotAdmin);
     }
     caller.require_auth();
-    consume_admin_nonce(env, &caller, AdminAction::SetPaused, nonce)?;
 
     env.storage().instance().set(&PAUSED_KEY, &paused);
     Ok(())

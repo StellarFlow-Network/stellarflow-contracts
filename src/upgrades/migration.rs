@@ -1,7 +1,8 @@
 use soroban_sdk::{contracttype, Address, Env, Map, Symbol};
 
 use crate::storage::{HeartbeatKey, NodeProfileKey, SignerKey, StakeKey};
-use crate::{AssetFeedMetrics, ContractError, NodeProfile};
+use crate::staking_tiers::AssetFeedMetrics;
+use crate::{ContractError, NodeProfile};
 
 pub const SCHEMA_VERSION: u32 = 2;
 
@@ -89,7 +90,7 @@ fn migrate_from_version(env: &Env, from_version: u32) -> Result<(), ContractErro
 }
 
 pub fn migrate_feed_metrics(env: &Env, asset: u32) -> AssetFeedMetrics {
-    let metrics_key = crate::storage::AssetMetricsKey::MetricsByAsset(crate::asset_id_to_symbol(asset));
+    let metrics_key = crate::storage::AssetMetricsKey::MetricsByAsset(crate::asset_id_to_symbol(env, asset));
     if let Some(existing) = env.storage().persistent().get(&metrics_key) {
         return existing;
     }

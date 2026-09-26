@@ -1,5 +1,6 @@
 //! Native-asset bridge escrow for origin-chain lock and destination proof unlocks.
 
+use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{contracttype, symbol_short, token, Address, Bytes, BytesN, Env, Vec};
 
 use crate::{
@@ -313,9 +314,9 @@ pub fn create_remittance(
 fn remittance_payload(env: &Env, escrow: &RemittanceEscrow) -> Bytes {
     let mut payload = Bytes::new(env);
     payload.append(&Bytes::from_slice(env, &escrow.id.to_be_bytes()));
-    payload.append(&Bytes::from_slice(env, &escrow.sender.to_string().as_bytes()));
-    payload.append(&Bytes::from_slice(env, &escrow.recipient.to_string().as_bytes()));
-    payload.append(&Bytes::from_slice(env, &escrow.primary_token.to_string().as_bytes()));
+    payload.append(&escrow.sender.clone().to_xdr(env));
+    payload.append(&escrow.recipient.clone().to_xdr(env));
+    payload.append(&escrow.primary_token.clone().to_xdr(env));
     payload.append(&Bytes::from_slice(env, &escrow.primary_amount.to_be_bytes()));
     payload.append(&Bytes::from_slice(env, &escrow.fee_amount.to_be_bytes()));
     payload.append(&Bytes::from_slice(env, &escrow.expires_at.to_be_bytes()));

@@ -5,12 +5,30 @@
 // It also provides helper functions for node profile management, subscription
 // rent extension, and asset price TTL management.
 use crate::NodeProfile;
+use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{contracttype, Address, Env, Map, Symbol};
+
+pub mod ephemeral;
+
+/// Shared TTL policy constants used across the contract.
+///
+/// `extend_ttl` requires `threshold <= extend_to`; the persistent TTL helpers
+/// intentionally use the same value for both so entries are always bumped to
+/// a full window on access.
+pub const PERSISTENT_TTL_THRESHOLD: u32 = 100_000;
+const THRESHOLD: u32 = 10_000;
+const BUMP_AMOUNT: u32 = 100_000;
+/// Ledger threshold after which a subscription/feed-stake entry is considered
+/// stale (roughly 15 days at 5s ledgers).
+pub const RENT_THRESHOLD: u32 = 259_200;
+const RENT_EXTEND_TO: u32 = 518_400;
+const ASET_TTL_THRESHOLD: u32 = 100_000;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {
     Subscription(Address),
+    AssetPrice(Symbol),
 }
 
 /// NOTE: These are single-variant enums, not bare tuple structs. A single-field
@@ -155,7 +173,10 @@ pub fn preflight_rent_check(env: &Env) {
 }
 
 pub fn check_and_prune_feed_stake(env: &Env, node: Address, asset: u32) -> bool {
-    let key = crate::StakingStorageKey::FeedStake(node.clone(), asset);
+    let key = crate::StakingStorageKey::FeedStake(
+        node.clone(),
+        crate::asset_id_to_symbol(env, asset),
+    );
     if !env.storage().persistent().has(&key) {
         return false;
     }
@@ -173,7 +194,7 @@ pub fn check_and_prune_feed_stake(env: &Env, node: Address, asset: u32) -> bool 
 }
 
 pub fn update_feed_stake_activity(env: &Env, node: Address, asset: u32) {
-    let key = crate::StakingStorageKey::FeedStake(node, asset);
+    let key = crate::StakingStorageKey::FeedStake(node, crate::asset_id_to_symbol(env, asset));
     if let Some(mut val) = env.storage().persistent().get::<_, FeedStakeValue>(&key) {
         val.last_active = env.ledger().timestamp();
         env.storage().persistent().set(&key, &val);

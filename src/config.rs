@@ -208,6 +208,18 @@ pub fn validate_price_variance_config(cfg: &PriceVarianceConfig) -> Result<(), C
 
     Ok(())
 }
+/// Returns `true` when `addrs` contains any address more than once.
+pub fn has_duplicate_addresses(addrs: &Vec<Address>) -> bool {
+    let mut seen: Vec<Address> = Vec::new(addrs.env());
+    for addr in addrs.iter() {
+        if seen.contains(&addr) {
+            return true;
+        }
+        seen.push_back(addr);
+    }
+    false
+}
+
 /// Verify that a proposed admin key set satisfies multi-sig sanity rules.
 pub fn validate_admin_key_set(keys: &AdminKeySet) -> Result<(), ContractError> {
     if keys.signers.len() == 0 || keys.threshold == 0 || keys.threshold > keys.signers.len() {
@@ -271,7 +283,17 @@ pub fn rotate_admin_keys(
         .storage()
         .instance()
         .get(&DATA_KEY)
-        .
+        .ok_or(ContractError::NotInitialized)?;
+    data.admin = new_signers
+        .get(0)
+        .ok_or(ContractError::NotAdmin)?
+        .clone();
+    env.storage().instance().set(&DATA_KEY, &data);
+
+    env.events().publish((symbol_short!("adm_rot"),), new_signers);
+
+    Ok(())
+}
 
 // ── Dynamic liquidity pool fee tier controller ──────────────────────────────
 
@@ -354,71 +376,6 @@ pub fn vote_fee_tier_change(
     env.storage().instance().set(&FEE_TIER_CONFIG_KEY, &cfg);
     Ok(())
 }
-/// Verify that a proposed admin key set satisfies multi-sig sanity rules.
-pub fn validate_admin_key_set(keys: &AdminKeySet) -> Result<(), ContractError> {
-    if keys.signers.len() == 0 || keys.threshold == 0 || keys.threshold > keys.signers.len() {
-        return Err(ContractError::InvalidVarianceConfig);
-    }
-    if has_duplicate_addresses(&keys.signers) {
-        return Err(ContractError::InvalidVarianceConfig);
-    }
-    Ok(())
-}
-
-/// Read the current governing admin key set.
-pub fn get_admin_key_set(env: &Env) -> Result<AdminKeySet, ContractError> {
-    let stored: Option<AdminKeySet> = env.storage().instance().get(&ADMIN_KEY_SET_KEY);
-    if let Some(keys) = stored {
-        return Ok(keys);
-    }
-
-    let data: ContractData = env
-        .storage()
-        .instance()
-        .get(&DATA_KEY)
-        .ok_or(ContractError::NotInitialized)?;
-    let mut signers = Vec::new(env);
-    signers.push_back(data.admin.clone());
-    Ok(AdminKeySet { signers, threshold: 1 })
-}
-
-/// Rotate the multi-sig admin keys after receiving current-threshold approval.
-pub fn rotate_admin_keys(
-    env: &Env,
-    approving_signers: Vec<Address>,
-    new_signers: Vec<Address>,
-    new_threshold: u32,
-) -> Result<(), ContractError> {
-    let current = get_admin_key_set(env)?;
-    validate_admin_key_set(&current)?;
-    validate_admin_key_set(&AdminKeySet {
-        signers: new_signers.clone(),
-        threshold: new_threshold,
-    })?;
-
-    if has_duplicate_addresses(&approving_signers) || approving_signers.len() < current.threshold {
-        return Err(ContractError::NotAdmin);
-    }
-
-    for signer in approving_signers.iter() {
-        signer.require_auth();
-        if !current.signers.iter().any(|member| member == signer) {
-            return Err(ContractError::NotAdmin);
-        }
-    }
-
-    let new_key_set = AdminKeySet {
-        signers: new_signers.clone(),
-        threshold: new_threshold,
-    };
-    env.storage().instance().set(&ADMIN_KEY_SET_KEY, &new_key_set);
-
-    let mut data: ContractData = env
-        .storage()
-        .instance()
-        .get(&DATA_KEY)
-        .
-
 // ── Storage accessors ─────────────────────────────────────────────────────────
 
 /// Write the complete variance configuration to instance storage, replacing

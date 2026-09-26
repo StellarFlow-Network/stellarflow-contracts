@@ -55,8 +55,6 @@ pub struct LimitOrder {
     /// Expiry ledger sequence; zero means the order does not expire.
     pub expiry: u32,
     pub active: bool,
-    /// Bid (Buy) or ask (Sell) side of the book.
-    pub side: OrderSide,
 }
 
 #[contracttype]
@@ -285,7 +283,6 @@ pub fn place_order_with_expiry(
         created_at_ledger: env.ledger().sequence(),
         expiry,
         active: true,
-        side: OrderSide::Sell,
     };
 
     save_order(env, &order);
@@ -333,7 +330,6 @@ pub fn place_buy_order(
         created_at_ledger: env.ledger().sequence(),
         expiry: 0,
         active: true,
-        side: OrderSide::Buy,
     };
 
     save_order(env, &order);

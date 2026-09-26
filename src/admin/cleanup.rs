@@ -13,7 +13,6 @@ use soroban_sdk::{contracttype, Address, Env, Vec};
 
 use crate::{
     fees::{CorridorFeePool, FeesStorageKey},
-    proposal::{ProposalState, ProposalStatus, ProposalStorageKey},
     storage::FeedStakeValue,
     AssetId, ContractData, ContractError, StakingStorageKey, DATA_KEY,
 };
@@ -105,7 +104,10 @@ pub fn cleanup_zero_balances(
     for target in targets.iter() {
         match target {
             CleanupTarget::FeedStake(node, asset_id) => {
-                let key = StakingStorageKey::FeedStake(node.clone(), asset_id);
+                let key = StakingStorageKey::FeedStake(
+                    node.clone(),
+                    crate::asset_id_to_symbol(env, asset_id),
+                );
                 if let Some(val) = env
                     .storage()
                     .persistent()
@@ -135,51 +137,6 @@ pub fn cleanup_zero_balances(
     }
 
     Ok(removed)
-}
-
-// ---------------------------------------------------------------------------
-// Expiry cleaner for multi-sig proposal approval state
-// ---------------------------------------------------------------------------
-
-pub fn cleanup_expired_proposals(
-    env: &Env,
-    signers: &Vec<Address>,
-    proposal_ids: &Vec<Address>,
-) -> Result<u32, ContractError> {
-    // ── 1. Verify the contract has been initialised ──────────────────────
-    let _data: ContractData = env
-        .storage()
-        .instance()
-        .get(&DATA_KEY)
-        .ok_or(ContractError::NotInitialized)?;
-
-    // ── 2. Enforce multi-sig quorum ──────────────────────────────────────
-    crate::auth::require_multisig(env, signers)?;
-
-    // ── 3. Expire stale proposals ────────────────────────────────────────
-    let mut expired: u32 = 0;
-    let now = env.ledger().timestamp();
-    let seven_days: u64 = 7 * 24 * 60 * 60;
-
-    for proposal_id in proposal_ids.iter() {
-        let key = ProposalStorageKey::Proposal(proposal_id.clone());
-        if let Some(mut proposal) = env
-            .storage()
-            .persistent()
-            .get::<_, ProposalState>(&key)
-        {
-            if proposal.status == ProposalStatus::Pending
-                && now >= proposal.created_at.saturating_add(seven_days)
-                && proposal.approvals < proposal.threshold
-            {
-                proposal.status = ProposalStatus::Expired;
-                env.storage().persistent().set(&key, &proposal);
-                expired += 1;
-            }
-        }
-    }
-
-    Ok(expired)
 }
 
 // ---------------------------------------------------------------------------

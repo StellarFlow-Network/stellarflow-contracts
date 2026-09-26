@@ -248,7 +248,7 @@ pub fn trigger_treasury_diversification(
             env,
             crate::events::EV_TREASURY_DIVERSIFICATION_TRIGGERED,
             &[&asset_symbol],
-            &plan,
+            plan.clone(),
         )
         .ok();
     }

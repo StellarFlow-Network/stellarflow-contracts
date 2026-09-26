@@ -181,7 +181,7 @@ pub fn prune_expired_keys(
     for target in targets.iter() {
         match target {
             PruneTarget::Order(order_id) => {
-                let key = OrderStorageKey::Order(order_id);
+                let key = OrderStorageKey::OrderIndex(order_id);
                 if let Some(order) = env.storage().persistent().get::<_, LimitOrder>(&key) {
                     // Only prune spent / filled or cancelled orders
                     if !order.active || order.remaining_amount == 0 {
@@ -238,7 +238,10 @@ pub fn prune_expired_keys(
             }
 
             PruneTarget::FeedStake(node, asset_id) => {
-                let key = StakingStorageKey::FeedStake(node.clone(), asset_id);
+                let key = StakingStorageKey::FeedStake(
+                    node.clone(),
+                    crate::asset_id_to_symbol(env, asset_id),
+                );
                 if let Some(val) = env.storage().persistent().get::<_, FeedStakeValue>(&key) {
                     let elapsed = env.ledger().timestamp().saturating_sub(val.last_active);
                     if val.amount == 0 || elapsed > RENT_THRESHOLD as u64 {

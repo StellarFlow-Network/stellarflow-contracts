@@ -9,7 +9,7 @@
 //! recomputes the former delegate's total delegated power, and restores the
 //! voting weight directly into the staker's own balance map.
 
-use soroban_sdk::{symbol_short, Address, Env, IntoVal, Map, Symbol, Val, Vec};
+use soroban_sdk::{contracttype, symbol_short, Address, Env, IntoVal, Map, Symbol, Val, Vec};
 
 use crate::ContractError;
 
@@ -579,11 +579,10 @@ pub fn undelegate(env: &Env, staker: &Address) -> Result<UndelegateEvent, Contra
         delegate_remaining_power: remaining,
     };
 
-    let mut topics: Vec<Val> = Vec::new(env);
-    topics.push_back(symbol_short!("UNDELEG").into_val(env));
-    topics.push_back(staker.clone().into_val(env));
-    topics.push_back(former_delegate.clone().into_val(env));
-    env.events().publish(topics, event.clone());
+    env.events().publish(
+        (symbol_short!("UNDELEG"), staker.clone(), former_delegate.clone()),
+        event.clone(),
+    );
 
     Ok(event)
 }
