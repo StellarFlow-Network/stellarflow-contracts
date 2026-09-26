@@ -211,6 +211,9 @@ jobs:
 
       # ── Post / update PR comment ─────────────────────────────────────────────
       - name: Post size report as PR comment
+        # PRs from forks receive a read-only GITHUB_TOKEN, so commenting can
+        # fail with 403. That must not fail the size check itself.
+        continue-on-error: true
         uses: actions/github-script@v7
         with:
           script: |
