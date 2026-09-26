@@ -18,7 +18,7 @@ use crate::{
     bridge::escrow::{BridgeEscrowStorageKey, TokenLock},
     escrow::timelock::{Escrow, EscrowStorageKey},
     fees::{CorridorFeePool, FeesStorageKey},
-    orders::limit::{AssetPair, LimitOrder, OrderStorageKey},
+    orders::limit::{LimitOrder, OrderStorageKey},
     settlement::htlc::{Htlc, HtlcKey, HtlcState},
     storage::{FeedStakeValue, RENT_THRESHOLD},
     AssetId, ContractData, ContractError, StakingStorageKey, DATA_KEY,
@@ -51,101 +51,6 @@ pub enum PruneTarget {
     /// Corridor fee pool by asset_id.
     /// Evicted when `collected == 0 && variable_pool == 0`.
     CorridorPool(AssetId),
-}
-
-/// Persisted state for a helper instance that has exhausted its live state.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[contracttype]
-pub struct HelperRentRecord {
-    pub active_state_entries: u32,
-    pub byte_balance: u64,
-}
-
-/// Storage keys used by the bulk rent collector.
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[contracttype]
-pub enum StorageRentKey {
-    HelperRent(Address),
-    TreasuryBalance,
-}
-
-/// Sweep rent deposits from helper contracts whose live state set has already
-/// been exhausted. The remaining byte balance is attributed to the protocol
-/// treasury and the helper slot is removed.
-pub fn sweep_inactive_helper_contract_rent(
-    env: &Env,
-    admin: &Address,
-    treasury: &Address,
-    helpers: &Vec<Address>,
-) -> Result<u64, ContractError> {
-    let data: ContractData = env
-        .storage()
-        .instance()
-        .get(&DATA_KEY)
-        .ok_or(ContractError::NotInitialized)?;
-
-    if &data.admin != admin {
-        return Err(ContractError::NotAdmin);
-    }
-    admin.require_auth();
-
-    crate::instance::bump_instance_ttl(env);
-    crate::recovery::update_admin_activity(env);
-
-    let mut swept_bytes: u64 = 0;
-    let mut treasury_bytes: u64 = env
-        .storage()
-        .instance()
-        .get(&StorageRentKey::TreasuryBalance)
-        .unwrap_or(0u64);
-
-    for helper in helpers.iter() {
-        let key = StorageRentKey::HelperRent(helper.clone());
-        if let Some(record) = env.storage().persistent().get::<_, HelperRentRecord>(&key) {
-            if record.active_state_entries == 0 && record.byte_balance > 0 {
-                swept_bytes = swept_bytes.saturating_add(record.byte_balance);
-                treasury_bytes = treasury_bytes.saturating_add(record.byte_balance);
-                env.storage().persistent().remove(&key);
-                env.events().publish(
-                    (symbol_short!("rent"), symbol_short!("sweep")),
-                    (helper.clone(), treasury.clone(), record.byte_balance),
-                );
-            }
-        }
-    }
-
-    env.storage()
-        .instance()
-        .set(&StorageRentKey::TreasuryBalance, &treasury_bytes);
-
-    Ok(swept_bytes)
-}
-
-pub fn collect_expired_storage_rent(
-    env: &Env,
-    admin: &Address,
-    treasury: &Address,
-    helpers: &Vec<Address>,
-) -> Result<u64, ContractError> {
-    sweep_inactive_helper_contract_rent(env, admin, treasury, helpers)
-}
-
-pub fn bulk_collect_storage_rent(
-    env: &Env,
-    admin: &Address,
-    treasury: &Address,
-    helpers: &Vec<Address>,
-) -> Result<u64, ContractError> {
-    sweep_inactive_helper_contract_rent(env, admin, treasury, helpers)
-}
-
-pub fn sweep_expired_contract_rent(
-    env: &Env,
-    admin: &Address,
-    treasury: &Address,
-    helpers: &Vec<Address>,
-) -> Result<u64, ContractError> {
-    sweep_inactive_helper_contract_rent(env, admin, treasury, helpers)
 }
 
 /// Prune obsolete persistent storage entries to reduce state bloat and reclaim storage deposits.
@@ -181,24 +86,16 @@ pub fn prune_expired_keys(
     for target in targets.iter() {
         match target {
             PruneTarget::Order(order_id) => {
-                let index_key = OrderStorageKey::OrderIndex(order_id);
-                if let Some((pair, price_tick)) = env
-                    .storage()
-                    .persistent()
-                    .get::<_, (AssetPair, i128)>(&index_key)
-                {
-                    let key = OrderStorageKey::Order(pair, price_tick, order_id);
-                    if let Some(order) = env.storage().persistent().get::<_, LimitOrder>(&key) {
-                        // Only prune spent / filled or cancelled orders
-                        if !order.active || order.remaining_amount == 0 {
-                            env.storage().persistent().remove(&key);
-                            env.storage().persistent().remove(&index_key);
-                            pruned_count += 1;
-                            env.events().publish(
-                                (symbol_short!("prune"), symbol_short!("order")),
-                                (order_id, order.maker),
-                            );
-                        }
+                let key = OrderStorageKey::OrderIndex(order_id);
+                if let Some(order) = env.storage().persistent().get::<_, LimitOrder>(&key) {
+                    // Only prune spent / filled or cancelled orders
+                    if !order.active || order.remaining_amount == 0 {
+                        env.storage().persistent().remove(&key);
+                        pruned_count += 1;
+                        env.events().publish(
+                            (symbol_short!("prune"), symbol_short!("order")),
+                            (order_id, order.maker),
+                        );
                     }
                 }
             }
@@ -246,7 +143,10 @@ pub fn prune_expired_keys(
             }
 
             PruneTarget::FeedStake(node, asset_id) => {
-                let key = StakingStorageKey::FeedStake(node.clone(), asset_id);
+                let key = StakingStorageKey::FeedStake(
+                    node.clone(),
+                    crate::asset_id_to_symbol(env, asset_id),
+                );
                 if let Some(val) = env.storage().persistent().get::<_, FeedStakeValue>(&key) {
                     let elapsed = env.ledger().timestamp().saturating_sub(val.last_active);
                     if val.amount == 0 || elapsed > RENT_THRESHOLD as u64 {
@@ -373,11 +273,11 @@ mod tests {
             assert!(env
                 .storage()
                 .persistent()
-                .has(&OrderStorageKey::Order(pair.clone(), PRICE_SCALE, order0.id)));
+                .has(&OrderStorageKey::Order(order0.id)));
             assert!(env
                 .storage()
                 .persistent()
-                .has(&OrderStorageKey::Order(pair.clone(), PRICE_SCALE, order1.id)));
+                .has(&OrderStorageKey::Order(order1.id)));
         });
 
         // Prune both spent orders
@@ -393,11 +293,11 @@ mod tests {
             assert!(!env
                 .storage()
                 .persistent()
-                .has(&OrderStorageKey::Order(pair.clone(), PRICE_SCALE, order0.id)));
+                .has(&OrderStorageKey::Order(order0.id)));
             assert!(!env
                 .storage()
                 .persistent()
-                .has(&OrderStorageKey::Order(pair.clone(), PRICE_SCALE, order1.id)));
+                .has(&OrderStorageKey::Order(order1.id)));
         });
     }
 
@@ -433,11 +333,11 @@ mod tests {
             assert!(env
                 .storage()
                 .persistent()
-                .has(&OrderStorageKey::Order(pair.clone(), PRICE_SCALE, order0.id)));
+                .has(&OrderStorageKey::Order(order0.id)));
             assert!(env
                 .storage()
                 .persistent()
-                .has(&OrderStorageKey::Order(pair.clone(), PRICE_SCALE, order1.id)));
+                .has(&OrderStorageKey::Order(order1.id)));
         });
 
         let loaded1 = client.get_limit_order(&order1.id).unwrap();
@@ -559,15 +459,12 @@ mod tests {
                 sender: sender.clone(),
                 receiver: receiver.clone(),
                 depositor: depositor.clone(),
-                anchor: sender.clone(),
                 token: sell_asset.clone(),
                 amount: 1_000,
                 expiry_ledger: 500,
-                payout_deadline: 500,
                 sender_approved: true,
                 receiver_approved: true,
                 released: true,
-                state: crate::escrow::timelock::PaymentState::Settled,
             };
             env.storage()
                 .persistent()
@@ -577,15 +474,12 @@ mod tests {
                 sender: sender.clone(),
                 receiver: receiver.clone(),
                 depositor: depositor.clone(),
-                anchor: sender.clone(),
                 token: sell_asset.clone(),
                 amount: 1_000,
                 expiry_ledger: 500,
-                payout_deadline: 500,
                 sender_approved: false,
                 receiver_approved: false,
                 released: false,
-                state: crate::escrow::timelock::PaymentState::Locked,
             };
             env.storage()
                 .persistent()
@@ -657,57 +551,6 @@ mod tests {
     }
 
     #[test]
-    fn test_sweep_inactive_helper_contract_rent_collects_byte_balance() {
-        let (env, client, contract_id, admin, treasury, _sell_asset, _buy_asset) = setup();
-        let inactive = Address::generate(&env);
-        let active = Address::generate(&env);
-
-        env.as_contract(&contract_id, || {
-            env.storage().persistent().set(
-                &StorageRentKey::HelperRent(inactive.clone()),
-                &HelperRentRecord {
-                    active_state_entries: 0,
-                    byte_balance: 1_280,
-                },
-            );
-            env.storage().persistent().set(
-                &StorageRentKey::HelperRent(active.clone()),
-                &HelperRentRecord {
-                    active_state_entries: 3,
-                    byte_balance: 640,
-                },
-            );
-        });
-
-        let mut helpers = Vec::new(&env);
-        helpers.push_back(inactive.clone());
-        helpers.push_back(active.clone());
-
-        let swept = env.as_contract(&contract_id, || {
-            sweep_inactive_helper_contract_rent(&env, &admin, &treasury, &helpers).unwrap()
-        });
-
-        assert_eq!(swept, 1_280);
-        env.as_contract(&contract_id, || {
-            assert!(!env
-                .storage()
-                .persistent()
-                .has(&StorageRentKey::HelperRent(inactive.clone())));
-            assert!(env
-                .storage()
-                .persistent()
-                .has(&StorageRentKey::HelperRent(active.clone())));
-            assert_eq!(
-                env.storage()
-                    .instance()
-                    .get::<_, u64>(&StorageRentKey::TreasuryBalance)
-                    .unwrap_or(0),
-                1_280
-            );
-        });
-    }
-
-    #[test]
     fn test_prune_non_admin_fails() {
         let (env, client, _contract_id, _admin, _treasury, _sell_asset, _buy_asset) = setup();
         let attacker = Address::generate(&env);
@@ -745,15 +588,12 @@ mod tests {
                 sender: maker.clone(),
                 receiver: filler.clone(),
                 depositor: maker.clone(),
-                anchor: filler.clone(),
                 token: sell_asset.clone(),
                 amount: 500,
                 expiry_ledger: 500,
-                payout_deadline: 500,
                 sender_approved: true,
                 receiver_approved: true,
                 released: true,
-                state: crate::escrow::timelock::PaymentState::Settled,
             };
             env.storage()
                 .persistent()
@@ -788,11 +628,11 @@ mod tests {
             assert!(!env
                 .storage()
                 .persistent()
-                .has(&OrderStorageKey::Order(pair.clone(), PRICE_SCALE, order_spent.id)));
+                .has(&OrderStorageKey::Order(order_spent.id)));
             assert!(env
                 .storage()
                 .persistent()
-                .has(&OrderStorageKey::Order(pair.clone(), PRICE_SCALE, order_active.id)));
+                .has(&OrderStorageKey::Order(order_active.id)));
             assert!(!env
                 .storage()
                 .persistent()
@@ -828,7 +668,7 @@ mod tests {
         // Verify all 10 entries exist in persistent storage before pruning
         env.as_contract(&contract_id, || {
             for i in 0..10 {
-                assert!(env.storage().persistent().has(&OrderStorageKey::Order(pair.clone(), PRICE_SCALE, i)));
+                assert!(env.storage().persistent().has(&OrderStorageKey::Order(i)));
             }
         });
 
@@ -850,7 +690,7 @@ mod tests {
         // Verify that 100% of the pruned storage entries are evicted to recover storage deposits
         env.as_contract(&contract_id, || {
             for i in 0..10 {
-                assert!(!env.storage().persistent().has(&OrderStorageKey::Order(pair.clone(), PRICE_SCALE, i)));
+                assert!(!env.storage().persistent().has(&OrderStorageKey::Order(i)));
             }
         });
     }
