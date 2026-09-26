@@ -243,6 +243,15 @@ pub enum ContractError {
     NotEmergencySigner = 80,
     /// Emergency override vote threshold not yet reached.
     OverrideThresholdNotReached = 81,
+    /// Dutch auction schedule violates its structural bounds: a zero-length
+    /// decay window, a ceiling above 100%, or a start above the ceiling.
+    InvalidAuctionConfig = 82,
+    /// The liquidation auction has already been settled.
+    AuctionAlreadySettled = 83,
+    /// The vault is at or above its liquidation threshold, so no auction can open.
+    VaultNotLiquidatable = 84,
+    /// The decayed discount has not yet reached the liquidator's accepted floor.
+    DiscountNotReached = 85,
 }
 
 impl ContractError {
@@ -1904,6 +1913,57 @@ impl TimeLockedUpgradeContract {
 
     pub fn vault_config(env: Env) -> Option<vaults::autocompound::VaultConfig> {
         vaults::autocompound::get_config(&env)
+    }
+
+    /// Open a Dutch-decay liquidation auction against an underwater vault.
+    ///
+    /// Unlike [`Self::vault_liquidation_quote`], which prices a liquidation at
+    /// the fixed liquidator bonus, the auction starts at a small discount and
+    /// decays upward over `config.duration_secs`, so the position clears at the
+    /// first rate a liquidator is willing to accept.
+    ///
+    /// Errors with [`ContractError::VaultNotLiquidatable`] when the position is
+    /// still at or above its liquidation threshold.
+    pub fn vault_open_liquidation_auction(
+        env: Env,
+        position: vaults::liquidation::VaultPosition,
+        purchase_collateral: u128,
+        config: vaults::liquidation::DutchDecayConfig,
+        now: u64,
+    ) -> Result<vaults::liquidation::LiquidationAuction, ContractError> {
+        vaults::liquidation::open_auction(&env, &position, purchase_collateral, config, now)
+    }
+
+    /// The discount a live auction is currently offering, in basis points.
+    pub fn vault_auction_discount(
+        _env: Env,
+        auction: vaults::liquidation::LiquidationAuction,
+        now: u64,
+    ) -> Result<u32, ContractError> {
+        vaults::liquidation::current_discount_bps(&auction, now)
+    }
+
+    /// Settle a live auction at its current decayed discount.
+    ///
+    /// `min_accepted_discount_bps` is the liquidator's floor: the call settles
+    /// the whole position only once the decayed rate has reached it, so a
+    /// transaction that lands early fails with
+    /// [`ContractError::DiscountNotReached`] instead of filling at a worse
+    /// discount than the liquidator signed for.
+    pub fn vault_settle_liquidation_auction(
+        env: Env,
+        auction: vaults::liquidation::LiquidationAuction,
+        liquidator: Address,
+        now: u64,
+        min_accepted_discount_bps: u32,
+    ) -> Result<vaults::liquidation::AuctionSettlement, ContractError> {
+        vaults::liquidation::settle_auction(
+            &env,
+            &auction,
+            &liquidator,
+            now,
+            min_accepted_discount_bps,
+        )
     }
 
     pub fn vault_peak_share_value(env: Env) -> i128 {
