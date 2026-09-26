@@ -243,6 +243,8 @@ pub enum ContractError {
     NotEmergencySigner = 80,
     /// Emergency override vote threshold not yet reached.
     OverrideThresholdNotReached = 81,
+    /// Uploaded ZK proving-key parameters or payload do not match the schema.
+    InvalidProvingKey = 82,
 }
 
 impl ContractError {
@@ -2918,6 +2920,15 @@ impl TimeLockedUpgradeContract {
 }
 
     // ── Groth16 ZK Proof Verification (Issue #725) ────────────────────────
+
+    /// Validate an uploaded Groth16 proving key against the BN254 schema.
+    pub fn validate_zk_proving_key(
+        _env: Env,
+        key: zk::proving_key::UploadedProvingKey,
+        schema: zk::proving_key::ProvingKeySchema,
+    ) -> Result<(), ContractError> {
+        zk::proving_key::validate_proving_key(&key, &schema)
+    }
 
     /// Register a Groth16 verification key for a circuit on-chain.
     pub fn register_zk_verification_key(
