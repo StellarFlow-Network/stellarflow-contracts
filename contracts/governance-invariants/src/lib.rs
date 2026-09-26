@@ -1,6 +1,8 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, contracterror, Address, Env, symbol_short};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env,
+};
 
 /// Errors emitted when invariant checks fail.
 #[contracterror]
@@ -50,26 +52,41 @@ fn compute_weight(locked_amount: i128) -> i128 {
 }
 
 fn get_delegate(env: &Env, user: &Address) -> Option<Address> {
-    env.storage().instance().get(&DataKey::Delegate(user.clone()))
+    env.storage()
+        .instance()
+        .get(&DataKey::Delegate(user.clone()))
 }
 
 fn set_delegate(env: &Env, user: &Address, delegate: &Address) {
-    env.storage().instance().set(&DataKey::Delegate(user.clone()), delegate);
+    env.storage()
+        .instance()
+        .set(&DataKey::Delegate(user.clone()), delegate);
 }
 
 fn remove_delegate(env: &Env, user: &Address) {
-    env.storage().instance().remove(&DataKey::Delegate(user.clone()));
+    env.storage()
+        .instance()
+        .remove(&DataKey::Delegate(user.clone()));
 }
 
 fn get_delegated_weight(env: &Env, user: &Address) -> i128 {
-    env.storage().instance().get(&DataKey::DelegatedWeight(user.clone())).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::DelegatedWeight(user.clone()))
+        .unwrap_or(0)
 }
 
 fn set_delegated_weight(env: &Env, user: &Address, weight: i128) {
-    env.storage().instance().set(&DataKey::DelegatedWeight(user.clone()), &weight);
+    env.storage()
+        .instance()
+        .set(&DataKey::DelegatedWeight(user.clone()), &weight);
 }
 
-fn propagate_delegated_weight(env: &Env, start_user: &Address, delta: i128) -> Result<(), InvariantError> {
+fn propagate_delegated_weight(
+    env: &Env,
+    start_user: &Address,
+    delta: i128,
+) -> Result<(), InvariantError> {
     if delta == 0 {
         return Ok(());
     }
@@ -79,7 +96,9 @@ fn propagate_delegated_weight(env: &Env, start_user: &Address, delta: i128) -> R
             break;
         }
         let old_delegated = get_delegated_weight(env, &next);
-        let new_delegated = old_delegated.checked_add(delta).ok_or(InvariantError::Overflow)?;
+        let new_delegated = old_delegated
+            .checked_add(delta)
+            .ok_or(InvariantError::Overflow)?;
         set_delegated_weight(env, &next, new_delegated);
         current = next;
     }
@@ -95,7 +114,9 @@ impl GovernanceInvariantsContract {
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::TotalVotingWeight, &0i128);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalVotingWeight, &0i128);
         Ok(())
     }
 
@@ -145,16 +166,16 @@ impl GovernanceInvariantsContract {
             .get(&DataKey::TotalVotingWeight)
             .unwrap_or(0);
         let new_total = total.checked_add(weight).ok_or(InvariantError::Overflow)?;
-        env.storage().instance().set(&DataKey::TotalVotingWeight, &new_total);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalVotingWeight, &new_total);
 
         // Post-action invariant check (panics on drift)
         Self::assert_invariant_holds(&env)?;
 
         // Emit event
-        env.events().publish(
-            (symbol_short!("lock"),),
-            (user, amount, weight),
-        );
+        env.events()
+            .publish((symbol_short!("lock"),), (user, amount, weight));
 
         Ok(lock)
     }
@@ -264,7 +285,9 @@ impl GovernanceInvariantsContract {
         // Reduce delegator's weight
         delegator_lock.weight -= weight_to_delegate;
         delegator_lock.locked_amount -= weight_to_delegate;
-        env.storage().instance().set(&delegator_key, &delegator_lock);
+        env.storage()
+            .instance()
+            .set(&delegator_key, &delegator_lock);
 
         // Increase delegatee's weight
         let delegatee_key = DataKey::UserWeight(delegatee.clone());
@@ -281,7 +304,9 @@ impl GovernanceInvariantsContract {
 
         delegatee_lock.weight += weight_to_delegate;
         delegatee_lock.locked_amount += weight_to_delegate;
-        env.storage().instance().set(&delegatee_key, &delegatee_lock);
+        env.storage()
+            .instance()
+            .set(&delegatee_key, &delegatee_lock);
 
         // Total voting weight should be unchanged (delegation is a transfer)
         // Post-action invariant check (panics on drift)
@@ -330,7 +355,7 @@ impl GovernanceInvariantsContract {
         }
 
         let old_delegate = get_delegate(&env, &delegator);
-        
+
         // If already delegated to same address, no-op
         if let Some(ref old) = old_delegate {
             if is_reclaim && *old == delegator {
@@ -347,7 +372,9 @@ impl GovernanceInvariantsContract {
         // Weight to shift is own weight + weight delegated to delegator
         let own_weight = delegator_lock.weight;
         let delegated_in = get_delegated_weight(&env, &delegator);
-        let total_weight_to_shift = own_weight.checked_add(delegated_in).ok_or(InvariantError::Overflow)?;
+        let total_weight_to_shift = own_weight
+            .checked_add(delegated_in)
+            .ok_or(InvariantError::Overflow)?;
 
         // Pre-action invariant check
         Self::assert_invariant_holds(&env)?;
@@ -357,11 +384,11 @@ impl GovernanceInvariantsContract {
             if *old != delegator {
                 let mut current = old.clone();
                 let delta = -total_weight_to_shift;
-                
+
                 // Update first hop
                 let old_del = get_delegated_weight(&env, &current);
                 set_delegated_weight(&env, &current, old_del + delta);
-                
+
                 // Propagate path
                 while let Some(next) = get_delegate(&env, &current) {
                     if next == current {
@@ -383,11 +410,11 @@ impl GovernanceInvariantsContract {
             // Add total_weight_to_shift to new delegate path
             let mut current = to_address.clone();
             let delta = total_weight_to_shift;
-            
+
             // Update first hop
             let old_del = get_delegated_weight(&env, &current);
             set_delegated_weight(&env, &current, old_del + delta);
-            
+
             // Propagate path
             while let Some(next) = get_delegate(&env, &current) {
                 if next == current {
@@ -404,14 +431,24 @@ impl GovernanceInvariantsContract {
 
         // Emit events
         let from_delegate = old_delegate.unwrap_or(delegator.clone());
-        let to_delegate = if is_reclaim { delegator.clone() } else { to_address.clone() };
-        
+        let to_delegate = if is_reclaim {
+            delegator.clone()
+        } else {
+            to_address.clone()
+        };
+
         env.events().publish(
-            (soroban_sdk::Symbol::new(&env, "DelegateChanged"), delegator.clone()),
+            (
+                soroban_sdk::Symbol::new(&env, "DelegateChanged"),
+                delegator.clone(),
+            ),
             (from_delegate, to_delegate.clone()),
         );
         env.events().publish(
-            (soroban_sdk::Symbol::new(&env, "DelegatedPowerTransferred"), delegator.clone()),
+            (
+                soroban_sdk::Symbol::new(&env, "DelegatedPowerTransferred"),
+                delegator.clone(),
+            ),
             (to_delegate, total_weight_to_shift),
         );
 
@@ -457,9 +494,7 @@ impl GovernanceInvariantsContract {
 
     /// Get a user's voting weight lock.
     pub fn get_user_weight(env: Env, user: Address) -> Option<VotingWeightLock> {
-        env.storage()
-            .instance()
-            .get(&DataKey::UserWeight(user))
+        env.storage().instance().get(&DataKey::UserWeight(user))
     }
 
     /// Core invariant assertion: total_voting_weight == sum(user_voting_weights).
@@ -512,7 +547,11 @@ impl GovernanceInvariantsContract {
         let mut computed_total: i128 = 0;
         for user in known_users.iter() {
             let lock_key = DataKey::UserWeight(user);
-            if let Some(lock) = env.storage().instance().get::<_, VotingWeightLock>(&lock_key) {
+            if let Some(lock) = env
+                .storage()
+                .instance()
+                .get::<_, VotingWeightLock>(&lock_key)
+            {
                 computed_total = computed_total
                     .checked_add(lock.weight)
                     .ok_or(InvariantError::Overflow)?;

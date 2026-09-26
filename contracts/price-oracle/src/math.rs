@@ -145,28 +145,22 @@ pub fn normalize_to_seven(value: i128, input_decimals: u32) -> Result<i128, Erro
 
     if input_decimals < 7 {
         let diff = 7 - input_decimals;
-        let multiplier = 10_i128
-            .checked_pow(diff)
-            .ok_or(Error::PriceMathOverflow)?;
-        
+        let multiplier = 10_i128.checked_pow(diff).ok_or(Error::PriceMathOverflow)?;
+
         // Explicit overflow trap before multiplication
         value
             .checked_mul(multiplier)
             .ok_or(Error::PriceMathOverflow)
     } else if input_decimals > 7 {
         let diff = input_decimals - 7;
-        let divisor = 10_i128
-            .checked_pow(diff)
-            .ok_or(Error::PriceMathOverflow)?;
-        
+        let divisor = 10_i128.checked_pow(diff).ok_or(Error::PriceMathOverflow)?;
+
         // Explicit divide-by-zero trap (though 10^n cannot be zero)
         if divisor == 0 {
             return Err(Error::PriceMathOverflow);
         }
-        
-        value
-            .checked_div(divisor)
-            .ok_or(Error::PriceMathOverflow)
+
+        value.checked_div(divisor).ok_or(Error::PriceMathOverflow)
     } else {
         Ok(value)
     }
@@ -213,9 +207,7 @@ pub fn normalize_to_nine(value: i128, native_decimals: u32) -> Result<i128, Erro
         let diff = TARGET - native_decimals;
 
         // Trap power overflow early
-        let multiplier = 10_i128
-            .checked_pow(diff)
-            .ok_or(Error::PriceMathOverflow)?;
+        let multiplier = 10_i128.checked_pow(diff).ok_or(Error::PriceMathOverflow)?;
 
         // Use checked_mul to explicitly trap multiplication overflow
         scaled
@@ -225,9 +217,7 @@ pub fn normalize_to_nine(value: i128, native_decimals: u32) -> Result<i128, Erro
         let diff = native_decimals - TARGET;
 
         // Trap power overflow early
-        let divisor = 10_i128
-            .checked_pow(diff)
-            .ok_or(Error::PriceMathOverflow)?;
+        let divisor = 10_i128.checked_pow(diff).ok_or(Error::PriceMathOverflow)?;
 
         // Explicit divide-by-zero trap (defensive, 10^n cannot be zero)
         require_nonzero_denominator(divisor)?;
@@ -272,18 +262,18 @@ pub fn calculate_inverse_price(price: i128, decimals: u32) -> Option<i128> {
     if price == 0 {
         return None;
     }
-    
+
     // Explicit early trap: extreme value guard
     if price == i128::MIN || price == i128::MAX {
         return None;
     }
-    
+
     // Trap power overflow explicitly
     let scale = 10_i128.checked_pow(decimals)?;
-    
+
     // Trap multiplication overflow explicitly
     let numerator = scale.checked_mul(scale)?;
-    
+
     // Trap division overflow/error explicitly
     numerator.checked_div(price)
 }
@@ -323,7 +313,7 @@ pub fn require_nonzero_denominator(n: i128) -> Result<(), Error> {
 /// ```
 pub fn validate_slippage_tolerance(slippage_bps: u32) -> Result<(), Error> {
     const MAX_SLIPPAGE_BPS: u32 = 10_000; // 100%
-    
+
     if slippage_bps > MAX_SLIPPAGE_BPS {
         Err(Error::InvalidSlippageTolerance)
     } else {
@@ -363,19 +353,21 @@ pub fn calculate_rate_deviation_bps(expected_rate: i128, actual_rate: i128) -> R
     if expected_rate == 0 {
         return Err(Error::DeviationConsensusZero);
     }
-    
+
     let diff = if actual_rate >= expected_rate {
         actual_rate - expected_rate
     } else {
         expected_rate - actual_rate
     };
-    
+
     // diff * 10_000 / expected_rate
     let bps = match diff.checked_mul(10_000) {
-        Some(v) => v.checked_div(expected_rate).ok_or(Error::PriceMathOverflow)?,
+        Some(v) => v
+            .checked_div(expected_rate)
+            .ok_or(Error::PriceMathOverflow)?,
         None => i128::MAX,
     };
-    
+
     Ok(bps.min(u32::MAX as i128) as u32)
 }
 
@@ -417,15 +409,15 @@ pub fn enforce_slippage_tolerance(
 ) -> Result<(), Error> {
     // Validate the slippage tolerance parameter
     validate_slippage_tolerance(max_slippage_bps)?;
-    
+
     // Calculate actual deviation
     let actual_deviation_bps = calculate_rate_deviation_bps(expected_rate, actual_rate)?;
-    
+
     // Check if deviation exceeds tolerance
     if actual_deviation_bps > max_slippage_bps {
         return Err(Error::SlippageToleranceExceeded);
     }
-    
+
     Ok(())
 }
 
@@ -453,17 +445,17 @@ pub fn calculate_min_acceptable_rate(
     slippage_bps: u32,
 ) -> Result<i128, Error> {
     validate_slippage_tolerance(slippage_bps)?;
-    
+
     let slippage_multiplier = 10_000_i128
         .checked_sub(slippage_bps as i128)
         .ok_or(Error::PriceMathOverflow)?;
-    
+
     let min_rate = expected_rate
         .checked_mul(slippage_multiplier)
         .ok_or(Error::PriceMathOverflow)?
         .checked_div(10_000)
         .ok_or(Error::PriceMathOverflow)?;
-    
+
     Ok(min_rate)
 }
 
@@ -490,17 +482,17 @@ pub fn calculate_max_acceptable_rate(
     slippage_bps: u32,
 ) -> Result<i128, Error> {
     validate_slippage_tolerance(slippage_bps)?;
-    
+
     let slippage_multiplier = 10_000_i128
         .checked_add(slippage_bps as i128)
         .ok_or(Error::PriceMathOverflow)?;
-    
+
     let max_rate = expected_rate
         .checked_mul(slippage_multiplier)
         .ok_or(Error::PriceMathOverflow)?
         .checked_div(10_000)
         .ok_or(Error::PriceMathOverflow)?;
-    
+
     Ok(max_rate)
 }
 
@@ -629,7 +621,6 @@ mod tests {
         assert_eq!(geometric_mean(1_000_000, 4_000_000), Some(2_000_000));
     }
 
-
     #[test]
     fn test_normalize_to_seven_scale_up() {
         assert_eq!(normalize_to_seven(150, 2), Ok(15_000_000));
@@ -724,7 +715,10 @@ mod tests {
     fn test_calculate_inverse_price_safe_values() {
         // Normal operation with safe values
         assert_eq!(calculate_inverse_price(2_000, 3), Some(500_000));
-        assert_eq!(calculate_inverse_price(1_000_000_000, 9), Some(1_000_000_000));
+        assert_eq!(
+            calculate_inverse_price(1_000_000_000, 9),
+            Some(1_000_000_000)
+        );
     }
 
     #[test]
@@ -733,15 +727,15 @@ mod tests {
         // Each hop normalizes and calculates, ensuring no overflow
         let asset_a_price = 1_000_000_000; // 9 decimals
         let asset_b_price = 2_000_000_000; // 9 decimals
-        
+
         // First hop: A to B
         let hop1 = normalize_to_nine(asset_a_price, 9);
         assert!(hop1.is_ok());
-        
+
         // Second hop: B to C (via inverse)
         let inverse_b = calculate_inverse_price(asset_b_price, 9);
         assert!(inverse_b.is_some());
-        
+
         // The chain should complete without overflow
         assert_eq!(hop1.unwrap(), 1_000_000_000);
         assert_eq!(inverse_b.unwrap(), 500_000);
@@ -914,10 +908,10 @@ mod tests {
         let slippage_tolerance_bps = 200; // 2%
 
         // Calculate acceptable bounds
-        let min_rate = calculate_min_acceptable_rate(expected_rate, slippage_tolerance_bps)
-            .unwrap();
-        let max_rate = calculate_max_acceptable_rate(expected_rate, slippage_tolerance_bps)
-            .unwrap();
+        let min_rate =
+            calculate_min_acceptable_rate(expected_rate, slippage_tolerance_bps).unwrap();
+        let max_rate =
+            calculate_max_acceptable_rate(expected_rate, slippage_tolerance_bps).unwrap();
 
         // min_rate = 500_000 * 9_800 / 10_000 = 490_000
         assert_eq!(min_rate, 490_000);
@@ -1014,4 +1008,3 @@ mod tests {
         );
     }
 }
-

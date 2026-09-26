@@ -49,7 +49,10 @@ impl SlashingTier {
 
 /// Calculate the absolute price deviation from the finalized consensus median in basis points.
 /// Returns `None` when the consensus median is zero or when the result cannot be computed safely.
-pub fn calculate_price_deviation_bps(submitted_price: i128, finalized_median_price: i128) -> Option<u128> {
+pub fn calculate_price_deviation_bps(
+    submitted_price: i128,
+    finalized_median_price: i128,
+) -> Option<u128> {
     if finalized_median_price <= 0 {
         return None;
     }
@@ -76,8 +79,8 @@ pub fn analyze_deviation_against_finalized_median(
     consensus_prices: Vec<i128>,
 ) -> Result<DeviationAnalysis, MedianError> {
     let finalized_median_price = calculate_median(consensus_prices)?;
-    let deviation_bps = calculate_price_deviation_bps(submitted_price, finalized_median_price)
-        .unwrap_or(0);
+    let deviation_bps =
+        calculate_price_deviation_bps(submitted_price, finalized_median_price).unwrap_or(0);
     let tier = SlashingTier::from_deviation_bps(deviation_bps);
     let slashing_bps = tier.burn_rate_bps();
 
@@ -205,33 +208,45 @@ pub fn get_unbonding_request(env: &Env, validator: &Address) -> Option<Unbonding
         .get(&DataKey::Unbonding(validator.clone()))
 }
 
-pub fn report_missed_blocks(env: &Env, relayer: &Address, missed_blocks: u32) -> Result<i128, Error> {
+pub fn report_missed_blocks(
+    env: &Env,
+    relayer: &Address,
+    missed_blocks: u32,
+) -> Result<i128, Error> {
     let current = env
         .storage()
         .persistent()
-        .get::<crate::types::DataKey, u32>(&crate::types::DataKey::ProviderConsecutiveMissedBlocks(relayer.clone()))
+        .get::<crate::types::DataKey, u32>(&crate::types::DataKey::ProviderConsecutiveMissedBlocks(
+            relayer.clone(),
+        ))
         .unwrap_or(0);
     let updated = current.saturating_add(missed_blocks);
-    env.storage()
-        .persistent()
-        .set(&crate::types::DataKey::ProviderConsecutiveMissedBlocks(relayer.clone()), &updated);
-    Ok(get_slash_multiplier(env, relayer)? )
+    env.storage().persistent().set(
+        &crate::types::DataKey::ProviderConsecutiveMissedBlocks(relayer.clone()),
+        &updated,
+    );
+    Ok(get_slash_multiplier(env, relayer)?)
 }
 
 pub fn report_successful_uptime(env: &Env, relayer: &Address) -> Result<bool, Error> {
     env.storage()
         .persistent()
-        .remove(&crate::types::DataKey::ProviderConsecutiveMissedBlocks(relayer.clone()));
-    env.storage()
-        .persistent()
-        .set(&crate::types::DataKey::ProviderUptimeStreakStart(relayer.clone()), &env.ledger().timestamp());
+        .remove(&crate::types::DataKey::ProviderConsecutiveMissedBlocks(
+            relayer.clone(),
+        ));
+    env.storage().persistent().set(
+        &crate::types::DataKey::ProviderUptimeStreakStart(relayer.clone()),
+        &env.ledger().timestamp(),
+    );
     Ok(true)
 }
 
 pub fn get_consecutive_missed_blocks(env: &Env, relayer: &Address) -> u32 {
     env.storage()
         .persistent()
-        .get::<crate::types::DataKey, u32>(&crate::types::DataKey::ProviderConsecutiveMissedBlocks(relayer.clone()))
+        .get::<crate::types::DataKey, u32>(&crate::types::DataKey::ProviderConsecutiveMissedBlocks(
+            relayer.clone(),
+        ))
         .unwrap_or(0)
 }
 
@@ -244,12 +259,15 @@ pub fn get_slash_multiplier(env: &Env, relayer: &Address) -> Result<i128, Error>
 pub fn get_uptime_streak_start(env: &Env, relayer: &Address) -> Option<u64> {
     env.storage()
         .persistent()
-        .get::<crate::types::DataKey, u64>(&crate::types::DataKey::ProviderUptimeStreakStart(relayer.clone()))
+        .get::<crate::types::DataKey, u64>(&crate::types::DataKey::ProviderUptimeStreakStart(
+            relayer.clone(),
+        ))
 }
 
 pub fn parse_slash_amount(_env: &Env, data: &String) -> Result<i128, ContractError> {
     let text = data.to_string();
-    text.parse::<i128>().map_err(|_| ContractError::InvalidSlashAmount)
+    text.parse::<i128>()
+        .map_err(|_| ContractError::InvalidSlashAmount)
 }
 
 pub fn execute_slash_internal(
@@ -266,16 +284,19 @@ pub fn execute_slash_internal(
     let current_stake = env
         .storage()
         .persistent()
-        .get::<crate::types::DataKey, i128>(&crate::types::DataKey::ProviderStake(bad_relayer.clone()))
+        .get::<crate::types::DataKey, i128>(&crate::types::DataKey::ProviderStake(
+            bad_relayer.clone(),
+        ))
         .unwrap_or(0);
     if amount > current_stake {
         return Err(ContractError::InsufficientStake);
     }
 
     let new_stake = current_stake - amount;
-    env.storage()
-        .persistent()
-        .set(&crate::types::DataKey::ProviderStake(bad_relayer.clone()), &new_stake);
+    env.storage().persistent().set(
+        &crate::types::DataKey::ProviderStake(bad_relayer.clone()),
+        &new_stake,
+    );
     Ok(())
 }
 
@@ -298,9 +319,10 @@ pub fn deviation_multiplier(tier: DeviationTier) -> i128 {
 }
 
 pub fn set_stake(env: &Env, relayer: &Address, amount: i128) {
-    env.storage()
-        .persistent()
-        .set(&crate::types::DataKey::ProviderStake(relayer.clone()), &amount);
+    env.storage().persistent().set(
+        &crate::types::DataKey::ProviderStake(relayer.clone()),
+        &amount,
+    );
 }
 
 pub fn get_stake(env: &Env, relayer: &Address) -> i128 {
@@ -321,7 +343,9 @@ pub enum DeviationTier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{contract, contractimpl, vec, Env, testutils::Address as _, testutils::Ledger};
+    use soroban_sdk::{
+        contract, contractimpl, testutils::Address as _, testutils::Ledger, vec, Env,
+    };
 
     #[contract]
     struct TestContract;
@@ -344,7 +368,10 @@ mod tests {
 
     #[test]
     fn test_calculate_price_deviation_bps_small_deviation() {
-        assert_eq!(calculate_price_deviation_bps(1_001_000, 1_000_000), Some(100));
+        assert_eq!(
+            calculate_price_deviation_bps(1_001_000, 1_000_000),
+            Some(100)
+        );
         assert_eq!(calculate_price_deviation_bps(999_000, 1_000_000), Some(100));
     }
 
@@ -372,7 +399,10 @@ mod tests {
 
     #[test]
     fn test_slashing_tier_for_minor_node_hiccup() {
-        assert_eq!(SlashingTier::from_deviation_bps(100), SlashingTier::NoPenalty);
+        assert_eq!(
+            SlashingTier::from_deviation_bps(100),
+            SlashingTier::NoPenalty
+        );
         assert_eq!(SlashingTier::from_deviation_bps(180), SlashingTier::Low);
     }
 
@@ -399,9 +429,13 @@ mod tests {
 
         env.as_contract(&contract_id, || {
             request_unbonding(&env, &validator, 900).unwrap();
-            env.ledger().set_sequence_number(MIN_UNBONDING_DELAY_LEDGERS);
+            env.ledger()
+                .set_sequence_number(MIN_UNBONDING_DELAY_LEDGERS);
 
-            assert_eq!(release_unbonded_stake(&env, &validator), Err(Error::UnbondingDelayActive));
+            assert_eq!(
+                release_unbonded_stake(&env, &validator),
+                Err(Error::UnbondingDelayActive)
+            );
         });
     }
 
@@ -412,7 +446,8 @@ mod tests {
 
         env.as_contract(&contract_id, || {
             request_unbonding(&env, &validator, 900).unwrap();
-            env.ledger().set_sequence_number(1 + MIN_UNBONDING_DELAY_LEDGERS);
+            env.ledger()
+                .set_sequence_number(1 + MIN_UNBONDING_DELAY_LEDGERS);
 
             assert_eq!(release_unbonded_stake(&env, &validator), Ok(900));
             let released = get_unbonding_request(&env, &validator).unwrap();
@@ -427,7 +462,10 @@ mod tests {
         env.as_contract(&contract_id, || {
             request_unbonding(&env, &validator, 900).unwrap();
 
-            assert_eq!(request_unbonding(&env, &validator, 700), Err(Error::UnbondingAlreadyQueued));
+            assert_eq!(
+                request_unbonding(&env, &validator, 700),
+                Err(Error::UnbondingAlreadyQueued)
+            );
         });
     }
 
@@ -496,10 +534,22 @@ mod tests {
     fn test_6_severity_ordering_preserved_under_cap() {
         let bond_capacity = 1_000_000;
 
-        let minor = apply_slash_cap(50_000 * deviation_multiplier(DeviationTier::Minor), bond_capacity);
-        let moderate = apply_slash_cap(50_000 * deviation_multiplier(DeviationTier::Moderate), bond_capacity);
-        let significant = apply_slash_cap(50_000 * deviation_multiplier(DeviationTier::Significant), bond_capacity);
-        let manipulation = apply_slash_cap(50_000 * deviation_multiplier(DeviationTier::Manipulation), bond_capacity);
+        let minor = apply_slash_cap(
+            50_000 * deviation_multiplier(DeviationTier::Minor),
+            bond_capacity,
+        );
+        let moderate = apply_slash_cap(
+            50_000 * deviation_multiplier(DeviationTier::Moderate),
+            bond_capacity,
+        );
+        let significant = apply_slash_cap(
+            50_000 * deviation_multiplier(DeviationTier::Significant),
+            bond_capacity,
+        );
+        let manipulation = apply_slash_cap(
+            50_000 * deviation_multiplier(DeviationTier::Manipulation),
+            bond_capacity,
+        );
 
         assert!(minor < moderate);
         assert!(moderate < significant);

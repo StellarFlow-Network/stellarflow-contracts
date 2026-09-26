@@ -37,7 +37,9 @@ impl LiquidityLockContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Token, &token);
         // TotalDeposited starts at zero; MaxTvlCap is absent (no cap) by default.
-        env.storage().instance().set(&DataKey::TotalDeposited, &0_i128);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalDeposited, &0_i128);
     }
 
     /// Build a time-locked distribution pipeline that releases accrued validator
@@ -66,9 +68,7 @@ impl LiquidityLockContract {
             .get(&DataKey::TotalDeposited)
             .unwrap_or(0);
 
-        let post_deposit_tvl = current_tvl
-            .checked_add(amount)
-            .expect("TVL overflow");
+        let post_deposit_tvl = current_tvl.checked_add(amount).expect("TVL overflow");
 
         if let Some(cap) = env
             .storage()

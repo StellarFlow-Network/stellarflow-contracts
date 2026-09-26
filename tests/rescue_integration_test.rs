@@ -71,10 +71,7 @@ mod rescue_integration_tests {
         client.register_protected_asset(&admin, &pool_asset);
 
         let res = client.try_queue_token_rescue(&admin, &pool_asset, &10_000, &treasury);
-        assert_eq!(
-            res,
-            Err(Ok(ContractError::ProtectedAssetNotRescueable))
-        );
+        assert_eq!(res, Err(Ok(ContractError::ProtectedAssetNotRescueable)));
     }
 
     #[test]
@@ -87,7 +84,10 @@ mod rescue_integration_tests {
         let proposal = client.get_rescue_proposal(&pid).unwrap();
 
         assert_eq!(proposal.status, RescueProposalStatus::Pending);
-        assert_eq!(proposal.execute_at, proposal.staged_at + RESCUE_TIMELOCK_DELAY);
+        assert_eq!(
+            proposal.execute_at,
+            proposal.staged_at + RESCUE_TIMELOCK_DELAY
+        );
 
         advance_timestamp(env, RESCUE_TIMELOCK_DELAY - 100);
 

@@ -232,7 +232,9 @@ impl RemittanceEscrow {
         }
 
         let now = env.ledger().timestamp();
-        let deadline = now.checked_add(deadline_secs).ok_or(Error::ArithmeticOverflow)?;
+        let deadline = now
+            .checked_add(deadline_secs)
+            .ok_or(Error::ArithmeticOverflow)?;
 
         let token_client = token::Client::new(&env, &get_token(&env)?);
         token_client.transfer(&sender, &env.current_contract_address(), &amount);
@@ -385,11 +387,7 @@ impl RemittanceEscrow {
         }
 
         let token_client = token::Client::new(&env, &get_token(&env)?);
-        token_client.transfer(
-            &env.current_contract_address(),
-            &sender,
-            &remittance.amount,
-        );
+        token_client.transfer(&env.current_contract_address(), &sender, &remittance.amount);
 
         remittance.status = RemittanceStatus::Refunded;
         set_remittance(&env, &remittance);

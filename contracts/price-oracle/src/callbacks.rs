@@ -92,7 +92,7 @@ pub fn unsubscribe(env: &Env, callback_contract: &Address) -> Result<(), crate::
 ///   reentrant calls that could manipulate contract state during callback execution.
 pub fn notify_subscribers(env: &Env, payload: &PriceUpdatePayload) {
     crate::reentrancy::acquire_lock(env);
-    
+
     let subscribers = get_subscribers(env);
 
     for subscriber in subscribers.iter() {
@@ -103,7 +103,7 @@ pub fn notify_subscribers(env: &Env, payload: &PriceUpdatePayload) {
         // from blocking all price updates. However, in a production system,
         // you might want to log these errors to an event or metrics system.
     }
-    
+
     crate::reentrancy::release_lock(env);
 }
 
@@ -131,7 +131,8 @@ pub fn verify_anchor_attestation(
     tx_id: &Bytes,
     signature: &BytesN<64>,
 ) -> bool {
-    env.crypto().ed25519_verify(gateway_public_key, tx_id, signature)
+    env.crypto()
+        .ed25519_verify(gateway_public_key, tx_id, signature)
 }
 
 #[cfg(test)]

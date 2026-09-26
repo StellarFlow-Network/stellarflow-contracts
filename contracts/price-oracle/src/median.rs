@@ -164,9 +164,7 @@ pub fn calculate_median_compacted(pairs: Vec<(i128, u32)>) -> Result<i128, Media
     } else {
         let lo = value_at_stack(&buf, len, total / 2 - 1);
         let hi = value_at_stack(&buf, len, total / 2);
-        let sum = lo
-            .checked_add(hi)
-            .ok_or(MedianError::ArithmeticOverflow)?;
+        let sum = lo.checked_add(hi).ok_or(MedianError::ArithmeticOverflow)?;
         sum.checked_div(2).ok_or(MedianError::ArithmeticOverflow)
     }
 }
@@ -209,8 +207,7 @@ mod median_tests {
         let env = Env::default();
         // 16 entries exceeds MAX_VALIDATORS (15).
         let prices = vec![
-            &env,
-            1_i128, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+            &env, 1_i128, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
         ];
         assert_eq!(calculate_median(prices), Err(MedianError::InputTooLarge));
     }
@@ -228,7 +225,12 @@ mod median_tests {
     fn test_compacted_even_total() {
         // Expanded multiset: [740,740,760,770] → median = (740+760)/2 = 750.
         let env = Env::default();
-        let pairs = vec![&env, (740_i128, 2_u32), (760_i128, 1_u32), (770_i128, 1_u32)];
+        let pairs = vec![
+            &env,
+            (740_i128, 2_u32),
+            (760_i128, 1_u32),
+            (770_i128, 1_u32),
+        ];
         assert_eq!(crate::median::calculate_median_compacted(pairs), Ok(750));
     }
 
@@ -236,7 +238,12 @@ mod median_tests {
     fn test_compacted_unsorted_input() {
         // [800,800,750,900,900,900] sorted → median = (800+900)/2 = 850.
         let env = Env::default();
-        let pairs = vec![&env, (800_i128, 2_u32), (750_i128, 1_u32), (900_i128, 3_u32)];
+        let pairs = vec![
+            &env,
+            (800_i128, 2_u32),
+            (750_i128, 1_u32),
+            (900_i128, 3_u32),
+        ];
         assert_eq!(crate::median::calculate_median_compacted(pairs), Ok(850));
     }
 

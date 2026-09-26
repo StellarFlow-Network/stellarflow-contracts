@@ -65,4 +65,3 @@ pub fn mock_oracle_advance_time(env: &Env, seconds: u64) {
     env.ledger()
         .with_mut(|li| li.timestamp = current_ts + seconds);
 }
-

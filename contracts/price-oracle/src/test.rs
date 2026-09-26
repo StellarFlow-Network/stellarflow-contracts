@@ -154,13 +154,9 @@ fn test_get_price_multiple_assets() {
     let ngn = symbol_short!("NGN");
     let kes = symbol_short!("KES");
 
-    client
-        .try_set_price(&ngn, &1_000_000_i128)
-        .unwrap();
+    client.try_set_price(&ngn, &1_000_000_i128).unwrap();
 
-    client
-        .try_set_price(&kes, &50_000_000_000_i128)
-        .unwrap();
+    client.try_set_price(&kes, &50_000_000_000_i128).unwrap();
 
     assert_eq!(
         client.try_get_price(&ngn, &true).unwrap().unwrap().price,
@@ -224,7 +220,15 @@ fn test_update_price_rejects_minimum_quorum_not_met() {
 
     let asset = symbol_short!("ZAR");
     client.add_asset(&admin, &asset);
-    let result = client.try_update_price(&provider, &asset, &1_000_i128, &6u32, &100u32, &3_600u64, &100_000_i128);
+    let result = client.try_update_price(
+        &provider,
+        &asset,
+        &1_000_i128,
+        &6u32,
+        &100u32,
+        &3_600u64,
+        &100_000_i128,
+    );
     match result {
         Err(Ok(err)) => assert_eq!(err, Error::MinimumQuorumNotMet),
         other => panic!("expected MinimumQuorumNotMet, got {:?}", other),
@@ -268,7 +272,15 @@ fn test_update_price_rejects_flash_crash() {
 
     client.set_price(&asset, &1_000_i128, &2u32, &3_600u64, &100_000_i128);
 
-    let result = client.try_update_price(&provider, &asset, &1_200_i128, &2u32, &100u32, &3_600u64, &100_000_i128);
+    let result = client.try_update_price(
+        &provider,
+        &asset,
+        &1_200_i128,
+        &2u32,
+        &100u32,
+        &3_600u64,
+        &100_000_i128,
+    );
     match result {
         Err(Ok(err)) => assert_eq!(err, Error::FlashCrashDetected),
         other => panic!("expected FlashCrashDetected, got {:?}", other),
@@ -287,7 +299,15 @@ fn test_update_price_rejects_incomplete_quorum() {
 
     let asset = symbol_short!("ZAR");
     client.add_asset(&non_admin, &asset);
-    let result = client.try_update_price(&provider, &asset, &1_000_i128, &6u32, &100u32, &3_600u64, &100_000_i128);
+    let result = client.try_update_price(
+        &provider,
+        &asset,
+        &1_000_i128,
+        &6u32,
+        &100u32,
+        &3_600u64,
+        &100_000_i128,
+    );
     match result {
         Err(Ok(err)) => assert_eq!(err, Error::IncompleteQuorum),
         other => panic!("expected IncompleteQuorum, got {:?}", other),
@@ -369,7 +389,15 @@ fn test_update_price_rejects_configured_max_deviation() {
     client.set_max_deviation_percentage(&admin, &500_i128);
     client.set_price(&asset, &1_000_i128, &2u32, &3_600u64, &100_000_i128);
 
-    let result = client.try_update_price(&provider, &asset, &1_100_i128, &2u32, &100u32, &3_600u64, &100_000_i128);
+    let result = client.try_update_price(
+        &provider,
+        &asset,
+        &1_100_i128,
+        &2u32,
+        &100u32,
+        &3_600u64,
+        &100_000_i128,
+    );
     match result {
         Err(Ok(err)) => assert_eq!(err, Error::FlashCrashDetected),
         other => panic!("expected FlashCrashDetected, got {:?}", other),
@@ -449,8 +477,7 @@ fn test_register_assets_with_config_applies_all_config_atomically() {
         price_floor: Some(600_i128),
     };
 
-    client
-        .register_assets_with_config(&admin, &soroban_sdk::vec![&env, config], &500_i128);
+    client.register_assets_with_config(&admin, &soroban_sdk::vec![&env, config], &500_i128);
 
     let info = client.get_asset_info(&asset);
     assert_eq!(info.name, Symbol::new(&env, "Nigerian Naira"));
@@ -492,7 +519,11 @@ fn test_register_assets_with_config_rolls_back_on_invalid_config() {
         price_floor: Some(600_i128),
     };
 
-    let result = client.try_register_assets_with_config(&admin, &soroban_sdk::vec![&env, bad_config], &500_i128);
+    let result = client.try_register_assets_with_config(
+        &admin,
+        &soroban_sdk::vec![&env, bad_config],
+        &500_i128,
+    );
     match result {
         Err(Ok(err)) => assert_eq!(err, Error::InvalidPriceBounds),
         other => panic!("expected InvalidPriceBounds, got {:?}", other),
@@ -530,7 +561,15 @@ fn test_set_price_rejects_zero_price() {
     let client = PriceOracleClient::new(&env, &contract_id);
     let asset = symbol_short!("NGN");
 
-    let result = client.try_update_price(&provider, &asset, &250_i128, &2u32, &100u32, &3_600u64, &100_000_i128);
+    let result = client.try_update_price(
+        &provider,
+        &asset,
+        &250_i128,
+        &2u32,
+        &100u32,
+        &3_600u64,
+        &100_000_i128,
+    );
     match result {
         Err(Ok(err)) => assert_eq!(err, Error::PriceOutOfBounds),
         other => panic!("expected PriceOutOfBounds, got {:?}", other),
@@ -566,7 +605,15 @@ fn test_update_price_rejects_price_below_floor() {
 
     env.ledger().with_mut(|li| li.timestamp = 1_700_000_500);
     env.ledger().with_mut(|li| li.sequence_number = 2);
-    client.update_price(&provider, &asset, &1_500_000_i128, &6u32, &100u32, &3600u64, &100_000_i128);
+    client.update_price(
+        &provider,
+        &asset,
+        &1_500_000_i128,
+        &6u32,
+        &100u32,
+        &3600u64,
+        &100_000_i128,
+    );
 
     let stored = client.get_price(&asset, &true);
     assert_eq!(stored.price, 1_500_000_i128);
@@ -662,7 +709,15 @@ fn try_try_subscribe_to_price_updates() {
     assert!(!client.toggle_pause(&admin1, &admin2));
     let asset = symbol_short!("ETH");
     let price: i128 = 1_000_000;
-    match client.try_update_price(&provider, &asset, &price, &6u32, &100u32, &3600u64, &100_000_i128) {
+    match client.try_update_price(
+        &provider,
+        &asset,
+        &price,
+        &6u32,
+        &100u32,
+        &3600u64,
+        &100_000_i128,
+    ) {
         Err(Ok(e)) => assert_eq!(e, Error::InvalidAssetSymbol),
         other => panic!("expected InvalidAssetSymbol, got {:?}", other),
     }
@@ -689,7 +744,15 @@ fn test_update_price_emits_event() {
 
     env.ledger().with_mut(|li| li.timestamp = 1_700_000_000);
     env.ledger().with_mut(|li| li.sequence_number = 1);
-    client.update_price(&provider, &asset, &price, &6u32, &100u32, &3600u64, &100_000_i128);
+    client.update_price(
+        &provider,
+        &asset,
+        &price,
+        &6u32,
+        &100u32,
+        &3600u64,
+        &100_000_i128,
+    );
 
     let events = env.events().all();
     let debug_str = alloc::format!("{:?}", events);
@@ -719,7 +782,15 @@ fn test_update_price_emits_indexable_price_update_topic() {
 
     env.ledger().with_mut(|li| li.timestamp = 1_700_000_000);
     env.ledger().with_mut(|li| li.sequence_number = 1);
-    client.update_price(&provider, &asset, &price, &6u32, &100u32, &3600u64, &100_000_i128);
+    client.update_price(
+        &provider,
+        &asset,
+        &price,
+        &6u32,
+        &100u32,
+        &3600u64,
+        &100_000_i128,
+    );
 
     let events = env.events().all();
     assert!(!events.events().is_empty());
@@ -751,7 +822,15 @@ fn test_update_price_emits_cross_call_event_on_5pct_move() {
 
     client.set_price(&asset, &old_price, &6u32, &3600u64, &100_000_i128);
 
-    client.update_price(&provider, &asset, &new_price, &6u32, &100u32, &3600u64, &100_000_i128);
+    client.update_price(
+        &provider,
+        &asset,
+        &new_price,
+        &6u32,
+        &100u32,
+        &3600u64,
+        &100_000_i128,
+    );
 
     let events = env.events().all();
     let debug_str = alloc::format!("{:?}", events);
@@ -787,7 +866,15 @@ fn test_update_price_no_cross_call_event_below_5pct() {
     let new_price: i128 = 51; // 2% increase
 
     client.set_price(&asset, &old_price, &6u32, &3600u64, &100_000_i128);
-    client.update_price(&provider, &asset, &new_price, &6u32, &100u32, &3600u64, &100_000_i128);
+    client.update_price(
+        &provider,
+        &asset,
+        &new_price,
+        &6u32,
+        &100u32,
+        &3600u64,
+        &100_000_i128,
+    );
 
     let events = env.events().all();
     let debug_str = alloc::format!("{:?}", events);
@@ -818,11 +905,27 @@ fn test_update_price_delta_limit_rejection_emits_anomaly_event() {
 
     env.ledger().with_mut(|li| li.timestamp = 1_700_100_000);
     env.ledger().with_mut(|li| li.sequence_number = 1);
-    client.update_price(&provider, &asset, &1_000_i128, &6u32, &100u32, &3600u64, &100_000_i128);
+    client.update_price(
+        &provider,
+        &asset,
+        &1_000_i128,
+        &6u32,
+        &100u32,
+        &3600u64,
+        &100_000_i128,
+    );
 
     env.ledger().with_mut(|li| li.timestamp = 1_700_100_010);
     env.ledger().with_mut(|li| li.sequence_number = 2);
-    let result = client.try_update_price(&provider, &asset, &1_100_i128, &6u32, &100u32, &3600u64, &100_000_i128);
+    let result = client.try_update_price(
+        &provider,
+        &asset,
+        &1_100_i128,
+        &6u32,
+        &100u32,
+        &3600u64,
+        &100_000_i128,
+    );
     assert!(result.is_ok());
 
     let events = env.events().all();
@@ -889,7 +992,15 @@ fn test_flash_crash_protection_rejects_large_increase() {
     client.set_price(&asset, &old_price, &6u32, &3600u64, &100_000_i128);
 
     // Should reject 20% increase (exceeds 10% MAX_PERCENT_CHANGE)
-    match client.try_update_price(&provider, &asset, &new_price, &6u32, &100u32, &3600u64, &100_000_i128) {
+    match client.try_update_price(
+        &provider,
+        &asset,
+        &new_price,
+        &6u32,
+        &100u32,
+        &3600u64,
+        &100_000_i128,
+    ) {
         Err(Ok(e)) => assert_eq!(e, Error::FlashCrashDetected),
         other => panic!("expected FlashCrashDetected, got {:?}", other),
     }
@@ -929,7 +1040,8 @@ fn test_twap_buffer_limits_to_10_entries_and_calculates_average() {
 
     // Push 15 prices
     for i in 1..=15 {
-        env.ledger().with_mut(|li| li.timestamp = 1_000_000 + i * 10);
+        env.ledger()
+            .with_mut(|li| li.timestamp = 1_000_000 + i * 10);
         client.set_price(&asset, &(i as i128 * 100), &6, &3600);
     }
 
@@ -1091,7 +1203,15 @@ fn test_flash_crash_protection_rejects_large_drop() {
     client.set_price(&asset, &old_price, &6u32, &3600u64);
 
     // Should reject 20% drop (exceeds 10% MAX_PERCENT_CHANGE)
-    match client.try_update_price(&provider, &asset, &new_price, &6u32, &100u32, &3600u64, &100_000_i128) {
+    match client.try_update_price(
+        &provider,
+        &asset,
+        &new_price,
+        &6u32,
+        &100u32,
+        &3600u64,
+        &100_000_i128,
+    ) {
         Err(Ok(e)) => assert_eq!(e, Error::FlashCrashDetected),
         other => panic!("expected FlashCrashDetected, got {:?}", other),
     }
@@ -1393,7 +1513,10 @@ fn test_rewards_accumulate_and_claim() {
 
     // Relayer claims rewards via the public endpoint
     let claimed = oracle_client.claim_rewards(&relayer, &token_id);
-    assert_eq!(claimed, 10_i128, "Claimed amount must equal accumulated sum");
+    assert_eq!(
+        claimed, 10_i128,
+        "Claimed amount must equal accumulated sum"
+    );
 
     // Verify the on-chain balance was zeroed BEFORE transfer (i.e., now zero)
     env.as_contract(&oracle_id, || {
@@ -1413,7 +1536,10 @@ fn test_rewards_accumulate_and_claim() {
         .get(&key)
         .unwrap_or_else(|| soroban_sdk::Map::new(&env));
     let received = transfers.get(relayer.clone()).unwrap_or(0_i128);
-    assert_eq!(received, 10_i128, "Token contract should have received exact amount");
+    assert_eq!(
+        received, 10_i128,
+        "Token contract should have received exact amount"
+    );
 }
 
 // ============================================================================
@@ -1671,7 +1797,15 @@ fn test_update_price_within_bounds_succeeds() {
     client.set_price(&asset, &old_price, &6u32, &3600u64);
 
     // Should allow ~4% increase (within 10% MAX_PERCENT_CHANGE, delta ≤ 50)
-    client.update_price(&provider, &asset, &new_price, &6u32, &100u32, &3600u64, &100_000_i128);
+    client.update_price(
+        &provider,
+        &asset,
+        &new_price,
+        &6u32,
+        &100u32,
+        &3600u64,
+        &100_000_i128,
+    );
 
     let price_data = client.get_price(&asset, &true);
     assert_eq!(price_data.price, new_price);
@@ -1700,7 +1834,15 @@ fn test_flash_crash_protection_allows_exact_threshold() {
     client.set_price(&asset, &old_price, &6u32, &3600u64, &100_000_i128);
 
     // Should allow exactly 10% increase (at threshold, not exceeding), delta=50 ≤ 50
-    client.update_price(&provider, &asset, &new_price, &6u32, &100u32, &3600u64, &100_000_i128);
+    client.update_price(
+        &provider,
+        &asset,
+        &new_price,
+        &6u32,
+        &100u32,
+        &3600u64,
+        &100_000_i128,
+    );
 
     let price_data = client.get_price(&asset, &true);
     assert_eq!(price_data.price, new_price);
@@ -1726,7 +1868,15 @@ fn test_update_price_below_min_bound_rejected() {
     client.add_asset(&admin, &asset);
     client.set_price_bounds(&admin, &asset, &500_i128, &2_000_i128);
 
-    let result = client.try_update_price(&provider, &asset, &100_i128, &6u32, &100u32, &3600u64, &100_000_i128);
+    let result = client.try_update_price(
+        &provider,
+        &asset,
+        &100_i128,
+        &6u32,
+        &100u32,
+        &3600u64,
+        &100_000_i128,
+    );
     match result {
         Err(Ok(e)) => assert_eq!(e, Error::PriceOutOfBounds),
         other => panic!("expected PriceOutOfBounds, got {:?}", other),
@@ -1752,7 +1902,15 @@ fn test_flash_crash_protection_allows_first_price_update() {
 
     // Track the asset first, then do first price update (no previous price)
     client.add_asset(&admin, &asset);
-    client.update_price(&provider, &asset, &1_000_i128, &6u32, &100u32, &3600u64, &100_000_i128);
+    client.update_price(
+        &provider,
+        &asset,
+        &1_000_i128,
+        &6u32,
+        &100u32,
+        &3600u64,
+        &100_000_i128,
+    );
 
     let price_data = client.get_price(&asset, &true);
     assert_eq!(price_data.price, 1_000_i128);
@@ -1781,7 +1939,15 @@ fn test_update_price_above_max_bound_rejected() {
     client.set_price_bounds(&admin, &asset, &500_i128, &2_000_i128);
 
     // Price above max should be rejected
-    let result = client.try_update_price(&provider, &asset, &5_000_i128, &6u32, &100u32, &3600u64, &100_000_i128);
+    let result = client.try_update_price(
+        &provider,
+        &asset,
+        &5_000_i128,
+        &6u32,
+        &100u32,
+        &3600u64,
+        &100_000_i128,
+    );
     match result {
         Err(Ok(e)) => assert_eq!(e, Error::PriceOutOfBounds),
         other => panic!("expected PriceOutOfBounds, got {:?}", other),
@@ -1808,7 +1974,15 @@ fn test_update_price_at_exact_bounds_succeeds() {
 
     // Track asset first, then first price update (no previous price) should always be allowed
     client.add_asset(&admin, &asset);
-    client.update_price(&provider, &asset, &price, &6u32, &100u32, &3600u64, &100_000_i128);
+    client.update_price(
+        &provider,
+        &asset,
+        &price,
+        &6u32,
+        &100u32,
+        &3600u64,
+        &100_000_i128,
+    );
 
     let price_data = client.get_price(&asset, &true);
     assert_eq!(price_data.price, price);
@@ -1835,7 +2009,15 @@ fn test_flash_crash_protection_rejects_just_over_threshold() {
 
     client.set_price(&asset, &old_price, &6u32, &3600u64, &100_000_i128);
 
-    match client.try_update_price(&provider, &asset, &new_price, &6u32, &100u32, &3600u64, &100_000_i128) {
+    match client.try_update_price(
+        &provider,
+        &asset,
+        &new_price,
+        &6u32,
+        &100u32,
+        &3600u64,
+        &100_000_i128,
+    ) {
         Err(Ok(e)) => assert_eq!(e, Error::FlashCrashDetected),
         other => panic!("expected FlashCrashDetected, got {:?}", other),
     }
@@ -2761,7 +2943,10 @@ fn test_ledger_gap_new_provider_allowed() {
 
     // First submission from a new provider should succeed (no ledger gap restriction)
     let result = client.try_update_price(&provider, &asset, &100_000_000, &9, &95, &3600);
-    assert!(result.is_ok(), "New provider should be allowed to submit without ledger gap restriction");
+    assert!(
+        result.is_ok(),
+        "New provider should be allowed to submit without ledger gap restriction"
+    );
 }
 
 #[test]
@@ -2906,7 +3091,10 @@ fn test_ledger_gap_multiple_providers_independent() {
 
     // Provider A submits at ledger 100
     let result_a1 = client.try_update_price(&provider_a, &asset, &100_000_000, &9, &95, &3600);
-    assert!(result_a1.is_ok(), "Provider A first submission should succeed");
+    assert!(
+        result_a1.is_ok(),
+        "Provider A first submission should succeed"
+    );
 
     // Provider B submits at ledger 101 (new provider, no gap restriction)
     env.ledger().with_mut(|li| li.sequence_number = 101);
@@ -2945,12 +3133,18 @@ fn test_ledger_gap_multiple_providers_independent() {
     // Provider A submits at ledger 104 (gap of 4 from ledger 100, succeeds)
     env.ledger().with_mut(|li| li.sequence_number = 104);
     let result_a3 = client.try_update_price(&provider_a, &asset, &104_000_000, &9, &95, &3600);
-    assert!(result_a3.is_ok(), "Provider A should succeed after 4-block gap");
+    assert!(
+        result_a3.is_ok(),
+        "Provider A should succeed after 4-block gap"
+    );
 
     // Provider B submits at ledger 105 (gap of 4 from ledger 101, succeeds)
     env.ledger().with_mut(|li| li.sequence_number = 105);
     let result_b3 = client.try_update_price(&provider_b, &asset, &105_000_000, &9, &95, &3600);
-    assert!(result_b3.is_ok(), "Provider B should succeed after 4-block gap");
+    assert!(
+        result_b3.is_ok(),
+        "Provider B should succeed after 4-block gap"
+    );
 }
 
 #[test]
@@ -2977,7 +3171,10 @@ fn test_ledger_gap_provider_last_seen_ledger_tracking() {
 
     // Initially, provider has no recorded last ledger
     let last_ledger_before = client.get_provider_last_seen_ledger(&provider);
-    assert_eq!(last_ledger_before, 0, "New provider should have no recorded last ledger");
+    assert_eq!(
+        last_ledger_before, 0,
+        "New provider should have no recorded last ledger"
+    );
 
     // First submission at ledger 100
     client.update_price(&provider, &asset, &100_000_000, &9, &95, &3600);
@@ -3177,7 +3374,15 @@ fn test_update_price_does_not_crash_with_subscribers() {
     // Update price should not crash even with subscribers
     // (The callback will fail because subscriber doesn't implement on_price_update, but update should succeed)
     env.ledger().with_mut(|li| li.timestamp = 1_000_000);
-    let result = client.update_price(&provider, &asset, &1_500_000_i128, &6u32, &90u32, &3600u64, &100_000_i128);
+    let result = client.update_price(
+        &provider,
+        &asset,
+        &1_500_000_i128,
+        &6u32,
+        &90u32,
+        &3600u64,
+        &100_000_i128,
+    );
 
     // The update should succeed even if the callback fails
     assert!(
@@ -3281,7 +3486,15 @@ fn test_buffer_truncation_with_equal_weights() {
     for i in 0..13 {
         let provider = providers.get(i);
         let price = 800_000_i128 + (i as i128 * 10);
-        client.update_price(&provider, &asset, &price, &6u32, 90u32, &3600u64, &100_000_i128);
+        client.update_price(
+            &provider,
+            &asset,
+            &price,
+            &6u32,
+            90u32,
+            &3600u64,
+            &100_000_i128,
+        );
     }
 
     // Get the buffer and verify it was truncated to 11
@@ -3332,7 +3545,15 @@ fn test_median_calculation_after_truncation() {
     for i in 0..12 {
         let provider = providers.get(i);
         let price = 1_000_000_i128 + (i as i128 * 1000);
-        client.update_price(&provider, &asset, &price, &6u32, 90u32, &3600u64, &100_000_i128);
+        client.update_price(
+            &provider,
+            &asset,
+            &price,
+            &6u32,
+            90u32,
+            &3600u64,
+            &100_000_i128,
+        );
     }
 
     // Verify the price was updated (median calculation succeeded)
@@ -3377,8 +3598,15 @@ fn test_bypass_allows_flash_crash_price() {
     client.set_max_deviation_percentage(&admin, &100_i128); // 1%
 
     // Without bypass, a 20% jump should be rejected.
-    let rejected =
-        client.try_update_price(&provider, &asset, &1_200_i128, &2u32, &100u32, &3_600u64, &100_000_i128);
+    let rejected = client.try_update_price(
+        &provider,
+        &asset,
+        &1_200_i128,
+        &2u32,
+        &100u32,
+        &3_600u64,
+        &100_000_i128,
+    );
     match rejected {
         Err(Ok(err)) => assert_eq!(err, Error::FlashCrashDetected),
         other => panic!("expected FlashCrashDetected, got {:?}", other),
@@ -3388,7 +3616,15 @@ fn test_bypass_allows_flash_crash_price() {
     env.ledger().with_mut(|li| li.timestamp = 1_000_000);
     client.enable_bypass_safety_checks(&admin);
     assert!(client
-        .try_update_price(&provider, &asset, &1_200_i128, &2u32, &100u32, &3_600u64, &100_000_i128)
+        .try_update_price(
+            &provider,
+            &asset,
+            &1_200_i128,
+            &2u32,
+            &100u32,
+            &3_600u64,
+            &100_000_i128
+        )
         .is_ok());
 }
 
@@ -3436,7 +3672,15 @@ fn test_bypass_expires_and_circuit_breaker_resumes() {
     env.ledger().with_mut(|li| li.timestamp = 1_000 + 3_601);
 
     // Circuit breaker should be active again.
-    let result = client.try_update_price(&provider, &asset, &1_200_i128, &2u32, &100u32, &3_600u64, &100_000_i128);
+    let result = client.try_update_price(
+        &provider,
+        &asset,
+        &1_200_i128,
+        &2u32,
+        &100u32,
+        &3_600u64,
+        &100_000_i128,
+    );
     match result {
         Err(Ok(err)) => assert_eq!(err, Error::FlashCrashDetected),
         other => panic!(
@@ -3559,7 +3803,15 @@ fn test_relayer_activity_tracking() {
 
     // Update price at ledger 100
     env.ledger().with_mut(|li| li.sequence_number = 100);
-    client.update_price(&provider, &asset, &1000_i128, &6u32, &100u32, &3600u64, &100_000_i128);
+    client.update_price(
+        &provider,
+        &asset,
+        &1000_i128,
+        &6u32,
+        &100u32,
+        &3600u64,
+        &100_000_i128,
+    );
 
     // Check last seen ledger
     assert_eq!(client.get_provider_last_seen_ledger(&provider), 100);
@@ -3593,7 +3845,15 @@ fn test_graceful_recovery_clears_metrics() {
     });
 
     // 1. Populate metrics: Price update (adds to TWAP, RecentEvents, LastSeen)
-    client.update_price(&provider, &asset, &1000_i128, &6u32, &100u32, &3600u64, &100_000_i128);
+    client.update_price(
+        &provider,
+        &asset,
+        &1000_i128,
+        &6u32,
+        &100u32,
+        &3600u64,
+        &100_000_i128,
+    );
 
     // Add relayer infraction
     env.as_contract(&contract_id, || {
