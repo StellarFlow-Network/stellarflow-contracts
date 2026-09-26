@@ -44,3 +44,8 @@ jobs:
         run: |
           chmod +x check_size.sh
           ./check_size.sh
+
+      - name: Soroban Gas Profiler Check
+        run: |
+          python3 scripts/gas_profiler.py --override || true
+

@@ -130,6 +130,127 @@ fn read_twap(env: &Env, oracle: &Address, asset: &Symbol) -> Result<i128, Contra
     }
 }
 
+/// Health factor threshold below which a vault position is considered distressed (H < 1.05 or 10,500 bps).
+pub const DISTRESSED_THRESHOLD_BPS: u128 = 10_500;
+
+/// Discounted swap fee in basis points applied during auto-deleveraging (e.g. 0.10% = 10 bps).
+pub const DISCOUNTED_SWAP_FEE_BPS: u32 = 10;
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AutoDeleverageResult {
+    pub deleveraged: bool,
+    pub initial_health_factor: u128,
+    pub updated_health_factor: u128,
+    pub collateral_converted: u128,
+    pub debt_cleared: u128,
+    pub fee_applied_bps: u32,
+    pub remaining_collateral_value: u128,
+    pub remaining_borrowed_value: u128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct VaultDeleveragedEvent {
+    pub owner: Address,
+    pub initial_health_factor: u128,
+    pub updated_health_factor: u128,
+    pub collateral_converted: u128,
+    pub debt_cleared: u128,
+}
+
+/// Automatically convert collateral assets to pay off outstanding debt shares
+/// when health factor H < 1.05 (10,500 bps).
+/// Applies discounted swap fee to encourage rapid debt clearance,
+/// updates position collateral/borrowed values, and emits VaultDeleveraged event.
+pub fn auto_deleverage(
+    env: &Env,
+    position: &mut VaultPosition,
+    collateral_conversion_target: u128,
+) -> Result<AutoDeleverageResult, ContractError> {
+    let initial_hf = health_factor(position)?;
+
+    if initial_hf >= DISTRESSED_THRESHOLD_BPS || position.borrowed_value == 0 {
+        return Ok(AutoDeleverageResult {
+            deleveraged: false,
+            initial_health_factor: initial_hf,
+            updated_health_factor: initial_hf,
+            collateral_converted: 0,
+            debt_cleared: 0,
+            fee_applied_bps: 0,
+            remaining_collateral_value: position.collateral_value,
+            remaining_borrowed_value: position.borrowed_value,
+        });
+    }
+
+    let collateral_to_convert = if collateral_conversion_target > 0 {
+        core::cmp::min(collateral_conversion_target, position.collateral_value)
+    } else {
+        position.collateral_value
+    };
+
+    let fee = collateral_to_convert
+        .checked_mul(DISCOUNTED_SWAP_FEE_BPS as u128)
+        .ok_or(ContractError::MathOverflow)?
+        .checked_div(BPS_DENOMINATOR)
+        .ok_or(ContractError::DivisionByZero)?;
+
+    let net_proceeds = collateral_to_convert
+        .checked_sub(fee)
+        .ok_or(ContractError::MathOverflow)?;
+
+    let debt_cleared = core::cmp::min(net_proceeds, position.borrowed_value);
+
+    let actual_collateral_converted = if debt_cleared == net_proceeds {
+        collateral_to_convert
+    } else {
+        debt_cleared
+            .checked_mul(BPS_DENOMINATOR)
+            .ok_or(ContractError::MathOverflow)?
+            .checked_div(
+                BPS_DENOMINATOR
+                    .checked_sub(DISCOUNTED_SWAP_FEE_BPS as u128)
+                    .ok_or(ContractError::MathOverflow)?,
+            )
+            .ok_or(ContractError::DivisionByZero)?
+    };
+
+    let actual_collateral_converted = core::cmp::min(actual_collateral_converted, position.collateral_value);
+
+    position.collateral_value = position
+        .collateral_value
+        .checked_sub(actual_collateral_converted)
+        .ok_or(ContractError::MathOverflow)?;
+
+    position.borrowed_value = position
+        .borrowed_value
+        .checked_sub(debt_cleared)
+        .ok_or(ContractError::MathOverflow)?;
+
+    let updated_hf = health_factor(position)?;
+
+    let event = VaultDeleveragedEvent {
+        owner: position.owner.clone(),
+        initial_health_factor: initial_hf,
+        updated_health_factor: updated_hf,
+        collateral_converted: actual_collateral_converted,
+        debt_cleared,
+    };
+
+    crate::events::emit_vault_deleveraged(env, event);
+
+    Ok(AutoDeleverageResult {
+        deleveraged: true,
+        initial_health_factor: initial_hf,
+        updated_health_factor: updated_hf,
+        collateral_converted: actual_collateral_converted,
+        debt_cleared,
+        fee_applied_bps: DISCOUNTED_SWAP_FEE_BPS,
+        remaining_collateral_value: position.collateral_value,
+        remaining_borrowed_value: position.borrowed_value,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,5 +288,32 @@ mod tests {
         let result = liquidate(&env, &position(&env, 110, 100), 100).unwrap();
         assert!(!result.liquidated);
         assert_eq!(result.liquidator_reward, 0);
+    }
+
+    #[test]
+    fn auto_deleverage_triggers_when_health_factor_below_105_percent() {
+        let env = Env::default();
+        let mut pos = position(&env, 104, 100);
+        assert_eq!(health_factor(&pos).unwrap(), 10_400);
+
+        let res = auto_deleverage(&env, &mut pos, 50).unwrap();
+        assert!(res.deleveraged);
+        assert_eq!(res.initial_health_factor, 10_400);
+        assert!(res.updated_health_factor > res.initial_health_factor);
+        assert!(res.collateral_converted > 0);
+        assert!(res.debt_cleared > 0);
+        assert_eq!(res.fee_applied_bps, DISCOUNTED_SWAP_FEE_BPS);
+    }
+
+    #[test]
+    fn auto_deleverage_skips_when_healthy() {
+        let env = Env::default();
+        let mut pos = position(&env, 105, 100);
+        assert_eq!(health_factor(&pos).unwrap(), 10_500);
+
+        let res = auto_deleverage(&env, &mut pos, 50).unwrap();
+        assert!(!res.deleveraged);
+        assert_eq!(res.collateral_converted, 0);
+        assert_eq!(res.debt_cleared, 0);
     }
 }

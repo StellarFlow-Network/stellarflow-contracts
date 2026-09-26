@@ -173,6 +173,9 @@ pub const EV_COMMIT_FORFEIT: Symbol = symbol_short!("cmt_frf");
 /// ZK: a batch of deposit note commitments was inserted into the Merkle tree.
 pub const EV_ZK_BATCH_COMMIT: Symbol = symbol_short!("zk_batch");
 
+/// Vault: position nearing insolvent threshold was automatically deleveraged.
+pub const EV_VAULT_DELEVERAGED: Symbol = symbol_short!("vlt_delev");
+
 // ---------------------------------------------------------------------------
 // Cross-border fiat escrow settlement lifecycle
 // ---------------------------------------------------------------------------
@@ -433,6 +436,19 @@ pub fn emit_proposal_created(
     )
 }
 
+/// Emit a VaultDeleveraged event when a distressed vault is auto-deleveraged.
+pub fn emit_vault_deleveraged(
+    env: &Env,
+    event: crate::vaults::liquidation::VaultDeleveragedEvent,
+) {
+    let _ = emit_simple2(
+        env,
+        EV_VAULT_DELEVERAGED,
+        symbol_short!("deleverag"),
+        event,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -588,6 +604,7 @@ mod tests {
             EV_REMITTANCE_FEES_ROUTED,
             EV_PROPOSAL_VETOED,
             EV_ZK_BATCH_COMMIT,
+            EV_VAULT_DELEVERAGED,
         ];
         for name in names.iter() {
             assert!(
