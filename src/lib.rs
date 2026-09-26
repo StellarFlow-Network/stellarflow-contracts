@@ -306,6 +306,8 @@ pub(crate) const DATA_KEY: Symbol = symbol_short!("DATA");
 pub(crate) const SIGNERS_KEY: Symbol = symbol_short!("SIGNERS");
 pub(crate) const STAGING_KEY: Symbol = symbol_short!("STAGING");
 const PENDING_UPGRADE_KEY: Symbol = symbol_short!("PENDING");
+/// Storage key for the multi-stage timelock execution queue (Issue #996).
+const MULTI_STAGE_UPGRADE_KEY: Symbol = symbol_short!("MSTAGE");
 pub(crate) const UPGRADE_DELAY_SECONDS: u64 = 48 * 60 * 60;
 const STAKE_REGISTRY_KEY: Symbol = symbol_short!("STAKES");
 const TOTAL_STAKED_KEY: Symbol = symbol_short!("TOTAL");
@@ -860,6 +862,116 @@ impl TimeLockedUpgradeContract {
         Self::_extend_instance_ttl(&env);
         crate::instance::bump_instance_ttl(&env);
         Ok(())
+    }
+
+    // --- Multi-stage timelock execution queue (Issue #996) ---
+
+    /// Stage 1: publicly announce the intent to perform a major upgrade.
+    ///
+    /// Starts a 24-hour notification delay before the payload may be approved.
+    pub fn notify_upgrade_intent(
+        env: Env,
+        new_wasm_hash: BytesN<32>,
+        proposer: Address,
+    ) -> Result<(), ContractError> {
+        let data = Self::get_data(env.clone())?;
+        if data.admin != proposer { return Err(ContractError::NotAdmin); }
+        proposer.require_auth();
+
+        let entry = crate::upgrades::multi_stage::notify_intent(
+            new_wasm_hash,
+            proposer,
+            env.ledger().timestamp(),
+        );
+        env.storage().instance().set(&MULTI_STAGE_UPGRADE_KEY, &entry);
+        crate::instance::bump_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Stage 2: verify the code payload and record the approval vote.
+    ///
+    /// Only valid once the 24-hour Stage 1 notification delay has elapsed.
+    /// Opens the Stage 3 execution window 48 hours from now.
+    pub fn approve_upgrade_payload(
+        env: Env,
+        approver: Address,
+    ) -> Result<(), ContractError> {
+        let data = Self::get_data(env.clone())?;
+        if data.admin != approver { return Err(ContractError::NotAdmin); }
+        approver.require_auth();
+
+        let entry: crate::upgrades::multi_stage::MultiStageUpgrade = env
+            .storage()
+            .instance()
+            .get(&MULTI_STAGE_UPGRADE_KEY)
+            .ok_or(ContractError::NoPendingUpgrade)?;
+
+        let approved = crate::upgrades::multi_stage::approve_payload(
+            &entry,
+            env.ledger().timestamp(),
+        )
+        .ok_or(ContractError::UpgradeTimelockNotSatisfied)?;
+
+        env.storage().instance().set(&MULTI_STAGE_UPGRADE_KEY, &approved);
+        crate::instance::bump_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Stage 3: execute the queued upgrade inside the 24-hour execution window.
+    pub fn execute_queued_upgrade(
+        env: Env,
+        executor: Address,
+    ) -> Result<(), ContractError> {
+        let data = Self::get_data(env.clone())?;
+        if data.admin != executor { return Err(ContractError::NotAdmin); }
+        executor.require_auth();
+
+        let entry: crate::upgrades::multi_stage::MultiStageUpgrade = env
+            .storage()
+            .instance()
+            .get(&MULTI_STAGE_UPGRADE_KEY)
+            .ok_or(ContractError::NoPendingUpgrade)?;
+
+        let executed = crate::upgrades::multi_stage::execute(
+            &entry,
+            env.ledger().timestamp(),
+        )
+        .ok_or(ContractError::UpgradeTimelockNotSatisfied)?;
+
+        env.deployer().update_current_contract_wasm(executed.new_wasm_hash.to_array());
+        env.storage().instance().set(&MULTI_STAGE_UPGRADE_KEY, &executed);
+        crate::instance::bump_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Return the current multi-stage queue entry, if any.
+    pub fn get_multi_stage_upgrade(
+        env: Env,
+    ) -> Option<crate::upgrades::multi_stage::MultiStageUpgrade> {
+        env.storage().instance().get(&MULTI_STAGE_UPGRADE_KEY)
+    }
+
+    /// Return the number of seconds remaining before the queue entry can
+    /// advance to its next stage, or `None` if there is no active entry.
+    pub fn get_multi_stage_remaining(env: Env) -> Option<u64> {
+        use crate::upgrades::multi_stage::{
+            MultiStageUpgrade, TimelockStage, STAGE1_INTENT_DELAY_SECONDS,
+        };
+
+        let entry: MultiStageUpgrade = env.storage().instance().get(&MULTI_STAGE_UPGRADE_KEY)?;
+        let now = env.ledger().timestamp();
+        match entry.stage {
+            TimelockStage::IntentNotified => Some(
+                STAGE1_INTENT_DELAY_SECONDS.saturating_sub(now.saturating_sub(entry.intent_at)),
+            ),
+            TimelockStage::PayloadApproved => {
+                Some(entry.window_opens_at.saturating_sub(now))
+            }
+            TimelockStage::ExecutionWindowOpen => {
+                Some(entry.window_closes_at.saturating_sub(now))
+            }
+            TimelockStage::Executed | TimelockStage::Expired => Some(0),
+        }
     }
 
     pub fn set_current_wasm(env: Env, admin: Address, wasm_hash: BytesN<32>) -> Result<(), ContractError> {
