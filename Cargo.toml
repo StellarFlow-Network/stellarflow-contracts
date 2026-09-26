@@ -16,6 +16,7 @@ members = [
     "contracts/linear-vesting",
     "contracts/price-oracle",
     "contracts/remittance-escrow",
+    "contracts/shielded-remittance-escrow",
     "contracts/reward-splitter",
     "contracts/gas-tank",
     "contracts/vault-health-monitor",
