@@ -155,6 +155,9 @@ pub const EV_REMITTANCE_FEE_SPLIT_CALCULATED: Symbol = symbol_short!("rem_split"
 /// Protocol: adaptive fee was clamped to the hardcoded safety floor.
 pub const EV_PROTOCOL_FEE_FLOOR_ENFORCED: Symbol = symbol_short!("fee_floor");
 
+/// Protocol: a dynamically-scaled fee was clamped to the absolute ceiling.
+pub const EV_DYNAMIC_FEE_CAP_ENFORCED: Symbol = symbol_short!("fee_cap");
+
 /// Treasury: reserve concentration exceeded the diversification threshold and a swap plan was generated.
 pub const EV_TREASURY_DIVERSIFICATION_TRIGGERED: Symbol = symbol_short!("treas_div");
 

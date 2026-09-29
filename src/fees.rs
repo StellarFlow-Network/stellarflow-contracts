@@ -8,7 +8,7 @@ use crate::{
     asset_id_to_symbol, AssetId, ContractData, ContractError, TimeLockedUpgradeContract,
     DATA_KEY,
 };
-use crate::events::{emit_event, EV_PROTOCOL_FEE_FLOOR_ENFORCED};
+use crate::events::{emit_event, EV_DYNAMIC_FEE_CAP_ENFORCED, EV_PROTOCOL_FEE_FLOOR_ENFORCED};
 use soroban_sdk::{contracttype, Address, Env, Vec};
 
 pub const STANDARD_FIXED_POINT_SCALE: i128 = 10_000_000;
@@ -24,6 +24,12 @@ pub const FEE_TIER_100_BPS: u32 = 100;
 
 /// Hardcoded protocol fee floor: 0.0001 (0.01%) = 1 basis point.
 pub const PROTOCOL_FEE_FLOOR_BPS: u32 = 1;
+
+/// Absolute hard ceiling for any dynamically-scaled protocol fee: 0.03 = 3.00%
+/// = 300 basis points. Regardless of how the fee is calculated (adaptive
+/// volatility scaling or the legacy volume-based tier walk), the fee actually
+/// applied to a swap never exceeds this value.
+pub const DYNAMIC_FEE_ABSOLUTE_CAP_BPS: u32 = 300;
 
 /// Collected fee split: 80% to LP token holders, 20% to protocol treasury.
 pub const LP_FEE_SHARE_BPS: u64 = 8_000;
@@ -113,6 +119,18 @@ pub struct ProtocolFeeFloorEnforced {
     pub requested_fee_bps: u32,
     pub enforced_fee_bps: u32,
     pub floor_bps: u32,
+    pub timestamp: u64,
+}
+
+/// Event payload emitted when a dynamically-scaled fee hits the absolute
+/// ceiling and is clamped to [`DYNAMIC_FEE_ABSOLUTE_CAP_BPS`].
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DynamicFeeCapEnforced {
+    pub asset: AssetId,
+    pub requested_fee_bps: u32,
+    pub enforced_fee_bps: u32,
+    pub cap_bps: u32,
     pub timestamp: u64,
 }
 
@@ -684,12 +702,29 @@ pub fn resolve_swap_fee_bps(
     pool: AssetId,
     legacy_fee_bps: u32,
 ) -> Result<u32, ContractError> {
-    if crate::config::get_adaptive_fee_config(env, pool).is_some() {
+    let calculated = if crate::config::get_adaptive_fee_config(env, pool).is_some() {
         let (fee, _vol) = crate::amm::adaptive_fee::resolve_adaptive_fee(env, pool)?;
-        Ok(fee)
+        fee
     } else {
-        Ok(legacy_fee_bps)
+        legacy_fee_bps
+    };
+
+    // Circuit breaker: clamp the calculated fee to the absolute hard cap so no
+    // dynamic scaling path can ever charge more than 3.00% on a swap.
+    let effective = calculated.min(DYNAMIC_FEE_ABSOLUTE_CAP_BPS);
+    if effective != calculated {
+        let asset_symbol = asset_id_to_symbol(env, pool);
+        let event = DynamicFeeCapEnforced {
+            asset: pool,
+            requested_fee_bps: calculated,
+            enforced_fee_bps: effective,
+            cap_bps: DYNAMIC_FEE_ABSOLUTE_CAP_BPS,
+            timestamp: env.ledger().timestamp(),
+        };
+        emit_event(env, EV_DYNAMIC_FEE_CAP_ENFORCED, &[&asset_symbol], event).ok();
     }
+
+    Ok(effective)
 }
 
 /// Calculate and deduct dynamic fee from a trade amount
@@ -1046,8 +1081,25 @@ pub fn distribute_flash_fees(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::amm::adaptive_fee::record_price_observation;
+    use crate::config::{set_adaptive_fee_config, AdaptiveFeeConfig};
     use crate::{TimeLockedUpgradeContract, TimeLockedUpgradeContractClient};
-    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::{Address as _, Ledger, LedgerInfo};
+    use soroban_sdk::{symbol_short, Symbol};
+
+    fn set_time(env: &Env, secs: u64) {
+        env.ledger().set(LedgerInfo {
+            timestamp: secs,
+            protocol_version: 20,
+            sequence_number: 1,
+            network_id: Default::default(),
+            base_reserve: 0,
+            min_temp_entry_ttl: 0,
+            min_live_entry_ttl: 0,
+            max_entry_ttl: u32::MAX,
+            ledger_entries: Default::default(),
+        });
+    }
 
     fn setup() -> (Env, TimeLockedUpgradeContractClient<'static>, Address, Address) {
         let env = Env::default();
@@ -1245,5 +1297,95 @@ mod tests {
             3 * DYNAMIC_FEE_SCALE
         );
         assert_eq!(accumulator.peak_fee, 3 * DYNAMIC_FEE_SCALE);
+    }
+
+    #[test]
+    fn dynamic_fee_above_absolute_cap_is_clamped() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+        let pool: AssetId = 3897123275;
+
+        env.as_contract(&contract_id, || {
+            // No adaptive config -> the resolver takes the legacy fee verbatim.
+            let effective = resolve_swap_fee_bps(&env, pool, 500).unwrap();
+            assert_eq!(effective, DYNAMIC_FEE_ABSOLUTE_CAP_BPS);
+            assert_eq!(effective, 300);
+        });
+    }
+
+    #[test]
+    fn dynamic_fee_below_absolute_cap_is_untouched() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+        let pool: AssetId = 3897123275;
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(resolve_swap_fee_bps(&env, pool, 100).unwrap(), 100);
+            assert_eq!(
+                resolve_swap_fee_bps(&env, pool, DYNAMIC_FEE_ABSOLUTE_CAP_BPS).unwrap(),
+                DYNAMIC_FEE_ABSOLUTE_CAP_BPS
+            );
+        });
+    }
+
+    #[test]
+    fn clamping_to_absolute_cap_emits_warning_event() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+        let pool: AssetId = 3897123275;
+
+        env.as_contract(&contract_id, || {
+            let before = env.events().all().len();
+            let effective = resolve_swap_fee_bps(&env, pool, 1_000).unwrap();
+            assert_eq!(effective, DYNAMIC_FEE_ABSOLUTE_CAP_BPS);
+            assert_eq!(env.events().all().len(), before + 1);
+        });
+    }
+
+    #[test]
+    fn adaptive_fee_above_absolute_cap_is_clamped_on_resolve() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+        let admin = Address::generate(&env);
+        let pool: AssetId = 3897123275;
+
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(
+                &DATA_KEY,
+                &ContractData {
+                    admin: admin.clone(),
+                    value: 0,
+                    max_fee_ceiling: 0,
+                },
+            );
+
+            // Configure adaptive scaling with a max well above the absolute cap.
+            let cfg = AdaptiveFeeConfig {
+                base_fee_bps: 30,
+                max_fee_bps: 500,
+                ..AdaptiveFeeConfig::default()
+            };
+            set_adaptive_fee_config(&env, &admin, pool, cfg.clone()).unwrap();
+
+            // Drive volatility to the configured maximum.
+            let sym: Symbol = symbol_short!("NGN");
+            let start = 1_000_000u64;
+            for i in 0..cfg.ring_buffer_len {
+                set_time(&env, start + (i as u64) * cfg.sample_interval_secs);
+                record_price_observation(&env, pool, sym.clone(), 1000 + (i as i128) * 5000)
+                    .unwrap();
+            }
+
+            let (raw_fee, _vol) =
+                crate::amm::adaptive_fee::resolve_adaptive_fee(&env, pool).unwrap();
+            assert_eq!(raw_fee, 500, "volatility should drive the adaptive fee to its max");
+
+            let effective = resolve_swap_fee_bps(&env, pool, 30).unwrap();
+            assert_eq!(effective, DYNAMIC_FEE_ABSOLUTE_CAP_BPS);
+        });
     }
 }
