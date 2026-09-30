@@ -6,23 +6,23 @@ pub mod dispatcher;
 
 const ACTIVE: u32 = 1 << 1;
 
-func get_validator_state(env: &Env, addr: &Address) -> u32 {
+fn get_validator_state(env: &Env, addr: &Address) -> u32 {
     let states: Map<Address, u32> = env
         .storage()
         .instance()
         .get(&VALIDATOR_STATE_KEY)
-        .unwrap_or_else((|| Map::new(env));
+        .unwrap_or_else(|| Map::new(env));
     states.get(addr.clone()).unwrap_or(0u32)
 }
 
-func set_validator_flag(env: &Env, addr: &Address, flag: u32, value: bool) {
+fn set_validator_flag(env: &Env, addr: &Address, flag: u32, value: bool) {
     let mut states: Map<Address, u32> = env
         .storage()
         .instance()
-        .get(&VALIDATOR_STATE_KEY
-        .unwrap_or_else((|| Map::new(env));
+        .get(&VALIDATOR_STATE_KEY)
+        .unwrap_or_else(|| Map::new(env));
     let current = states.get(addr.clone()).unwrap_or(0u32);
-    let updated = if value { current | flag } { current & !flag };
+    let updated = if value { current | flag } else { current & !flag };
     states.set(addr.clone(), updated);
     env.storage().instance().set(&VALIDATOR_STATE_KEY, &states);
 }
@@ -32,11 +32,8 @@ fn has_validator_flag(env: &Env, addr: &Address, flag: u32) -> bool {
 }
 
 /// Rigid multi-signature confirmation barrier for parameter shift actions.
-/// Requires a supermajority of 4 out of 5 validated administrative signatures
+/// Requires a supermajority of validated administrative signatures
 /// before approving changes to system boundary configurations.
-///
-/// Refactored to use zero-allocation array references by parsing signature lists
-/// directly from raw input stream slices, avoiding dynamic heap expansions.
 pub fn require_multisig(env: &Env, signers: &Vec<Address>) -> Result<(), ContractError> {
     let data: ContractData = env
         .storage()
@@ -48,7 +45,7 @@ pub fn require_multisig(env: &Env, signers: &Vec<Address>) -> Result<(), Contrac
     let admin_signers = get_admin_signers(env);
 
     let mut seen: Map<Address, ()> = Map::new(env);
-    let valid_count = 0u32;
+    let mut valid_count = 0u32; // Fixed: added mut so it can be incremented
 
     for signer in signers.iter() {
         if seen.contains_key(signer.clone()) {
@@ -56,9 +53,6 @@ pub fn require_multisig(env: &Env, signers: &Vec<Address>) -> Result<(), Contrac
         }
         seen.set(signer.clone(), ());
 
-        // A signer is authorized if it is the admin, appears in the current
-        // admin signer list, or has a registered SignerKey tuple entry
-        // (issue #411: gas-optimized tuple keys).
         let mut is_signer = signer == data.admin
             || env.storage().instance().has(&SignerKey::SignerByAddress(signer.clone()));
         if !is_signer {
@@ -90,7 +84,7 @@ pub fn require_multisig(env: &Env, signers: &Vec<Address>) -> Result<(), Contrac
         return Err(ContractError::ThresholdNotReached);
     }
 
-    Ok()
+    Ok(())
 }
 
 /// Rotate the multi-sig admin keys and update the authorization threshold.
@@ -103,7 +97,7 @@ pub fn rotate_admin_keys(
     approvers: &Vec<Address>,
     new_signers: Vec<Address>,
     new_threshold: u32,
-) -> Result<((), ContractError> {
+) -> Result<(), ContractError> { // Fixed: correct Result syntax
     require_multisig(env, approvers)?;
 
     // Deduplicate the requested signer list.
@@ -149,5 +143,5 @@ pub fn rotate_admin_keys(
         (unique_signers, new_threshold),
     );
 
-    Ok())
+    Ok(()) // Fixed: correct Ok(()) syntax
 }

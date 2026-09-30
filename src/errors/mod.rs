@@ -1,7 +1,7 @@
 pub mod codes;
 
 /// Multi-signature proposal related errors.
-#derive(Debug, Clone, PartialEq,q Exq)
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProposalError {
     /// The proposal has expired before reaching the required threshold.
     ProposalExpired,
