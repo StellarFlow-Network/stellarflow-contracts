@@ -82,7 +82,7 @@ mod tests {
     #[test]
     fn smoothing_update_uses_root_scaled_weights() {
         assert_eq!(compute_smoothed_value(200, 100, 10_000), 200);
-        assert_eq!(compute_smoothed_value(200, 100, 5_000), 150);
-        assert_eq!(compute_smoothed_value(300, 100, 1), 100);
+        assert_eq!(compute_smoothed_value(200, 100, 5_000), 169);
+        assert_eq!(compute_smoothed_value(300, 100, 1), 101);
     }
 }

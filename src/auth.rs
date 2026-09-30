@@ -57,7 +57,7 @@ pub fn require_multisig(env: &Env, signers: &Vec<Address>) -> Result<(), Contrac
         }
 
         let state = get_validator_state(env, &signer);
-        let is_authorized = (authorized_signers.contains_key(signer.clone()) || data.admin == *signer)
+        let is_authorized = (authorized_signers.contains_key(signer.clone()) || data.admin == signer)
             && (state & ACTIVE) != 0;
         if !is_authorized {
             continue;

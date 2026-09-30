@@ -193,9 +193,19 @@ pub fn get_price_variance_config(env: &Env) -> PriceVarianceConfig {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use soroban_sdk::{contract, contractimpl, Env, Address};
+    use soroban_sdk::testutils::Address as _;
+
+    #[contract]
+    pub struct DummyContract;
+
+    #[contractimpl]
+    impl DummyContract {}
 
     // ── validate_price_variance_config ────────────────────────────────────────
 
@@ -280,7 +290,6 @@ mod tests {
 
     #[test]
     fn spread_wider_than_deviation_is_rejected() {
-        // spread (600) > deviation (400) violates the ordering invariant.
         let cfg = PriceVarianceConfig {
             max_spread_bps: 600,
             max_deviation_bps: 400,
@@ -316,85 +325,87 @@ mod tests {
 
     #[test]
     fn get_returns_default_before_any_set() {
-        let env = soroban_sdk::Env::default();
-        let cfg = get_price_variance_config(&env);
-        assert_eq!(cfg, PriceVarianceConfig::default());
+        let env = Env::default();
+        let contract_id = env.register_contract(None, DummyContract);
+        env.as_contract(&contract_id, || {
+            let cfg = get_price_variance_config(&env);
+            assert_eq!(cfg, PriceVarianceConfig::default());
+        });
     }
 
     #[test]
     fn set_and_get_round_trips_full_struct() {
-        use soroban_sdk::testutils::Address as _;
-        use soroban_sdk::Address;
-
-        let env = soroban_sdk::Env::default();
+        let env = Env::default();
         env.mock_all_auths();
 
-        // Bootstrap contract state so `set_price_variance_config` can read DATA_KEY.
-        let admin = Address::generate(&env);
-        let data = crate::ContractData {
-            admin: admin.clone(),
-            value: 0,
-        };
-        env.storage().instance().set(&DATA_KEY, &data);
+        let contract_id = env.register_contract(None, DummyContract);
+        env.as_contract(&contract_id, || {
+            let admin = Address::generate(&env);
+            let data = crate::ContractData {
+                admin: admin.clone(),
+                value: 0,
+            };
+            env.storage().instance().set(&DATA_KEY, &data);
 
-        let custom = PriceVarianceConfig {
-            max_spread_bps: 150,
-            max_deviation_bps: 400,
-            min_submission_count: 5,
-            max_submission_age_secs: 120,
-        };
+            let custom = PriceVarianceConfig {
+                max_spread_bps: 150,
+                max_deviation_bps: 400,
+                min_submission_count: 5,
+                max_submission_age_secs: 120,
+            };
 
-        set_price_variance_config(&env, &admin, custom.clone())
-            .expect("set should succeed with valid config");
+            set_price_variance_config(&env, &admin, custom.clone())
+                .expect("set should succeed with valid config");
 
-        let retrieved = get_price_variance_config(&env);
-        assert_eq!(retrieved, custom);
+            let retrieved = get_price_variance_config(&env);
+            assert_eq!(retrieved, custom);
+        });
     }
 
     #[test]
     fn set_rejects_non_admin_caller() {
-        use soroban_sdk::testutils::Address as _;
-        use soroban_sdk::Address;
-
-        let env = soroban_sdk::Env::default();
+        let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(&env);
-        let intruder = Address::generate(&env);
+        let contract_id = env.register_contract(None, DummyContract);
+        env.as_contract(&contract_id, || {
+            let admin = Address::generate(&env);
+            let intruder = Address::generate(&env);
 
-        let data = crate::ContractData {
-            admin: admin.clone(),
-            value: 0,
-        };
-        env.storage().instance().set(&DATA_KEY, &data);
+            let data = crate::ContractData {
+                admin: admin.clone(),
+                value: 0,
+            };
+            env.storage().instance().set(&DATA_KEY, &data);
 
-        let result =
-            set_price_variance_config(&env, &intruder, PriceVarianceConfig::default());
-        assert_eq!(result, Err(ContractError::NotAdmin));
+            let result =
+                set_price_variance_config(&env, &intruder, PriceVarianceConfig::default());
+            assert_eq!(result, Err(ContractError::NotAdmin));
+        });
     }
 
     #[test]
     fn set_rejects_invalid_config() {
-        use soroban_sdk::testutils::Address as _;
-        use soroban_sdk::Address;
-
-        let env = soroban_sdk::Env::default();
+        let env = Env::default();
         env.mock_all_auths();
 
-        let admin = Address::generate(&env);
-        let data = crate::ContractData {
-            admin: admin.clone(),
-            value: 0,
-        };
-        env.storage().instance().set(&DATA_KEY, &data);
+        let contract_id = env.register_contract(None, DummyContract);
+        env.as_contract(&contract_id, || {
+            let admin = Address::generate(&env);
+            let data = crate::ContractData {
+                admin: admin.clone(),
+                value: 0,
+            };
+            env.storage().instance().set(&DATA_KEY, &data);
 
-        let bad = PriceVarianceConfig {
-            max_spread_bps: 0, // violates lower-bound invariant
-            ..PriceVarianceConfig::default()
-        };
-        assert_eq!(
-            set_price_variance_config(&env, &admin, bad),
-            Err(ContractError::InvalidVarianceConfig)
-        );
+            let bad = PriceVarianceConfig {
+                max_spread_bps: 0,
+                ..PriceVarianceConfig::default()
+            };
+            assert_eq!(
+                set_price_variance_config(&env, &admin, bad),
+                Err(ContractError::InvalidVarianceConfig)
+            );
+        });
     }
 }
