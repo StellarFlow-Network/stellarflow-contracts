@@ -637,8 +637,8 @@ mod tests {
 
         assert_eq!(unpacked, original);
 
-        let original_size = std::mem::size_of::<PriceVarianceConfig>();
-        let packed_size = std::mem::size_of::<PackedPriceVarianceConfig>();
+        let original_size = core::mem::size_of::<PriceVarianceConfig>(); 
+    let packed_size = core::mem::size_of::<PackedPriceVarianceConfig>();
 
         assert_eq!(original_size, 20);
         assert_eq!(packed_size, 8);

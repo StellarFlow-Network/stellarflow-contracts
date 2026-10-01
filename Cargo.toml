@@ -70,3 +70,7 @@ lto = true
 
 [patch.crates-io]
 ethnum = { path = "ethnum-patched" }
+
+[features]
+default = []
+testutils = ["soroban-sdk/testutils"]
