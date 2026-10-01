@@ -350,6 +350,25 @@ fn fee_for_volatility(vol_bps: u64, cfg: &AdaptiveFeeConfig) -> u32 {
     ((base + ratio) as u32).clamp(cfg.base_fee_bps, cfg.max_fee_bps)
 }
 
+/// Compute dynamic fee fswap = fbase + (Vsigma * fscalar) constrained to fswap <= 0.01 (100 BPS) (Issue #930).
+pub fn compute_oracle_volatility_fee(
+    f_base: u32,
+    v_sigma: u32,
+    f_scalar: u32,
+) -> Result<u32, ContractError> {
+    const MAX_FEE_BPS: u32 = 100;
+    if f_base > MAX_FEE_BPS {
+        return Err(ContractError::Overflow);
+    }
+    let dynamic_term = (v_sigma as u64)
+        .checked_mul(f_scalar as u64)
+        .ok_or(ContractError::Overflow)?;
+    let total = (f_base as u64)
+        .checked_add(dynamic_term)
+        .ok_or(ContractError::Overflow)?;
+    Ok(total.min(MAX_FEE_BPS as u64) as u32)
+}
+
 /// Exponential-style decay toward baseline using a half-life model that is
 /// integer-safe: `prev * half_life / (half_life + elapsed)`.
 fn decayed_volatility(prev_vol: u64, half_life_secs: u64, elapsed_secs: u64) -> u64 {

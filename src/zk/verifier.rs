@@ -331,6 +331,18 @@ pub fn verify_proof(
     })
 }
 
+/// Verify a deposit note ZK proof guarded by public input verification (Issue #981).
+pub fn verify_deposit_note_proof(
+    env: &Env,
+    proof: &Groth16Proof,
+    vkey: &VerificationKey,
+    public_inputs: &Vec<BytesN<32>>,
+    submitted_params: &crate::zk::public_input_guard::SubmittedDepositParameters,
+) -> Result<VerificationResult, ContractError> {
+    crate::zk::public_input_guard::verify_raw_zk_public_inputs(env, public_inputs, submitted_params)?;
+    verify_proof(env, proof, vkey, public_inputs)
+}
+
 /// Verify a Groth16 proof using a pre-computed pairing commitment.
 ///
 /// The off-chain prover computes the BN254 pairing equation and encodes the

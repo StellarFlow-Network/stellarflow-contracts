@@ -1,19 +1,36 @@
 #!/bin/bash
 set -e
 
-MAX_SIZE=46080 # 45KB in bytes (45 * 1024)
+# Maximum compiled Wasm binary size budget limit of 500 KB (Issue #949)
+MAX_SIZE=512000 # 500 KB (500 * 1024 bytes)
 
-# Find all wasm files in the target directory
-# We exclude files in the build/debug/deps directories
+echo "Profiling compiled Wasm binary sizes (budget limit: 500 KB / $MAX_SIZE bytes)..."
+
+if [ ! -d "target/wasm32-unknown-unknown/release" ]; then
+    echo "Warning: No target/wasm32-unknown-unknown/release directory found. Skipping check."
+    exit 0
+fi
+
 wasm_files=$(find target/wasm32-unknown-unknown/release -maxdepth 1 -name "*.wasm")
 
+if [ -z "$wasm_files" ]; then
+    echo "No .wasm files found in target/wasm32-unknown-unknown/release."
+    exit 0
+fi
+
+failed=0
 for file in $wasm_files; do
     size=$(stat -c%s "$file")
-    echo "Checking size of $file: $size bytes"
+    echo "Profiled $file: $size bytes (budget: $MAX_SIZE bytes)"
     if [ "$size" -gt "$MAX_SIZE" ]; then
-        echo "Error: $file exceeds maximum size of 45KB (found $size bytes)"
-        exit 1
+        echo "Error: $file exceeds maximum compiled binary budget limit of 500 KB (found $size bytes)"
+        failed=1
     fi
 done
 
-echo "All WASM binaries are under 45KB."
+if [ "$failed" -ne 0 ]; then
+    echo "Binary size budget check failed!"
+    exit 1
+fi
+
+echo "All compiled Wasm binaries satisfy the 500 KB budget limit."

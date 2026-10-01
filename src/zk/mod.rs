@@ -3,4 +3,5 @@ pub mod key_update;
 pub mod merkle;
 pub mod nullifier;
 pub mod proving_key;
+pub mod public_input_guard;
 pub mod verifier;
