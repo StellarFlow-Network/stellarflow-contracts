@@ -38,6 +38,13 @@ pub mod prune {
     }
 }
 
+pub mod key_rotation;
+pub use key_rotation::{
+    approve_key_rotation, execute_key_rotation, get_active_admin_keys, get_pending_rotation,
+    initialize_admin_keys, propose_key_rotation, AdminKeysRotatedEvent, KeyRotationStorageKey,
+    PendingKeyRotation, KEY_ROTATION_TIMELOCK_SECONDS,
+};
+
 pub use action_queue::{
     cancel_action, execute_action, get_action_timelock_remaining, get_queued_action,
     queue_admin_action, DynamicFeeConfigParams, FeeCeilingUpdateParams, QueuedActionPayload,
