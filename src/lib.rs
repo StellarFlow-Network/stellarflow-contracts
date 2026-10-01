@@ -207,6 +207,69 @@ pub enum ContractError {
     InvalidProof = 49,
     /// Reentrancy guard detected a reentrant call during execution.
     ReentrancyDetected = 50,
+    ReentrancyDetected = 58,
+    MerkleTreeFull = 59,
+    NotSecurityCouncil = 60,
+    ProposalNotFound = 61,
+    ProposalNotVetoable = 62,
+    ProposalAlreadyVetoed = 63,
+    /// Spot price executed by an AMM swap deviates from the TWAP oracle value
+    /// by more than the governance-configured safety threshold (Issue #743).
+    OracleDeviationTooHigh = 64,
+    /// An oracle deviation guard configuration violates its structural bounds.
+    InvalidOracleDeviationConfig = 65,
+    /// AMM math was called with a structurally invalid input.
+    InvalidInput = 66,
+    /// Circuit breaker configuration violates its structural invariants.
+    InvalidCircuitBreakerConfig = 67,
+    /// Pool trading is currently frozen by the spot-price circuit breaker.
+    CircuitBreakerTripped = 68,
+    /// Deadline for an operation has passed.
+    DeadlineReached = 69,
+    /// Deadline for an operation has not yet been reached.
+    DeadlineNotReached = 70,
+    /// Deadline is too soon (minimum offset not satisfied).
+    DeadlineTooSoon = 71,
+    /// Deadline is too far in the future (maximum offset exceeded).
+    DeadlineTooFar = 72,
+    /// Invalid argument provided to a function.
+    InvalidArgument = 73,
+    /// Invalid asset identifier.
+    InvalidAsset = 74,
+    /// Escrow is in an invalid state for the requested operation.
+    InvalidEscrowState = 75,
+    /// Tick spacing must be a strictly positive integer.
+    InvalidTickSpacing = 76,
+    /// The tick index for this pool already exists.
+    TickIndexAlreadyExists = 77,
+    /// No tick index exists for this pool.
+    TickIndexNotFound = 78,
+    /// Tick must be aligned to the pool's configured tick spacing.
+    TickNotAligned = 79,
+    /// Tick index is outside the allowed price range bounds.
+    TickOutOfBounds = 80,
+    /// Too many initialized ticks for a single pool.
+    TooManyTicks = 81,
+    /// Protected asset (primary pool or vault reserve) cannot be rescued.
+    ProtectedAssetNotRescueable = 82,
+    /// Token rescue proposal was not found.
+    RescueProposalNotFound = 83,
+    /// Token rescue proposal is not pending.
+    RescueProposalNotPending = 84,
+    /// Mandatory timelock delay has not expired yet.
+    RescueTimelockNotExpired = 85,
+    /// Emergency override mechanism is disabled.
+    EmergencyOverrideDisabled = 86,
+    /// Caller is not an authorized emergency signer.
+    NotEmergencySigner = 87,
+    /// Emergency override vote threshold not yet reached.
+    OverrideThresholdNotReached = 81,
+    /// Dynamic remittance fee split configuration is invalid.
+    InvalidFeeSplitConfig = 82,
+    /// A fee allocation does not add up to the original total.
+    FeeDistributionMismatch = 83,
+    /// Public inputs to zero-knowledge proof do not match contract state parameters.
+    InvalidZKPublicInputs = 84,
 }
 
 impl ContractError {
@@ -2438,6 +2501,28 @@ impl TimeLockedUpgradeContract {
         pubkey: BytesN<32>,
     ) -> Result<(), ContractError> {
         bridge::relayer::remove_validator(&env, &admin, pubkey)
+    }
+
+    /// Stake collateral deposit for an active bridge validator (Issue #959).
+    pub fn stake_bridge_validator(
+        env: Env,
+        validator: BytesN<32>,
+        amount: i128,
+    ) -> Result<(), ContractError> {
+        bridge::slashing::stake_validator_collateral(&env, &validator, amount)
+    }
+
+    /// Get current staked collateral deposit for a bridge validator (Issue #959).
+    pub fn get_bridge_validator_collateral(env: Env, validator: BytesN<32>) -> i128 {
+        bridge::slashing::get_validator_collateral(&env, &validator)
+    }
+
+    /// Submit cryptographic double-sign proof to slash offending validator 100% and ban permanently (Issue #959).
+    pub fn submit_double_sign_proof(
+        env: Env,
+        proof: bridge::slashing::DoubleSignProof,
+    ) -> Result<i128, ContractError> {
+        bridge::slashing::process_double_sign_proof(&env, &proof)
     }
 
     // --- Native bridge escrow (Issue #750) ---

@@ -3,8 +3,13 @@
 use soroban_sdk::token::TokenClient;
 use soroban_sdk::{contract, contracterror, contractimpl, symbol_short, Address, Env};
 
+pub mod adaptive_fee_engine;
 pub mod virtual_reserves;
 
+use adaptive_fee_engine::{
+    apply_fee_to_amount_in, compute_dynamic_fee, query_volatility_scalar,
+    AdaptiveFeeConfig, AppliedFeeSnapshot, MAX_DYNAMIC_FEE_BPS,
+};
 use virtual_reserves::{
     assert_k_eff_not_decreased, assert_min_amount_out, assert_withdrawal_allowed_both_sides,
     initial_lp_shares, EffectiveReserves, VirtualReserveError,
@@ -138,6 +143,87 @@ impl AmmContract {
             .instance()
             .set(&symbol_short!("vres_b"), &virtual_b);
         Ok(())
+    }
+
+    /// Configure adaptive swap fee engine based on dynamic volatility oracle (Issue #930).
+    pub fn set_adaptive_fee_config(
+        env: Env,
+        f_base: u32,
+        f_scalar: u32,
+        oracle: Option<Address>,
+        asset_symbol: Option<soroban_sdk::Symbol>,
+    ) -> Result<(), AmmError> {
+        let key_init = symbol_short!("init");
+        if !env.storage().instance().has(&key_init) {
+            return Err(AmmError::NotInitialized);
+        }
+        if f_base > MAX_DYNAMIC_FEE_BPS {
+            return Err(AmmError::ArithmeticOverflow);
+        }
+        let config = AdaptiveFeeConfig {
+            f_base,
+            f_scalar,
+        };
+        env.storage()
+            .instance()
+            .set(&symbol_short!("fee_cfg"), &config);
+
+        if let Some(oracle_addr) = oracle {
+            env.storage()
+                .instance()
+                .set(&symbol_short!("oracle"), &oracle_addr);
+        }
+        if let Some(symbol) = asset_symbol {
+            env.storage()
+                .instance()
+                .set(&symbol_short!("feed_sym"), &symbol);
+        }
+        Ok(())
+    }
+
+    /// Read the installed adaptive fee configuration.
+    pub fn get_adaptive_fee_config(env: Env) -> Option<AdaptiveFeeConfig> {
+        env.storage().instance().get(&symbol_short!("fee_cfg"))
+    }
+
+    /// Set or update the live volatility scalar Vsigma override (Issue #930).
+    pub fn set_volatility_scalar(env: Env, v_sigma: u32) -> Result<(), AmmError> {
+        env.storage()
+            .instance()
+            .set(&symbol_short!("v_sigma"), &v_sigma);
+        Ok(())
+    }
+
+    /// Query the current dynamic fee fswap = min(fbase + (Vsigma * fscalar), 100 BPS) in basis points.
+    pub fn get_dynamic_swap_fee(env: Env) -> u32 {
+        if let Some(config) = env
+            .storage()
+            .instance()
+            .get::<_, AdaptiveFeeConfig>(&symbol_short!("fee_cfg"))
+        {
+            let v_sigma: u32 = env
+                .storage()
+                .instance()
+                .get(&symbol_short!("v_sigma"))
+                .unwrap_or_else(|| {
+                    if let (Some(oracle), Some(sym)) = (
+                        env.storage().instance().get(&symbol_short!("oracle")),
+                        env.storage().instance().get(&symbol_short!("feed_sym")),
+                    ) {
+                        query_volatility_scalar(&env, &oracle, &sym)
+                    } else {
+                        0
+                    }
+                });
+            compute_dynamic_fee(config.f_base, v_sigma, config.f_scalar).unwrap_or(config.f_base)
+        } else {
+            0u32
+        }
+    }
+
+    /// Query the last dynamic fee snapshot applied in swap execution.
+    pub fn get_applied_fee_snapshot(env: Env) -> Option<AppliedFeeSnapshot> {
+        env.storage().instance().get(&symbol_short!("fee_snap"))
     }
 
     pub fn deposit(
@@ -305,10 +391,57 @@ impl AmmContract {
         let before =
             EffectiveReserves::new(reserve_a, reserve_b, virtual_a, virtual_b).map_err(map_virtual)?;
 
+        // Compute adaptive swap fee if configured (Issue #930)
+        let (effective_amount_in, _fee_deducted) = if let Some(config) = env
+            .storage()
+            .instance()
+            .get::<_, AdaptiveFeeConfig>(&symbol_short!("fee_cfg"))
+        {
+            // 1. Query volatility scalar Vsigma from dynamic oracle feed
+            let v_sigma: u32 = env
+                .storage()
+                .instance()
+                .get(&symbol_short!("v_sigma"))
+                .unwrap_or_else(|| {
+                    if let (Some(oracle), Some(sym)) = (
+                        env.storage().instance().get(&symbol_short!("oracle")),
+                        env.storage().instance().get(&symbol_short!("feed_sym")),
+                    ) {
+                        query_volatility_scalar(&env, &oracle, &sym)
+                    } else {
+                        0
+                    }
+                });
+
+            // 2. Compute dynamic fee fswap = fbase + (Vsigma * fscalar) constrained to fswap <= 0.01 (100 BPS)
+            let f_swap = compute_dynamic_fee(config.f_base, v_sigma, config.f_scalar)?;
+
+            // 3. Assert pool swap execution applies updated fee instantly within current ledger
+            let (net_in, fee_amount) = apply_fee_to_amount_in(amount_in, f_swap)?;
+
+            let snapshot = AppliedFeeSnapshot {
+                f_swap,
+                v_sigma,
+                ledger_sequence: env.ledger().sequence(),
+            };
+            env.storage()
+                .instance()
+                .set(&symbol_short!("fee_snap"), &snapshot);
+
+            env.events().publish(
+                (symbol_short!("dyn_fee"), env.ledger().sequence()),
+                (f_swap, v_sigma, fee_amount),
+            );
+
+            (net_in, fee_amount)
+        } else {
+            (amount_in, 0i128)
+        };
+
         // Quote, floor the post-trade reserves and re-check the effective
-        // invariant in one shot.
+        // invariant in one shot using effective_amount_in.
         let (after, amount_out, k_before) =
-            before.swap_a_to_b(amount_in).map_err(map_virtual)?;
+            before.swap_a_to_b(effective_amount_in).map_err(map_virtual)?;
 
         if amount_out <= 0 {
             return Err(AmmError::SlippageExceeded);
@@ -316,14 +449,14 @@ impl AmmContract {
         assert_min_amount_out(amount_out, min_amount_out).map_err(map_virtual)?;
         assert_k_eff_not_decreased(&k_before, &after.k_eff()).map_err(map_virtual)?;
 
-        // --- Execute token transfers ---
+        // Execute token transfers: trader sends full amount_in, receives amount_out
         let token_a = TokenClient::new(&env, &token_a_addr);
         let token_b = TokenClient::new(&env, &token_b_addr);
 
         token_a.transfer(&trader, &env.current_contract_address(), &amount_in);
         token_b.transfer(&env.current_contract_address(), &trader, &amount_out);
 
-        // --- Persist updated reserves ---
+        // Persist updated reserves
         env.storage()
             .instance()
             .set(&symbol_short!("res_a"), &after.x);
@@ -729,5 +862,61 @@ mod test {
         let (amount_a, amount_b) = client.remove_liquidity(&provider, &1000, &0, &0);
         assert_eq!((amount_a, amount_b), (1000, 1000));
         assert_eq!(client.get_reserves(), (1000, 1000));
+    }
+
+    #[test]
+    fn test_adaptive_swap_fee_engine_volatility_oracle() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let token_a = env.register_stellar_asset_contract(Address::generate(&env));
+        let token_b = env.register_stellar_asset_contract(Address::generate(&env));
+        let lp_token = env.register_stellar_asset_contract(Address::generate(&env));
+
+        let contract_id = env.register_contract(None, AmmContract);
+        let client = AmmContractClient::new(&env, &contract_id);
+        client.initialize(&token_a, &token_b, &lp_token);
+
+        // Configure adaptive fee engine: fbase = 20 BPS (0.20%), fscalar = 5
+        client.set_adaptive_fee_config(&20, &5, &None, &None);
+
+        // Simulated volatility scalar Vsigma = 10 from live dynamic oracle feed
+        // fswap = fbase + (Vsigma * fscalar) = 20 + (10 * 5) = 70 BPS (0.70%)
+        client.set_volatility_scalar(&10);
+        assert_eq!(client.get_dynamic_swap_fee(), 70);
+
+        // High volatility: Vsigma = 25 -> 20 + 125 = 145 BPS -> capped to fswap <= 0.01 (100 BPS)
+        client.set_volatility_scalar(&25);
+        assert_eq!(client.get_dynamic_swap_fee(), 100);
+
+        // Set back to Vsigma = 10 for swap execution test
+        client.set_volatility_scalar(&10);
+
+        // Deposit liquidity into pool
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&symbol_short!("res_a"), &100_000i128);
+            env.storage().instance().set(&symbol_short!("res_b"), &100_000i128);
+            env.storage().instance().set(&symbol_short!("tot_sh"), &100_000i128);
+        });
+
+        let trader = Address::generate(&env);
+        soroban_sdk::token::StellarAssetClient::new(&env, &token_a).mint(&trader, &10_000);
+        soroban_sdk::token::StellarAssetClient::new(&env, &token_b).mint(&contract_id, &100_000);
+
+        // Set ledger sequence to 500
+        env.ledger().set(soroban_sdk::testutils::LedgerInfo {
+            sequence_number: 500,
+            ..env.ledger().get()
+        });
+
+        // Execute swap: pool swap execution applies updated fee instantly within current ledger
+        let amount_out = client.swap(&trader, &10_000, &1);
+        assert!(amount_out > 0);
+
+        // Verify applied fee snapshot matches current ledger sequence 500 and fswap = 70 BPS
+        let snapshot = client.get_applied_fee_snapshot().unwrap();
+        assert_eq!(snapshot.f_swap, 70);
+        assert_eq!(snapshot.v_sigma, 10);
+        assert_eq!(snapshot.ledger_sequence, 500);
     }
 }

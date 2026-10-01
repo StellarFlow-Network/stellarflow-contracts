@@ -43,8 +43,20 @@ pub fn configure_threshold(
     Ok(())
 }
 
+pub fn is_validator(env: &Env, pubkey: &BytesN<32>) -> bool {
+    env.storage().instance().has(&RelayerStorageKey::Validator(pubkey.clone()))
+}
+
+pub fn remove_validator_direct(env: &Env, pubkey: &BytesN<32>) {
+    env.storage().instance().remove(&RelayerStorageKey::Validator(pubkey.clone()));
+}
+
 pub fn add_validator(env: &Env, admin: &Address, pubkey: BytesN<32>) -> Result<(), ContractError> {
     require_protocol_admin(env, admin)?;
+
+    if crate::bridge::slashing::is_validator_banned(env, &pubkey) {
+        return Err(ContractError::Unauthorized);
+    }
 
     let key = RelayerStorageKey::Validator(pubkey);
 

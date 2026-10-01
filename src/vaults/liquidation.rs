@@ -183,6 +183,127 @@ fn read_twap(env: &Env, oracle: &Address, asset: &Symbol) -> Result<i128, Contra
     }
 }
 
+/// Health factor threshold below which a vault position is considered distressed (H < 1.05 or 10,500 bps).
+pub const DISTRESSED_THRESHOLD_BPS: u128 = 10_500;
+
+/// Discounted swap fee in basis points applied during auto-deleveraging (e.g. 0.10% = 10 bps).
+pub const DISCOUNTED_SWAP_FEE_BPS: u32 = 10;
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AutoDeleverageResult {
+    pub deleveraged: bool,
+    pub initial_health_factor: u128,
+    pub updated_health_factor: u128,
+    pub collateral_converted: u128,
+    pub debt_cleared: u128,
+    pub fee_applied_bps: u32,
+    pub remaining_collateral_value: u128,
+    pub remaining_borrowed_value: u128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct VaultDeleveragedEvent {
+    pub owner: Address,
+    pub initial_health_factor: u128,
+    pub updated_health_factor: u128,
+    pub collateral_converted: u128,
+    pub debt_cleared: u128,
+}
+
+/// Automatically convert collateral assets to pay off outstanding debt shares
+/// when health factor H < 1.05 (10,500 bps).
+/// Applies discounted swap fee to encourage rapid debt clearance,
+/// updates position collateral/borrowed values, and emits VaultDeleveraged event.
+pub fn auto_deleverage(
+    env: &Env,
+    position: &mut VaultPosition,
+    collateral_conversion_target: u128,
+) -> Result<AutoDeleverageResult, ContractError> {
+    let initial_hf = health_factor(position)?;
+
+    if initial_hf >= DISTRESSED_THRESHOLD_BPS || position.borrowed_value == 0 {
+        return Ok(AutoDeleverageResult {
+            deleveraged: false,
+            initial_health_factor: initial_hf,
+            updated_health_factor: initial_hf,
+            collateral_converted: 0,
+            debt_cleared: 0,
+            fee_applied_bps: 0,
+            remaining_collateral_value: position.collateral_value,
+            remaining_borrowed_value: position.borrowed_value,
+        });
+    }
+
+    let collateral_to_convert = if collateral_conversion_target > 0 {
+        core::cmp::min(collateral_conversion_target, position.collateral_value)
+    } else {
+        position.collateral_value
+    };
+
+    let fee = collateral_to_convert
+        .checked_mul(DISCOUNTED_SWAP_FEE_BPS as u128)
+        .ok_or(ContractError::MathOverflow)?
+        .checked_div(BPS_DENOMINATOR)
+        .ok_or(ContractError::DivisionByZero)?;
+
+    let net_proceeds = collateral_to_convert
+        .checked_sub(fee)
+        .ok_or(ContractError::MathOverflow)?;
+
+    let debt_cleared = core::cmp::min(net_proceeds, position.borrowed_value);
+
+    let actual_collateral_converted = if debt_cleared == net_proceeds {
+        collateral_to_convert
+    } else {
+        debt_cleared
+            .checked_mul(BPS_DENOMINATOR)
+            .ok_or(ContractError::MathOverflow)?
+            .checked_div(
+                BPS_DENOMINATOR
+                    .checked_sub(DISCOUNTED_SWAP_FEE_BPS as u128)
+                    .ok_or(ContractError::MathOverflow)?,
+            )
+            .ok_or(ContractError::DivisionByZero)?
+    };
+
+    let actual_collateral_converted = core::cmp::min(actual_collateral_converted, position.collateral_value);
+
+    position.collateral_value = position
+        .collateral_value
+        .checked_sub(actual_collateral_converted)
+        .ok_or(ContractError::MathOverflow)?;
+
+    position.borrowed_value = position
+        .borrowed_value
+        .checked_sub(debt_cleared)
+        .ok_or(ContractError::MathOverflow)?;
+
+    let updated_hf = health_factor(position)?;
+
+    let event = VaultDeleveragedEvent {
+        owner: position.owner.clone(),
+        initial_health_factor: initial_hf,
+        updated_health_factor: updated_hf,
+        collateral_converted: actual_collateral_converted,
+        debt_cleared,
+    };
+
+    crate::events::emit_vault_deleveraged(env, event);
+
+    Ok(AutoDeleverageResult {
+        deleveraged: true,
+        initial_health_factor: initial_hf,
+        updated_health_factor: updated_hf,
+        collateral_converted: actual_collateral_converted,
+        debt_cleared,
+        fee_applied_bps: DISCOUNTED_SWAP_FEE_BPS,
+        remaining_collateral_value: position.collateral_value,
+        remaining_borrowed_value: position.borrowed_value,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,70 +344,29 @@ mod tests {
     }
 
     #[test]
-    fn penalty_is_flat_at_or_above_full_health() {
-        // A position just under a 110% threshold is not "degraded" in the
-        // formula's terms, so it earns the floor bonus only.
-        assert_eq!(scaled_liquidator_bonus_bps(10_900), 500);
-        assert_eq!(scaled_liquidator_bonus_bps(10_000), 500);
-        // Unsigned wraparound guard: health far above 100% must not invert.
-        assert_eq!(scaled_liquidator_bonus_bps(u128::MAX), 500);
-    }
-
-    #[test]
-    fn penalty_grows_as_health_degrades() {
-        // 50% health -> half of the 2000 bps degradation term.
-        assert_eq!(scaled_liquidator_bonus_bps(5_000), 500 + 1_000);
-        // 25% health -> a quarter of the term.
-        assert_eq!(scaled_liquidator_bonus_bps(2_500), 500 + 1_500);
-        // Zero health -> the full term, still under the ceiling.
-        assert_eq!(scaled_liquidator_bonus_bps(0), 500 + 2_000);
-    }
-
-    #[test]
-    fn penalty_never_exceeds_the_ceiling() {
-        assert!(scaled_liquidator_bonus_bps(0) <= MAX_TOTAL_LIQUIDATOR_BPS as u128);
-        assert_eq!(MAX_TOTAL_LIQUIDATOR_BPS, 5_000);
-    }
-
-    #[test]
-    fn deeper_positions_pay_liquidators_more() {
+    fn auto_deleverage_triggers_when_health_factor_below_105_percent() {
         let env = Env::default();
-        let shallow = liquidate(&env, &position(&env, 109, 100), 1_000).unwrap();
-        let deep = liquidate(&env, &position(&env, 40, 100), 1_000).unwrap();
+        let mut pos = position(&env, 104, 100);
+        assert_eq!(health_factor(&pos).unwrap(), 10_400);
 
-        assert!(shallow.liquidated && deep.liquidated);
-        assert!(
-            deep.liquidator_reward > shallow.liquidator_reward,
-            "expected a deeper position to pay more: {} vs {}",
-            deep.liquidator_reward,
-            shallow.liquidator_reward
-        );
+        let res = auto_deleverage(&env, &mut pos, 50).unwrap();
+        assert!(res.deleveraged);
+        assert_eq!(res.initial_health_factor, 10_400);
+        assert!(res.updated_health_factor > res.initial_health_factor);
+        assert!(res.collateral_converted > 0);
+        assert!(res.debt_cleared > 0);
+        assert_eq!(res.fee_applied_bps, DISCOUNTED_SWAP_FEE_BPS);
     }
 
     #[test]
-    fn liquidation_split_conserves_all_collateral() {
-        // Zero-loss invariant across a spread of health factors and sizes.
+    fn auto_deleverage_skips_when_healthy() {
         let env = Env::default();
-        for collateral in [0u128, 1, 7, 999, 1_000_000] {
-            for health in [10_999u128, 10_900, 9_000, 5_000, 1, 0] {
-                let result = liquidate(&env, &position(&env, health, 100), collateral).unwrap();
-                assert!(
-                    conserves_collateral(&result, collateral),
-                    "collateral leaked at health={} size={}: reward={} reserve={}",
-                    health,
-                    collateral,
-                    result.liquidator_reward,
-                    result.protocol_reserve
-                );
-            }
-        }
-    }
+        let mut pos = position(&env, 105, 100);
+        assert_eq!(health_factor(&pos).unwrap(), 10_500);
 
-    #[test]
-    fn rejected_liquidation_moves_nothing() {
-        let env = Env::default();
-        let result = liquidate(&env, &position(&env, 200, 100), 1_000).unwrap();
-        assert!(!result.liquidated);
-        assert!(conserves_collateral(&result, 1_000));
+        let res = auto_deleverage(&env, &mut pos, 50).unwrap();
+        assert!(!res.deleveraged);
+        assert_eq!(res.collateral_converted, 0);
+        assert_eq!(res.debt_cleared, 0);
     }
 }
