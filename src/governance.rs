@@ -7,7 +7,7 @@
 //!
 //! The handler also supports direct admin cancellation for emergency scenarios.
 
-use soroban_sdk::{contracttype, symbol_short, Address, BytesN, Env, Map, Symbol};
+use soroban_sdk::{contracttype, symbol_short, Address, BytesN, Env, Map, Symbol, Vec};
 
 pub(crate) const VALIDATORS_KEY: Symbol = symbol_short!("VALIDS");
 pub(crate) const VALIDATOR_SEQUENCE_KEY: Symbol = symbol_short!("VALSEQ");

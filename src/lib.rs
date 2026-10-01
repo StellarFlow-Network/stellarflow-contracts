@@ -96,7 +96,10 @@ pub mod storage;
 pub mod token;
 pub mod upgrades;
 pub mod validation;
+pub mod vaults;
 pub mod veto;
+pub mod voting_delegation;
+pub use voting_delegation::*;
 pub mod zk;
 pub use state_verification::{
     assert_contract_state_sanity, verify_contract_state, verify_storage_ttl_bumps,
