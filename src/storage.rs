@@ -7,6 +7,8 @@
 use crate::NodeProfile;
 use soroban_sdk::{contracttype, Address, Env, Map, Symbol};
 
+pub mod ephemeral;
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {

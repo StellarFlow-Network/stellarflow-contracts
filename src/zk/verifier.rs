@@ -24,7 +24,7 @@ use crate::ContractError;
 // ---------------------------------------------------------------------------
 
 /// Domain separator to prevent cross-contract replay attacks.
-const DOMAIN_SEPARATOR: Symbol = symbol_short!("ZK_GROTH16");
+const DOMAIN_SEPARATOR: Symbol = symbol_short!("ZK_G16");
 
 /// Maximum number of public inputs allowed to bound computation.
 const MAX_PUBLIC_INPUTS: u32 = 32;

@@ -352,6 +352,17 @@ pub fn rotate_admin_keys(
     Ok(())
 }
 
+pub fn has_duplicate_addresses(addresses: &Vec<Address>) -> bool {
+    for i in 0..addresses.len() {
+        for j in (i + 1)..addresses.len() {
+            if addresses.get(i) == addresses.get(j) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 // ── Storage accessors ─────────────────────────────────────────────────────────
 
 /// Write the complete variance configuration to instance storage, replacing

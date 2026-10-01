@@ -11,7 +11,7 @@ use soroban_sdk::{contracttype, symbol_short, Address, BytesN, Env, Map, Symbol}
 
 pub(crate) const VALIDATORS_KEY: Symbol = symbol_short!("VALIDS");
 pub(crate) const VALIDATOR_SEQUENCE_KEY: Symbol = symbol_short!("VALSEQ");
-pub(crate) const BRIDGE_VALIDATORS_UPDATED_EVENT: Symbol = symbol_short!("BridgeValidatorsUpdated");
+pub(crate) const BRIDGE_VALIDATORS_UPDATED_EVENT: Symbol = symbol_short!("val_updt");
 
 #[contracttype]
 #[derive(Clone)]
@@ -21,6 +21,72 @@ pub struct StagedUpgrade {
 }
 
 use crate::ContractError;
+
+#[contracttype]
+#[derive(Clone)]
+pub enum BallotKey {
+    Proposal(Symbol),
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MultiSigConfig {
+    pub signers: Vec<Address>,
+    pub threshold: u32,
+    pub max_signer_weight: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GovernanceConfig {
+    pub delay: u32,
+}
+
+pub(crate) const GOVERNANCE_UPGRADE_KEY: Symbol = symbol_short!("GOVUPG");
+
+pub fn get_ballot(env: &Env, proposal_id: Symbol) -> Option<VotingBallot> {
+    let key = BallotKey::Proposal(proposal_id);
+    env.storage().temporary().get(&key)
+}
+
+pub fn verify_upgrade_quorum(env: &Env, signers: &Vec<Address>) -> Result<(), ContractError> {
+    let config = get_multisig_config(env);
+    if (signers.len() as u32) < config.threshold {
+        return Err(ContractError::ThresholdNotReached);
+    }
+    Ok(())
+}
+
+pub fn get_multisig_config(env: &Env) -> MultiSigConfig {
+    env.storage()
+        .instance()
+        .get(&crate::SIGNERS_KEY)
+        .unwrap_or(MultiSigConfig {
+            signers: Vec::new(env),
+            threshold: 1,
+            max_signer_weight: 1,
+        })
+}
+
+pub fn set_multisig_config(env: &Env, config: &MultiSigConfig) {
+    env.storage().instance().set(&crate::SIGNERS_KEY, config);
+}
+
+pub fn set_governance_config(env: &Env, config: &GovernanceConfig) {
+    env.storage().instance().set(&GOVERNANCE_PROPOSAL_KEY, config);
+}
+
+pub fn _load_proposal(env: &Env) -> Result<GovernanceUpgradeProposal, ContractError> {
+    env.storage()
+        .instance()
+        .get(&GOVERNANCE_UPGRADE_KEY)
+        .ok_or(ContractError::NoActiveProposal)
+}
+
+pub fn _cancellation_threshold_for_signers(env: &Env, _key: &Symbol) -> u32 {
+    let config = get_multisig_config(env);
+    cancellation_threshold(config.signers.len() as u32)
+}
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -314,8 +380,8 @@ pub fn is_proposal_executable(env: &Env, proposal_id: u64) -> bool {
     {
         Some(proposal) if proposal.proposal_id == proposal_id => {
             proposal.status == ProposalStatus::Executable
-                || (proposal.status == ProposalStatus::Pending
-                    && verify_staged_delay(proposal.staged_at, env.ledger().sequence()))
+                && (proposal.status == ProposalStatus::Pending
+                    && verify_staged_ledger_delay(proposal.staged_at, env.ledger().sequence()))
         }
         _ => false,
     }
@@ -380,7 +446,7 @@ pub fn verify_staged_delay(staged_at: u64, current_time: u64, delay_seconds: u64
 
 /// Verify that at least `MIN_LEDGER_DELAY` ledger sequences have elapsed
 /// since `staged_at`.
-pub fn verify_staged_delay(staged_at: u32, current_ledger: u32) -> bool {
+pub fn verify_staged_ledger_delay(staged_at: u32, current_ledger: u32) -> bool {
     current_ledger.saturating_sub(staged_at) >= MIN_LEDGER_DELAY
 }
 
@@ -809,11 +875,11 @@ mod tests {
 
     #[test]
     fn test_staged_delay_verification() {
-        assert!(verify_staged_delay(0, MIN_LEDGER_DELAY));
-        assert!(verify_staged_delay(0, MIN_LEDGER_DELAY + 1));
-        assert!(!verify_staged_delay(0, MIN_LEDGER_DELAY - 1));
-        assert!(verify_staged_delay(100, 100 + MIN_LEDGER_DELAY));
-        assert!(!verify_staged_delay(100, 100 + MIN_LEDGER_DELAY - 1));
+        assert!(verify_staged_ledger_delay(0, MIN_LEDGER_DELAY));
+        assert!(verify_staged_ledger_delay(0, MIN_LEDGER_DELAY + 1));
+        assert!(!verify_staged_ledger_delay(0, MIN_LEDGER_DELAY - 1));
+        assert!(verify_staged_ledger_delay(100, 100 + MIN_LEDGER_DELAY));
+        assert!(!verify_staged_ledger_delay(100, 100 + MIN_LEDGER_DELAY - 1));
     }
 
     #[test]

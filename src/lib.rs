@@ -78,7 +78,6 @@ pub mod errors;
 pub mod events;
 pub mod fees;
 pub mod temp_governance;
-use crate::validation::check_bond_capacity;
 pub mod governance;
 pub mod math;
 pub mod oracle_attestation;
@@ -94,10 +93,10 @@ pub mod staging;
 pub mod staking_tiers;
 pub mod state_verification;
 pub mod storage;
-pub mod temp_governance;
 pub mod token;
 pub mod upgrades;
 pub mod validation;
+pub mod veto;
 pub mod zk;
 pub use state_verification::{
     assert_contract_state_sanity, verify_contract_state, verify_storage_ttl_bumps,
@@ -115,7 +114,7 @@ use crate::slashing::{
 use crate::staking_tiers::{
     assign_tier, effective_volume_score, required_stake_for_tier, validate_tier_config,
 };
-use crate::storage::{NodeProfileKey, SignerKey, StakeKey, HeartbeatKey};
+use crate::storage::{NodeProfileKey, SignerKey, StakeKey};
 use crate::validation::{
     check_bond_capacity, check_liquidity_depth, process_price_bundle, validate_telemetry_submission,
     AssetPriceUpdate, BundleValidationOutcome,
@@ -201,67 +200,7 @@ pub enum ContractError {
     AmountTooLow = 48,
     InvalidProof = 49,
     /// Reentrancy guard detected a reentrant call during execution.
-    ReentrancyDetected = 58,
-    MerkleTreeFull = 59,
-    NotSecurityCouncil = 60,
-    ProposalNotFound = 61,
-    ProposalNotVetoable = 62,
-    ProposalAlreadyVetoed = 63,
-    /// Spot price executed by an AMM swap deviates from the TWAP oracle value
-    /// by more than the governance-configured safety threshold (Issue #743).
-    OracleDeviationTooHigh = 64,
-    /// An oracle deviation guard configuration violates its structural bounds.
-    InvalidOracleDeviationConfig = 65,
-    /// AMM math was called with a structurally invalid input.
-    InvalidInput = 66,
-    /// Circuit breaker configuration violates its structural invariants.
-    InvalidCircuitBreakerConfig = 67,
-    /// Pool trading is currently frozen by the spot-price circuit breaker.
-    CircuitBreakerTripped = 68,
-    /// Deadline for an operation has passed.
-    DeadlineReached = 69,
-    /// Deadline for an operation has not yet been reached.
-    DeadlineNotReached = 70,
-    /// Deadline is too soon (minimum offset not satisfied).
-    DeadlineTooSoon = 71,
-    /// Deadline is too far in the future (maximum offset exceeded).
-    DeadlineTooFar = 72,
-    /// Invalid argument provided to a function.
-    InvalidArgument = 73,
-    /// Invalid asset identifier.
-    InvalidAsset = 74,
-    /// Escrow is in an invalid state for the requested operation.
-    InvalidEscrowState = 75,
-    /// Tick spacing must be a strictly positive integer.
-    InvalidTickSpacing = 76,
-    /// The tick index for this pool already exists.
-    TickIndexAlreadyExists = 77,
-    /// No tick index exists for this pool.
-    TickIndexNotFound = 78,
-    /// Tick must be aligned to the pool's configured tick spacing.
-    TickNotAligned = 79,
-    /// Tick index is outside the allowed price range bounds.
-    TickOutOfBounds = 80,
-    /// Too many initialized ticks for a single pool.
-    TooManyTicks = 81,
-    /// Protected asset (primary pool or vault reserve) cannot be rescued.
-    ProtectedAssetNotRescueable = 82,
-    /// Token rescue proposal was not found.
-    RescueProposalNotFound = 83,
-    /// Token rescue proposal is not pending.
-    RescueProposalNotPending = 84,
-    /// Mandatory timelock delay has not expired yet.
-    RescueTimelockNotExpired = 85,
-    /// Emergency override mechanism is disabled.
-    EmergencyOverrideDisabled = 86,
-    /// Caller is not an authorized emergency signer.
-    NotEmergencySigner = 87,
-    /// Emergency override vote threshold not yet reached.
-    OverrideThresholdNotReached = 81,
-    /// Dynamic remittance fee split configuration is invalid.
-    InvalidFeeSplitConfig = 82,
-    /// A fee allocation does not add up to the original total.
-    FeeDistributionMismatch = 83,
+    ReentrancyDetected = 50,
 }
 
 impl ContractError {
@@ -331,7 +270,6 @@ const TOTAL_STAKED_KEY: Symbol = symbol_short!("TOTAL");
 const HEARTBEAT_KEY: Symbol = symbol_short!("HBEAT");
 const HB_INTERVAL_KEY: Symbol = symbol_short!("HBINTV");
 pub(crate) const DEFAULT_HEARTBEAT_INTERVAL: u64 = 5 * 60;
-pub(crate) const SIGNERS_KEY: Symbol = symbol_short!("SIGNERS");
 const REVOCATION_KEY: Symbol = symbol_short!("REVOKE");
 // Emergency key revocation / blocking
 pub(crate) const REVOKED_SIGNER_KEY: Symbol = symbol_short!("REVOKED");
@@ -350,7 +288,6 @@ pub const FEE_TIER_030_BPS: u32 = 30;
 pub const FEE_TIER_100_BPS: u32 = 100;
 pub const DEFAULT_FEE_TIER_BPS: u32 = FEE_TIER_030_BPS;
 const SEQUENCE_COUNTER_KEY: Symbol = symbol_short!("SEQCTR");
-const REVOCATION_KEY: Symbol = symbol_short!("REVOKE");
 const RECOVERY_KEY: Symbol = symbol_short!("RKEY");
 const LAST_ADMIN_ACTIVITY: Symbol = symbol_short!("LASTACT");
 
@@ -526,6 +463,7 @@ pub enum LiquidityPoolFeeKey {
 #[contract]
 pub struct TimeLockedUpgradeContract;
 
+#[contractimpl]
 impl TimeLockedUpgradeContract {
     pub(crate) fn load_data(env: &Env) -> Result<ContractData, crate::ContractError> {
         let _ = ensure_schema_version(env);
@@ -535,10 +473,7 @@ impl TimeLockedUpgradeContract {
     pub(crate) fn _load_data(env: &Env) -> Result<ContractData, crate::ContractError> {
         Self::load_data(env)
     }
-}
 
-#[contractimpl]
-impl TimeLockedUpgradeContract {
     /// Atomically consume a nullifier for a private transfer.
     ///
     /// The persistent key is checked and written in this invocation, so a
@@ -881,7 +816,7 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn set_current_wasm(env: Env, admin: Address, wasm_hash: BytesN<32>) -> Result<(), ContractError> {
-        let data = Self::_load_data(&env)?;
+        let data = TimeLockedUpgradeContract::_load_data(&env)?;
         if data.admin != admin { return Err(ContractError::NotAdmin); }
         admin.require_auth();
         env.storage().instance().set(&crate::upgrades::rollback::CURRENT_WASM_KEY, &wasm_hash);
@@ -2758,7 +2693,7 @@ impl TimeLockedUpgradeContract {
         admin: Address,
         default_tier_bps: u32,
     ) -> Result<FeeTierController, ContractError> {
-        let data = Self::_load_data(&env)?;
+        let data = TimeLockedUpgradeContract::_load_data(&env)?;
         if data.admin != admin {
             return Err(ContractError::NotAdmin);
         }
@@ -2990,7 +2925,7 @@ impl TimeLockedUpgradeContract {
         caller: Address,
         vkey: zk::verifier::VerificationKey,
     ) -> Result<(), ContractError> {
-        let data = Self::_load_data(&env)?;
+        let data = TimeLockedUpgradeContract::_load_data(&env)?;
         if data.admin != caller {
             return Err(ContractError::NotAdmin);
         }
@@ -3012,7 +2947,7 @@ impl TimeLockedUpgradeContract {
         caller: Address,
         circuit_id: BytesN<32>,
     ) -> Result<(), ContractError> {
-        let data = Self::_load_data(&env)?;
+        let data = TimeLockedUpgradeContract::_load_data(&env)?;
         if data.admin != caller {
             return Err(ContractError::NotAdmin);
         }
