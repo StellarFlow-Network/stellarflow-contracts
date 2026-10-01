@@ -55,8 +55,6 @@ pub struct LimitOrder {
     /// Expiry ledger sequence; zero means the order does not expire.
     pub expiry: u32,
     pub active: bool,
-    /// Bid (Buy) or ask (Sell) side of the book.
-    pub side: OrderSide,
 }
 
 #[contracttype]

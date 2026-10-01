@@ -2,7 +2,9 @@
 
 mod math;
 
-use soroban_sdk::{contract, contractimpl, contracttype, Env};
+use soroban_sdk::{
+    contract, contractclient, contracterror, contractimpl, contracttype, Address, Env,
+};
 
 use crate::math::compute_smoothed_value;
 
@@ -12,6 +14,18 @@ use crate::math::compute_smoothed_value;
 pub struct AssetId(pub u32);
 
 const ALPHA_SCALE: i128 = 10_000;
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum RebalanceError {
+    NotProfitable = 1,
+}
+
+#[contractclient(name = "YieldStrategyClient")]
+pub trait YieldStrategy {
+    fn rebalance(env: Env);
+}
 
 #[derive(Clone)]
 #[contracttype]
@@ -79,5 +93,136 @@ impl AnalyticsEngine {
         } else {
             0
         }
+    }
+
+    pub fn is_rebalance_profitable(
+        _env: Env,
+        expected_yield_delta: i128,
+        gas_rebalance: i128,
+        safety_multiplier: i128,
+    ) -> bool {
+        if expected_yield_delta < 0 || gas_rebalance < 0 || safety_multiplier < 0 {
+            return false;
+        }
+
+        match gas_rebalance.checked_mul(safety_multiplier) {
+            Some(threshold) => expected_yield_delta > threshold,
+            None => false,
+        }
+    }
+
+    pub fn rebalance(
+        env: Env,
+        strategy: Address,
+        expected_yield_delta: i128,
+        gas_rebalance: i128,
+        safety_multiplier: i128,
+    ) -> Result<(), RebalanceError> {
+        if !Self::is_rebalance_profitable(
+            env.clone(),
+            expected_yield_delta,
+            gas_rebalance,
+            safety_multiplier,
+        ) {
+            return Err(RebalanceError::NotProfitable);
+        }
+
+        YieldStrategyClient::new(&env, &strategy).rebalance();
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::{contract, contractimpl, contracttype, Env};
+
+    #[contracttype]
+    enum MockKey {
+        RebalanceCount,
+    }
+
+    #[contract]
+    struct MockYieldStrategy;
+
+    #[contractimpl]
+    impl MockYieldStrategy {
+        pub fn rebalance(env: Env) {
+            let count: u32 = env
+                .storage()
+                .instance()
+                .get(&MockKey::RebalanceCount)
+                .unwrap_or(0);
+            env.storage()
+                .instance()
+                .set(&MockKey::RebalanceCount, &(count + 1));
+        }
+
+        pub fn rebalance_count(env: Env) -> u32 {
+            env.storage()
+                .instance()
+                .get(&MockKey::RebalanceCount)
+                .unwrap_or(0)
+        }
+    }
+
+    #[test]
+    fn rebalance_requires_yield_delta_above_gas_threshold() {
+        let env = Env::default();
+
+        assert!(AnalyticsEngine::is_rebalance_profitable(
+            env.clone(),
+            101,
+            10,
+            10
+        ));
+        assert!(!AnalyticsEngine::is_rebalance_profitable(
+            env.clone(),
+            100,
+            10,
+            10
+        ));
+        assert!(!AnalyticsEngine::is_rebalance_profitable(env, 99, 10, 10));
+    }
+
+    #[test]
+    fn manual_rebalance_rejects_unprofitable_attempt() {
+        let env = Env::default();
+        let strategy = env.register_contract(None, MockYieldStrategy);
+        let strategy_client = MockYieldStrategyClient::new(&env, &strategy);
+        let engine = env.register_contract(None, AnalyticsEngine);
+        let engine_client = AnalyticsEngineClient::new(&env, &engine);
+
+        assert_eq!(
+            engine_client.try_rebalance(&strategy, &100, &10, &10),
+            Err(Ok(RebalanceError::NotProfitable))
+        );
+        assert_eq!(strategy_client.rebalance_count(), 0);
+    }
+
+    #[test]
+    fn profitable_rebalance_calls_strategy() {
+        let env = Env::default();
+        let strategy = env.register_contract(None, MockYieldStrategy);
+        let strategy_client = MockYieldStrategyClient::new(&env, &strategy);
+        let engine = env.register_contract(None, AnalyticsEngine);
+        let engine_client = AnalyticsEngineClient::new(&env, &engine);
+
+        engine_client.rebalance(&strategy, &101, &10, &10);
+
+        assert_eq!(strategy_client.rebalance_count(), 1);
+    }
+
+    #[test]
+    fn rebalance_rejects_threshold_overflow() {
+        let env = Env::default();
+
+        assert!(!AnalyticsEngine::is_rebalance_profitable(
+            env,
+            i128::MAX,
+            i128::MAX,
+            2
+        ));
     }
 }

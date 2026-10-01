@@ -441,7 +441,6 @@ pub enum StakingStorageKey {
 
 // Storage key newtype wrappers
 #[contracttype] pub struct HeartbeatKey(pub AssetId);
-#[contracttype] pub struct CorridorFeeKey(pub Symbol);
 
 // CorridorFeePool is imported/used from the fees module
 
@@ -3059,6 +3058,7 @@ impl TimeLockedUpgradeContract {
 #[cfg(test)]
 mod query_guardrail_tests {
     use super::*;
+    use crate::ContractError;
     use soroban_sdk::{Env, symbol_short};
     use soroban_sdk::testutils::{Address as _, Ledger, LedgerInfo};
 

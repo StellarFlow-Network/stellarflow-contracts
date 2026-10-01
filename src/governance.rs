@@ -281,16 +281,6 @@ pub fn rotate_admin_keys(
     Ok(())
 }
 
-#[contracttype]
-#[derive(Clone)]
-pub struct StagedUpgrade {
-    pub new_wasm_hash: BytesN<32>,
-    pub proposer: Address,
-    pub staged_at: u64,
-    /// Earliest ledger timestamp at which the replacement may execute.
-    pub execute_at: u64,
-}
-
 /// Return the number of ledger sequences remaining before a governance
 /// proposal's timelock elapses and it becomes eligible for execution.
 ///

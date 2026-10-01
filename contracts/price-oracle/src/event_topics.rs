@@ -5,7 +5,7 @@
 use soroban_sdk::{symbol_short, Address, Env, String, Symbol};
 
 // Event topic constants for dynamic slippage protection
-pub const VOLATILITY: Symbol = symbol_short!("volatility");
+pub const VOLATILITY: Symbol = symbol_short!("volatilit");
 pub const UPDATED: Symbol = symbol_short!("updated");
 pub const SWAP: Symbol = symbol_short!("swap");
 pub const EXECUTED: Symbol = symbol_short!("executed");
