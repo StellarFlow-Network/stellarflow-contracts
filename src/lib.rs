@@ -380,6 +380,93 @@ impl ContractError {
 
     /// Canonical alias: operation failed due to insufficient token balance.
     pub const InsufficientBalance: Self = Self::InsufficientReserveBalance;
+
+    // ── Aliases recovered from prior feature commits whose const-alias
+    // additions to this enum were lost in a later merge.
+    pub const CommitmentExpired: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const CommitmentHashMismatch: Self = Self::InvalidSaltSignature;
+    pub const CommitmentNotActive: Self = Self::Unauthorized;
+    pub const CommitmentNotExpired: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const CommitmentNotFound: Self = Self::NotRegistered;
+    pub const CommitmentNotRevealWindow: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const CommitmentWindowTooLong: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const CommitmentWindowTooShort: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const DeadlineNotReached: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const DeadlineReached: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const DeadlineTooFar: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const DeadlineTooSoon: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const EventTopicLimitExceeded: Self = Self::Overflow;
+    pub const HtlcNotActive: Self = Self::Unauthorized;
+    pub const HtlcNotFound: Self = Self::NotRegistered;
+    pub const InvalidArgument: Self = Self::NotInitialized;
+    pub const InvalidPreImage: Self = Self::InvalidSaltSignature;
+    pub const NoPreviousUpgrade: Self = Self::NotRegistered;
+    pub const NotEmergencyAdmin: Self = Self::NotAdmin;
+    pub const NotRecoveryKey: Self = Self::Unauthorized;
+    pub const PoolNotFound: Self = Self::NotRegistered;
+    pub const RecoveryKeyNotConfigured: Self = Self::NotInitialized;
+    pub const RecoveryNotAvailableYet: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const RollbackWindowExpired: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const RouteExecutionFailed: Self = Self::Unauthorized;
+    pub const TooManyActiveCommitments: Self = Self::Overflow;
+    pub const TooManyActiveHtlcs: Self = Self::Overflow;
+    pub const UpgradeHealthCheckFailed: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const ZeroSwapAmount: Self = Self::AmountTooLow;
+
+    // ── Aliases for error names referenced by feature code with no spare
+    // discriminant slot (ScSpecUdtErrorEnumV0 caps `#[contracterror]` enums at
+    // 50 cases). Each reuses the existing variant closest in meaning; the
+    // numeric code is shared, the name callers match on stays distinct.
+    pub const BridgeRateLimitExceeded: Self = Self::Overflow;
+    pub const CapacityExceeded: Self = Self::Overflow;
+    pub const CircuitBreakerTripped: Self = Self::ContractPaused;
+    pub const DuplicateOracleAttestation: Self = Self::AlreadyRegistered;
+    pub const EmergencyOverrideDisabled: Self = Self::Unauthorized;
+    pub const EmergencyRevocationAlreadyActive: Self = Self::EmergencyRevocationActive;
+    pub const FeeDistributionMismatch: Self = Self::BundleValidationFailed;
+    pub const FlashLoanArbitrageDetected: Self = Self::SlippageExceeded;
+    pub const InsufficientOracleAttestations: Self = Self::ThresholdNotReached;
+    pub const InvalidAsset: Self = Self::NotInitialized;
+    pub const InvalidBridgeRateLimit: Self = Self::InvalidVarianceConfig;
+    pub const InvalidCircuitBreakerConfig: Self = Self::InvalidVarianceConfig;
+    pub const InvalidDelegate: Self = Self::NotInitialized;
+    pub const InvalidEscrowState: Self = Self::BundleValidationFailed;
+    pub const InvalidFeeSplitConfig: Self = Self::InvalidVarianceConfig;
+    pub const InvalidFlashLoanFeeDiscount: Self = Self::InvalidVarianceConfig;
+    pub const InvalidFlashLoanFeeTier: Self = Self::InvalidVarianceConfig;
+    pub const InvalidInput: Self = Self::AmountTooLow;
+    pub const InvalidMerkleProof: Self = Self::InvalidProof;
+    pub const InvalidOracleDeviationConfig: Self = Self::InvalidVarianceConfig;
+    pub const InvalidProvingKey: Self = Self::NotInitialized;
+    pub const InvalidPublicInputs: Self = Self::NotInitialized;
+    pub const InvalidThreshold: Self = Self::InvalidVarianceConfig;
+    pub const InvalidTickSpacing: Self = Self::InvalidVarianceConfig;
+    pub const InvariantViolation: Self = Self::SlippageExceeded;
+    pub const MerkleTreeFull: Self = Self::Overflow;
+    pub const NoActiveDelegation: Self = Self::NotRegistered;
+    pub const NotEmergencySigner: Self = Self::Unauthorized;
+    pub const NotSecurityCouncil: Self = Self::NotAdmin;
+    pub const NoVotingWeight: Self = Self::AmountTooLow;
+    pub const OracleAttestationConflict: Self = Self::BundleValidationFailed;
+    pub const OracleDeviationTooHigh: Self = Self::SlippageExceeded;
+    pub const OracleInvalidSignature: Self = Self::InvalidSaltSignature;
+    pub const OracleNotAuthorized: Self = Self::Unauthorized;
+    pub const OracleRegistryNotConfigured: Self = Self::NotInitialized;
+    pub const OverrideThresholdNotReached: Self = Self::ThresholdNotReached;
+    pub const PayloadHashMismatch: Self = Self::InvalidSaltSignature;
+    pub const ProposalAlreadyCancelledOrExecuted: Self = Self::NoActiveProposal;
+    pub const ProposalAlreadyVetoed: Self = Self::AlreadyVoted;
+    pub const ProposalNotFound: Self = Self::NotRegistered;
+    pub const ProtectedAssetNotRescueable: Self = Self::Unauthorized;
+    pub const RescueProposalNotFound: Self = Self::NotRegistered;
+    pub const RescueProposalNotPending: Self = Self::NoActiveProposal;
+    pub const RescueTimelockNotExpired: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const TickIndexAlreadyExists: Self = Self::AlreadyRegistered;
+    pub const TickIndexNotFound: Self = Self::NotRegistered;
+    pub const TickNotAligned: Self = Self::InvalidVarianceConfig;
+    pub const TickOutOfBounds: Self = Self::InvalidVarianceConfig;
+    pub const TimelockNotExpired: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const TooManyTicks: Self = Self::Overflow;
 }
 
 // Contract state keys
@@ -481,20 +568,6 @@ pub struct NodeProfile {
     pub rate: u64,
     pub confidence: u32,
     pub updated_at: u64,
-}
-
-#[contracttype]
-#[derive(Clone)]
-pub struct CorridorFeePool {
-    pub asset: Symbol,
-    pub collected: u64,
-    pub variable_pool: u64,
-}
-
-#[contracttype]
-#[derive(Clone)]
-pub enum CorridorFeeKey {
-    Asset(Symbol),
 }
 
 #[contracttype]
@@ -613,7 +686,7 @@ impl TimeLockedUpgradeContract {
     ///
     /// The persistent key is checked and written in this invocation, so a
     /// replay returns before any caller-supplied transfer side effect runs.
-    pub fn consume_private_transfer_nullifier(
+    pub fn consume_priv_transfer_nullifier(
         env: Env,
         caller: Address,
         nullifier: BytesN<32>,
@@ -1255,16 +1328,6 @@ impl TimeLockedUpgradeContract {
         crate::fees::get_corridor_fee_pool(env, asset)
     }
 
-    pub fn add_corridor_fees(
-        env: Env,
-        admin: Address,
-        asset: AssetId,
-        collected: u64,
-        variable_fee: u64,
-    ) -> Result<fees::CorridorFeePool, ContractError> {
-        crate::fees::add_corridor_fees(env, admin, asset, collected, variable_fee)
-    }
-
     pub fn record_lp_fee(
         env: Env,
         admin: Address,
@@ -1567,15 +1630,6 @@ impl TimeLockedUpgradeContract {
         Ok(profile)
     }
 
-    pub fn add_corridor_fees(env: Env, asset: Symbol, collected: u64, variable_fee: u64) -> Result<CorridorFeePool, ContractError> {
-        let key = CorridorFeeKey::Asset(asset.clone());
-        let mut pool: CorridorFeePool = env.storage().persistent().get(&key).unwrap_or(CorridorFeePool { asset: asset.clone(), collected: 0, variable_pool: 0 });
-        pool.collected = pool.collected.checked_add(collected).ok_or(ContractError::Overflow)?;
-        pool.variable_pool = pool.variable_pool.checked_add(variable_fee).ok_or(ContractError::Overflow)?;
-        env.storage().persistent().set(&key, &pool);
-        Ok(pool)
-    }
-
     // ── Dynamic Staking Tier Assignment (Issue #300) ─────────────────────────
 
     /// Configure the minimum stake required for each collateral tier.
@@ -1770,10 +1824,6 @@ impl TimeLockedUpgradeContract {
             .persistent()
             .get(&StakingStorageKey::FeedStake(node, asset))
             .unwrap_or(0)
-    }
-
-    pub fn get_corridor_fee_pool(env: Env, asset: Symbol) -> CorridorFeePool {
-        env.storage().persistent().get(&CorridorFeeKey::Asset(asset.clone())).unwrap_or(CorridorFeePool { asset, collected: 0, variable_pool: 0 })
     }
 
     pub fn set_platform_capital(env: Env, capital: u64) {
@@ -2427,7 +2477,7 @@ impl TimeLockedUpgradeContract {
         vaults::autocompound::get_peak_share_value(&env)
     }
 
-    pub fn vault_is_circuit_breaker_triggered(env: Env) -> bool {
+    pub fn vault_circuit_breaker_tripped(env: Env) -> bool {
         vaults::autocompound::is_circuit_breaker_triggered(&env)
     }
 
@@ -2705,13 +2755,6 @@ impl TimeLockedUpgradeContract {
     ) -> Result<i128, ContractError> {
         let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
         orders::limit::withdraw_balance(&env, owner, asset, amount)
-    }
-
-    pub fn place_buy_limit_order(
-        env: Env, maker: Address, pair: orders::limit::AssetPair, price_tick: i128, buy_amount: i128,
-    ) -> Result<orders::limit::LimitOrder, ContractError> {
-        let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
-        orders::limit::place_buy_order(&env, maker, pair, price_tick, buy_amount)
     }
 
     /// Tick-volume market matcher (Issue #915): sweep the book by price/time
