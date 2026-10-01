@@ -473,24 +473,17 @@ pub fn batch_verify_proofs(
 // Verification key management
 // ---------------------------------------------------------------------------
 
-/// Register a verification key on-chain for a specific circuit.
+/// Validate the structural integrity of a verification key.
 ///
-/// Stores the VK commitment in persistent storage so that subsequent proof
-/// verifications can validate against the registered key.  Only the contract
-/// admin may register keys.
-///
-/// # Arguments
-/// * `env` – The Soroban environment.
-/// * `vkey` – The verification key to register.
+/// Rejects malformed keys before they can be serialized into persistent
+/// storage: an empty IC vector, any all-zero hash commitment, or an all-zero
+/// circuit identifier.  This is the single choke-point used both by
+/// [`register_verification_key`] and by the timelocked key-update handler.
 ///
 /// # Returns
-/// * `Ok(())` on success.
-/// * `Err(ContractError::InvalidArgument)` if the VK is malformed.
-pub fn register_verification_key(
-    env: &Env,
-    vkey: &VerificationKey,
-) -> Result<(), ContractError> {
-    // Validate VK structure.
+/// * `Ok(())` if the key is structurally valid.
+/// * `Err(ContractError::InvalidArgument)` if the key is malformed.
+pub fn validate_verification_key(vkey: &VerificationKey) -> Result<(), ContractError> {
     if vkey.ic_count == 0 {
         return Err(ContractError::InvalidArgument);
     }
@@ -509,6 +502,28 @@ pub fn register_verification_key(
     if is_zero_bytes(&vkey.circuit_id.to_array()) {
         return Err(ContractError::InvalidArgument);
     }
+    Ok(())
+}
+
+/// Register a verification key on-chain for a specific circuit.
+///
+/// Stores the VK commitment in persistent storage so that subsequent proof
+/// verifications can validate against the registered key.  Only the contract
+/// admin may register keys.
+///
+/// # Arguments
+/// * `env` – The Soroban environment.
+/// * `vkey` – The verification key to register.
+///
+/// # Returns
+/// * `Ok(())` on success.
+/// * `Err(ContractError::InvalidArgument)` if the VK is malformed.
+pub fn register_verification_key(
+    env: &Env,
+    vkey: &VerificationKey,
+) -> Result<(), ContractError> {
+    // Validate VK structure before touching persistent storage.
+    validate_verification_key(vkey)?;
 
     let key = verification_key_storage_key(&vkey.circuit_id);
     env.storage().persistent().set(&key, vkey);

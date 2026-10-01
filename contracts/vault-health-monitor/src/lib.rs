@@ -8,6 +8,10 @@ use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, 
 pub const HEALTH_FACTOR_SCALE: i128 = 10_000;
 /// A health factor of 1.10 is the upper bound for liquidation warnings.
 pub const WARNING_HEALTH_FACTOR_BPS: i128 = 11_000;
+/// Specialized stable asset liquidation threshold: 0.95 represented as 9_500 bps.
+pub const STABLE_LIQUIDATION_THRESHOLD_BPS: i128 = 9_500;
+/// Health factor scale for stable assets risk matrix.
+pub const STABLE_HEALTH_FACTOR_SCALE: i128 = 10_000;
 
 #[derive(Clone)]
 #[contracttype]
@@ -114,6 +118,53 @@ impl VaultHealthMonitor {
             };
             // The first topic gives indexers a stable event name; the account topic
             // allows notification services to filter for a single user efficiently.
+            env.events()
+                .publish((Symbol::new(&env, "VaultHealthWarning"), account), warning);
+        }
+
+        Ok(health_factor_bps)
+    }
+
+    /// Assess vault health using specialized stable-asset risk matrix formulas for USDC/USDT backed positions.
+    /// Sets higher liquidation threshold M_liq = 0.95 (9_500 bps).
+    pub fn assess_stable_vault_health(
+        env: Env,
+        vault: Address,
+        account: Address,
+        collateral_value: i128,
+        debt_value: i128,
+    ) -> Result<i128, Error> {
+        let configured_vault: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Vault)
+            .ok_or(Error::NotInitialized)?;
+        if vault != configured_vault {
+            return Err(Error::UnauthorizedVault);
+        }
+        vault.require_auth();
+
+        if collateral_value < 0 || debt_value <= 0 {
+            return Err(Error::InvalidValue);
+        }
+
+        let liquidation_threshold_bps = STABLE_LIQUIDATION_THRESHOLD_BPS;
+        let health_factor_bps = collateral_value
+            .checked_mul(liquidation_threshold_bps)
+            .ok_or(Error::ArithmeticOverflow)?
+            .checked_div(debt_value)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        if health_factor_bps > STABLE_HEALTH_FACTOR_SCALE && health_factor_bps <= WARNING_HEALTH_FACTOR_BPS {
+            let warning = VaultHealthWarning {
+                vault,
+                account: account.clone(),
+                health_factor_bps,
+                liquidation_threshold_bps,
+                collateral_value,
+                debt_value,
+                timestamp: env.ledger().timestamp(),
+            };
             env.events()
                 .publish((Symbol::new(&env, "VaultHealthWarning"), account), warning);
         }

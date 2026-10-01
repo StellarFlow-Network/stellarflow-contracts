@@ -107,6 +107,19 @@ pub fn extend_persistent_ttl<K: soroban_sdk::IntoVal<Env, soroban_sdk::Val>>(env
         .extend_ttl(key, THRESHOLD, BUMP_AMOUNT);
 }
 
+/// Batch extend TTL for persistent storage entries using native extend_ttl calls
+/// up to 100,000 ledgers (or configured bounds).
+pub fn bump_persistent_batch<K: soroban_sdk::IntoVal<Env, soroban_sdk::Val> + Clone>(env: &Env, keys: &soroban_sdk::Vec<K>) {
+    let persistent = env.storage().persistent();
+    for i in 0..keys.len() {
+        if let Some(key) = keys.get(i) {
+            if persistent.has(&key) {
+                persistent.extend_ttl(&key, 10_000, 100_000);
+            }
+        }
+    }
+}
+
 /// Extends TTL for Instance storage using strict 10k/100k rule.
 pub fn extend_instance_ttl(env: &Env) {
     env.storage()

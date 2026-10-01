@@ -1,5 +1,7 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, Address, Bytes, Env, Symbol, Vec};
+
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Bytes, Env};
+
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -10,13 +12,6 @@ pub struct Proposal {
     pub payload: Vec<soroban_sdk::Val>,
     pub executed: bool,
     pub timelock_until: u64,
-}
-
-#[contracttype]
-pub enum DataKey {
-    Proposal(u64),
-    ProposalCount,
-    Admin,
 }
 
 #[contract]
@@ -104,6 +99,140 @@ impl GovernanceExecuterContract {
             .get(&DataKey::Proposal(proposal_id))
             .expect("proposal not found")
     }
+
+    /// Execute multiple queued governance proposals in a single atomic transaction post-timelock
+    pub fn execute_batch(env: Env, proposal_ids: Vec<u64>) -> Vec<soroban_sdk::Val> {
+        let current_time = env.ledger().timestamp();
+        let mut results = vec![&env];
+
+        // First pass: verify existence, execution state, and timelock for all proposals in the batch
+        for proposal_id in proposal_ids.iter() {
+            let proposal: Proposal = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Proposal(proposal_id))
+                .expect("proposal not found");
+
+            if proposal.executed {
+                panic!("proposal already executed");
+            }
+
+            if current_time < proposal.timelock_until {
+                panic!("timelock period has not expired");
+            }
+        }
+
+        // Second pass: mark all as executed and execute sequentially in order of submission
+        for proposal_id in proposal_ids.iter() {
+            let mut proposal: Proposal = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Proposal(proposal_id))
+                .expect("proposal not found");
+
+            proposal.executed = true;
+            env.storage().persistent().set(&DataKey::Proposal(proposal_id), &proposal);
+
+            let res = env.invoke_contract(
+                &proposal.target,
+                &proposal.function,
+                proposal.payload,
+            );
+            results.push_back(res);
+        }
+
+        results
+    }
+}
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum ContractError {
+    TimelockDelayNotMet = 1,
+    ProposalNotFound = 2,
+    InvalidPayloadHash = 3,
 }
 
-mod test;
+#[contracttype]
+#[derive(Clone)]
+pub struct GovernanceProposal {
+    pub id: u64,
+    pub approved_at: u64,
+    pub delay: u64,
+    pub payload_hash: Bytes,
+}
+
+#[contracttype]
+#[derive(Clone)]
+enum DataKey {
+    Proposal(u64),
+}
+
+#[contract]
+pub struct GovernanceExecuter;
+
+#[contractimpl]
+impl GovernanceExecuter {
+    pub fn execute_proposal(
+        env: Env,
+        proposal_id: u64,
+        payload_hash: Bytes,
+    ) -> Result<(), ContractError> {
+        let proposal: GovernanceProposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Proposal(proposal_id))
+            .ok_or(ContractError::ProposalNotFound)?;
+
+        if proposal.payload_hash != payload_hash {
+            return Err(ContractError::InvalidPayloadHash);
+        }
+
+        let current_time = env.ledger().timestamp();
+        let required_time = proposal.approved_at.saturating_add(proposal.delay);
+        if current_time < required_time {
+            return Err(ContractError::TimelockDelayNotMet);
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use soroban_sdk::{testutils::Address as _, Env, Bytes};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Bytes, Env, Symbol, Vec};
+
+    #[test]
+    fn test_timelock_execution_guard()
+    {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, GovernanceExecuter);
+        let client = GovernanceExecuterClient::new(&env, &contract_id);
+
+        let proposal_id = 1u64;
+        let delay = 172800u64; // 48 hours
+        let approved_at = 1000u64;
+        let payload_hash = Bytes::from_slice(&env, b"payload_tx_hash");
+
+        env.storage().persistent().set(
+            &DataKey::Proposal(proposal_id),
+            &GovernanceProposal {
+                id: proposal_id,
+                approved_at,
+                delay,
+                payload_hash: payload_hash.clone(),
+            },
+        );
+
+        env.ledger().set_timestamp(approved_at + delay - 1);
+        let res = client.try_execute_proposal(&proposal_id, &payload_hash);
+        assert_eq!(res, Err(Ok(ContractError::TimelockDelayNotMet)));
+
+        env.ledger().set_timestamp(approved_at + delay);
+        let res = client.try_execute_proposal(&proposal_id, &payload_hash);
+        assert!(res.is_ok());
+    }
+}
