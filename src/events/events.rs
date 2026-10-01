@@ -21,7 +21,8 @@
 //! emit_event(env, EventName::PriceUpdate, &[&asset_sym], &(price, timestamp));
 //! ```
 
-use soroban_sdk::{symbol_short, Env, Symbol, Vec};
+use soroban_sdk::{contracttype, symbol_short, Env, Symbol, Vec};
+use alloc::format;
 
 use crate::ContractError;
 

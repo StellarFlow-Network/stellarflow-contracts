@@ -9,7 +9,7 @@
 //! recomputes the former delegate's total delegated power, and restores the
 //! voting weight directly into the staker's own balance map.
 
-use soroban_sdk::{symbol_short, Address, Env, IntoVal, Map, Symbol, Val, Vec};
+use soroban_sdk::{contracttype, symbol_short, Address, Env, IntoVal, Map, Symbol, Val, Vec};
 
 use crate::ContractError;
 

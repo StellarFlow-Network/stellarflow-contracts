@@ -82,7 +82,7 @@ pub fn set_reward_config(env: &Env, admin: Address, reward_token: Address, rewar
 ///    `KEEPER_TTL_THRESHOLD` (i.e. it is near expiry).
 /// 3. Calls `env.storage().persistent().extend_ttl()` on the target entry.
 /// 4. Transfers `KEEPER_BOUNTY_STROOPS` from the reward reserve to `keeper`.
-/// 5. Emits a `RentBumped` event.
+/// 5. Emits a `RentBump` event.
 ///
 /// Returns `Ok(())` on success or a [`ContractError`] on failure.
 pub fn bump_storage_key(
@@ -157,7 +157,7 @@ pub fn bump_storage_key(
 
     // Emit structured event.
     env.events().publish(
-        (symbol_short!("RentBumped"), keeper.clone()),
+        (symbol_short!("RentBump"), keeper.clone()),
         (target, KEEPER_BOUNTY_STROOPS),
     );
 
