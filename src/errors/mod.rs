@@ -1,16 +1,16 @@
 pub mod codes;
 
 /// Multi-signature proposal related errors.
-#derive(Debug, Clone, PartialEq,q Exq)
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProposalError {
     /// The proposal has expired before reaching the required threshold.
     ProposalExpired,
 }
 
-impl std::fmt::Display for ProposalError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for ProposalError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            ProposalError::ProposalExpired => write(
+            ProposalError::ProposalExpired => write!(
                 f,
                 "Proposal expired before reaching the approval threshold"
             ),
@@ -18,7 +18,7 @@ impl std::fmt::Display for ProposalError {
     }
 }
 
-impl std::error::Error for ProposalError {}
+impl core::error::Error for ProposalError {}
 
 /// Maximum time (in seconds) a proposal can remain active
 /// after its creation before it expires.

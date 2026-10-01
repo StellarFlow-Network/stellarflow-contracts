@@ -441,16 +441,16 @@ mod tests {
         assert!(result_before.is_err());
 
         // Fast-forward ledger timestamp past expiration
-        env.ledger().set(soroban_sdk::ledger::LedgerInfo {
-            timestamp: expires_at + 1,
-            protocol_version: 20,
-            sequence_number: 100,
-            network_id: Default::default(),
-            base_reserve: 10,
-            min_temp_entry_ttl: 16,
-            min_persistent_entry_ttl: 4096,
-            max_entry_ttl: 6312000,
-        });
+        env.ledger().set(soroban_sdk::testutils::LedgerInfo {
+        protocol_version: 20,
+        sequence_number: 1,
+        timestamp: env.ledger().timestamp(),
+        network_id: Default::default(),
+        base_reserve: 10,
+        min_temp_entry_ttl: 16,
+        min_persistent_entry_ttl: 16,
+        max_entry_ttl: 6312000,
+    });
 
         // After expiration: reclaim_expired succeeds
         let result_after = reclaim_expired(&env, escrow.id, depositor.clone());

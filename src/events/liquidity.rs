@@ -180,6 +180,118 @@ mod tests {
             );
         });
     }
+
+    #[test]
+    fn test_publish_position_split() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
+        let owner = Address::generate(&env);
+        let pool_id: AssetId = 1;
+
+        env.as_contract(&contract_id, || {
+            publish_position_split(&env, &owner, pool_id, 1, -10, 0, 10, 2, 500, 3, 500);
+
+            let events = env.events().all();
+            assert_eq!(events.len(), 1);
+
+            let (_, topics, data) = events.get(0).unwrap();
+            let expected_topics = soroban_sdk::vec![
+                &env,
+                Symbol::new(&env, "stellarflow").into_val(&env),
+                Symbol::new(&env, "position_split").into_val(&env),
+                pool_id.into_val(&env),
+                owner.clone().into_val(&env),
+            ];
+            assert_eq!(topics, expected_topics);
+
+            let payload = PositionSplitEvent::try_from_val(&env, &data).unwrap();
+            assert_eq!(
+                payload,
+                PositionSplitEvent {
+                    owner,
+                    pool_id,
+                    original_position_id: 1,
+                    tick_lower: -10,
+                    tick_mid: 0,
+                    tick_upper: 10,
+                    lower_position_id: 2,
+                    lower_liquidity: 500,
+                    upper_position_id: 3,
+                    upper_liquidity: 500,
+                }
+            );
+        });
+    }
+}
+
+/// Structured payload for the `position_split` event (Issue #986).
+///
+/// Duplicates the indexed owner and pool identifier in the payload so RPC
+/// consumers can filter on topics and still hydrate a self-contained record.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PositionSplitEvent {
+    /// Address that owns the split position.
+    pub owner: Address,
+    /// Canonical corridor pool identifier used by the contract.
+    pub pool_id: AssetId,
+    /// Receipt id of the original (now-burned) position.
+    pub original_position_id: u64,
+    /// Lower boundary of the original range.
+    pub tick_lower: i32,
+    /// The new boundary tick the range was split at.
+    pub tick_mid: i32,
+    /// Upper boundary of the original range.
+    pub tick_upper: i32,
+    /// Receipt id minted for the `[tick_lower, tick_mid]` sub-range.
+    pub lower_position_id: u64,
+    /// Liquidity allocated to the `[tick_lower, tick_mid]` sub-range.
+    pub lower_liquidity: u64,
+    /// Receipt id minted for the `[tick_mid, tick_upper]` sub-range.
+    pub upper_position_id: u64,
+    /// Liquidity allocated to the `[tick_mid, tick_upper]` sub-range.
+    pub upper_liquidity: u64,
+}
+
+/// Publishes a standardized `PositionSplitEvent`.
+///
+/// Topics follow the RPC-friendly schema:
+/// `("stellarflow", "position_split", pool_id, owner)`.
+#[allow(clippy::too_many_arguments)]
+pub fn publish_position_split(
+    env: &Env,
+    owner: &Address,
+    pool_id: AssetId,
+    original_position_id: u64,
+    tick_lower: i32,
+    tick_mid: i32,
+    tick_upper: i32,
+    lower_position_id: u64,
+    lower_liquidity: u64,
+    upper_position_id: u64,
+    upper_liquidity: u64,
+) {
+    let topics = (
+        Symbol::new(env, "stellarflow"),
+        Symbol::new(env, "position_split"),
+        pool_id,
+        owner.clone(),
+    );
+
+    let payload = PositionSplitEvent {
+        owner: owner.clone(),
+        pool_id,
+        original_position_id,
+        tick_lower,
+        tick_mid,
+        tick_upper,
+        lower_position_id,
+        lower_liquidity,
+        upper_position_id,
+        upper_liquidity,
+    };
+
+    env.events().publish(topics, payload);
 }
 
 /// Structured payload for a liquidity-provider alert raised when the bid-ask

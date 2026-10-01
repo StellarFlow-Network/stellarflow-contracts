@@ -214,7 +214,7 @@ impl LinearVestingContract {
 
         // Emit event
         env.events().publish(
-            (symbol_short!("vest_claim"),),
+            (symbol_short!("vestclaim"),),
             (identifier, schedule.beneficiary, claimable),
         );
 

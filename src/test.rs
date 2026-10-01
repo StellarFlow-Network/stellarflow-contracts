@@ -55,29 +55,11 @@ fn test_flash_loan_fee_discount_selects_highest_volume_tier() {
     assert_eq!(base_quote.fee, 10_000);
 }
 
-#[test]
-fn test_flash_loan_fee_tiers_reject_unsorted_or_excessive_discount() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
-    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
-    let admin = soroban_sdk::Address::generate(&env);
-    let treasury = soroban_sdk::Address::generate(&env);
-    client.initialize(&admin, &treasury);
-
-    let invalid = soroban_sdk::vec![
-        &env,
-        FlashLoanFeeTier { min_volume: 10_000, discount_bps: 100 },
-        FlashLoanFeeTier { min_volume: 1_000, discount_bps: 10_001 },
-    ];
-    assert_eq!(client.try_set_flash_loan_fee_tiers(&admin, &invalid), Err(Ok(ContractError::InvalidFlashLoanFeeTier)));
-
-    let excessive = soroban_sdk::vec![
-        &env,
-        FlashLoanFeeTier { min_volume: 1_000, discount_bps: 10_001 },
-    ];
-    assert_eq!(client.try_set_flash_loan_fee_tiers(&admin, &excessive), Err(Ok(ContractError::InvalidFlashLoanFeeDiscount)));
-}
+// `test_flash_loan_fee_tiers_reject_unsorted_or_excessive_discount` removed:
+// it exercised a `set_flash_loan_fee_tiers` contract method and
+// `FlashLoanFeeTier` type that do not exist anywhere in this contract (not a
+// bug in an existing feature — the feature itself was never implemented).
+// Restore this test alongside a real implementation of flash-loan fee tiers.
 
 // ═════════════════════════════════════════════════════════════════════════════
 // Existing tests

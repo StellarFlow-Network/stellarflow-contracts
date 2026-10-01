@@ -1,3 +1,5 @@
+pub mod action_queue;
+
 pub mod cleanup {
     use super::*;
 
@@ -17,6 +19,34 @@ pub mod prune {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub enum PruneTarget {
         EmergencyRevocation,
+    }
+
+    #[contracttype]
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub enum StorageRentKey {
+        RentRecord(Address),
+    }
+
+    #[contracttype]
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub struct HelperRentRecord {
+        pub last_collected: u64,
+    }
+
+    pub fn bulk_collect_storage_rent(_env: &Env, _addresses: Vec<Address>) -> Result<u32, ContractError> {
+        Ok(0)
+    }
+
+    pub fn collect_expired_storage_rent(_env: &Env, _address: &Address) -> Result<u32, ContractError> {
+        Ok(0)
+    }
+
+    pub fn sweep_expired_contract_rent(_env: &Env) -> Result<u32, ContractError> {
+        Ok(0)
+    }
+
+    pub fn sweep_inactive_helper_contract_rent(_env: &Env) -> Result<u32, ContractError> {
+        Ok(0)
     }
 
     pub fn prune_expired_keys(env: &Env, target: PruneTarget) -> Result<u32, ContractError> {

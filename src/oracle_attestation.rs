@@ -101,7 +101,7 @@ pub fn register_oracle(
 
     // Emit event
     env.events().publish(
-        (symbol_short!("oracle_reg"), asset),
+        (symbol_short!("orcl_reg"), asset),
         oracle,
     );
 
@@ -439,7 +439,7 @@ pub fn remove_oracle(
     
     // Emit event
     env.events().publish(
-        (symbol_short!("oracle_rem"), asset),
+        (symbol_short!("orcl_rem"), asset),
         oracle,
     );
     
