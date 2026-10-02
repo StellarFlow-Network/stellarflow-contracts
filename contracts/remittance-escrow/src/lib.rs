@@ -57,6 +57,15 @@ pub use types::{DataKey, Remittance, RemittanceStatus};
 /// sequence numbers.
 pub const DISPUTE_WINDOW_SECS: u64 = 86_400;
 
+/// Minimum collateral bond `B_min` (in token stroops) an anchor must stake
+/// before it may accept remittance transactions (Issue #929).
+pub const BOND_MIN: i128 = 20_000;
+
+/// Percentage of an anchor's locked bond that is slashed into the protocol
+/// treasury when a payout proof is not submitted before the deadline
+/// (Issue #929).
+pub const BOND_SLASH_PERCENT: i128 = 20;
+
 /// Error types for the remittance escrow contract.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -78,6 +87,10 @@ pub enum Error {
     TooEarlyToDispute = 7,
     /// A checked arithmetic operation would have overflowed.
     ArithmeticOverflow = 8,
+    /// The anchor has not staked the minimum collateral bond (`BOND_MIN`).
+    InsufficientBond = 9,
+    /// No protocol treasury has been configured for bond slashing.
+    TreasuryNotSet = 10,
 }
 
 #[contract]
@@ -130,6 +143,35 @@ pub struct RemittanceRefundedEvent {
     pub id: u64,
     pub sender: Address,
     pub amount: i128,
+}
+
+/// Emitted when an anchor's bond becomes locked by a new pending settlement.
+#[contracttype]
+pub struct BondLockedEvent {
+    pub anchor: Address,
+    pub pending_remittances: u32,
+}
+
+/// Emitted when an anchor's bond is unlocked after all settlements finalize.
+#[contracttype]
+pub struct BondUnlockedEvent {
+    pub anchor: Address,
+}
+
+/// Emitted when 20% of an anchor's locked bond is slashed into the treasury.
+#[contracttype]
+pub struct BondSlashedEvent {
+    pub anchor: Address,
+    pub remittance_id: u64,
+    pub slashed: i128,
+    pub treasury: Address,
+}
+
+/// Emitted when the protocol treasury address is configured.
+#[contracttype]
+pub struct TreasurySetEvent {
+    pub admin: Address,
+    pub treasury: Address,
 }
 
 /// Returns `Err(Error::NotInitialized)` unless `initialize` has run.
@@ -188,6 +230,60 @@ fn checked_sub(a: i128, b: i128) -> Result<i128, Error> {
     a.checked_sub(b).ok_or(Error::ArithmeticOverflow)
 }
 
+// ── Liquidity bond staking guard (Issue #929) ────────────────────────────────
+
+/// Number of active (Pending) settlement tasks currently assigned to `anchor`.
+fn get_pending_remittances(env: &Env, anchor: &Address) -> u32 {
+    env.storage()
+        .instance()
+        .get(&DataKey::PendingRemittances(anchor.clone()))
+        .unwrap_or(0)
+}
+
+fn set_pending_remittances(env: &Env, anchor: &Address, count: u32) {
+    env.storage()
+        .instance()
+        .set(&DataKey::PendingRemittances(anchor.clone()), &count);
+}
+
+/// Whether the anchor's bond is currently locked in instance storage.
+fn is_bond_locked(env: &Env, anchor: &Address) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::BondLocked(anchor.clone()))
+        .unwrap_or(false)
+}
+
+fn set_bond_locked(env: &Env, anchor: &Address, locked: bool) {
+    env.storage()
+        .instance()
+        .set(&DataKey::BondLocked(anchor.clone()), &locked);
+}
+
+/// The configured protocol treasury address (bond slashing sink).
+fn get_treasury(env: &Env) -> Result<Address, Error> {
+    env.storage()
+        .instance()
+        .get(&DataKey::Treasury)
+        .ok_or(Error::TreasuryNotSet)
+}
+
+/// Decrement the anchor's active settlement count, unlocking its instance
+/// bond lock once every pending task has been finalized (Issue #929).
+fn decrement_pending_and_unlock(env: &Env, anchor: &Address) {
+    let pending = get_pending_remittances(env, anchor);
+    let next = if pending > 0 { pending - 1 } else { 0 };
+    set_pending_remittances(env, anchor, next);
+
+    if next == 0 && is_bond_locked(env, anchor) {
+        set_bond_locked(env, anchor, false);
+        env.events().publish(
+            (symbol_short!("bondunlk"),),
+            BondUnlockedEvent { anchor: anchor.clone() },
+        );
+    }
+}
+
 #[contractimpl]
 impl RemittanceEscrow {
     /// Initialize the contract with an admin and the SAC/SEP-41 token used
@@ -204,12 +300,44 @@ impl RemittanceEscrow {
             .set(&DataKey::NextRemittanceId, &0u64);
         env.storage().instance().set(&DataKey::Initialized, &true);
 
+        let seq = next_event_sequence_id(&env)?;
         env.events().publish(
-            (symbol_short!("cinit"),),
+            (symbol_short!("cinit"), seq),
             ContractInitializedEvent { admin, token },
         );
 
         Ok(())
+    }
+
+    /// Configure the protocol treasury that receives 20% bond slashes
+    /// (Issue #929). Admin-only; may be called once or re-pointed later.
+    pub fn set_treasury(env: Env, admin: Address, treasury: Address) -> Result<(), Error> {
+        require_initialized(&env)?;
+        admin.require_auth();
+
+        let configured_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+
+        if configured_admin != admin {
+            return Err(Error::Unauthorized);
+        }
+
+        env.storage().instance().set(&DataKey::Treasury, &treasury);
+
+        env.events().publish(
+            (symbol_short!("treasury"),),
+            TreasurySetEvent { admin, treasury },
+        );
+
+        Ok(())
+    }
+
+    /// Read the configured protocol treasury address, if any.
+    pub fn get_treasury_address(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::Treasury)
     }
 
     /// Sender escrows `amount` of the configured token for a remittance to be
@@ -229,6 +357,12 @@ impl RemittanceEscrow {
 
         if amount <= 0 {
             return Err(Error::ZeroAmount);
+        }
+
+        // Relayer liquidity bond guard (Issue #929): an anchor must stake the
+        // minimum collateral bond `B_min` before accepting transactions.
+        if get_collateral_balance(&env, &anchor) < BOND_MIN {
+            return Err(Error::InsufficientBond);
         }
 
         let now = env.ledger().timestamp();
@@ -260,8 +394,24 @@ impl RemittanceEscrow {
         };
         set_remittance(&env, &remittance);
 
+        // Lock the anchor's bond in instance storage until all active
+        // settlement tasks are finalized (Issue #929).
+        let pending = get_pending_remittances(&env, &anchor);
+        let next_pending = pending.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+        set_pending_remittances(&env, &anchor, next_pending);
+        if next_pending == 1 {
+            set_bond_locked(&env, &anchor, true);
+            env.events().publish(
+                (symbol_short!("bondlock"),),
+                BondLockedEvent {
+                    anchor: anchor.clone(),
+                    pending_remittances: next_pending,
+                },
+            );
+        }
+
         env.events().publish(
-            (symbol_short!("remcreat"),),
+            (symbol_short!("remcreat"), seq),
             RemittanceCreatedEvent {
                 id,
                 sender,
@@ -299,8 +449,12 @@ impl RemittanceEscrow {
         remittance.proof = proof;
         set_remittance(&env, &remittance);
 
+        // The settlement task is finalized; unlock the bond when no more
+        // pending remittances remain (Issue #929).
+        decrement_pending_and_unlock(&env, &remittance.anchor);
+
         env.events().publish(
-            (symbol_short!("paycomp"),),
+            (symbol_short!("paycomp"), seq),
             PayoutCompletedEvent {
                 id: remittance_id,
                 anchor,
@@ -328,8 +482,9 @@ impl RemittanceEscrow {
         let total = checked_add(current, amount)?;
         set_collateral_balance(&env, &anchor, total);
 
+        let seq = next_event_sequence_id(&env)?;
         env.events().publish(
-            (symbol_short!("coldep"),),
+            (symbol_short!("coldep"), seq),
             CollateralDepositedEvent {
                 anchor,
                 amount,
@@ -338,6 +493,17 @@ impl RemittanceEscrow {
         );
 
         Ok(())
+    }
+
+    /// An anchor stakes `amount` toward its minimum liquidity bond
+    /// `BOND_MIN` (Issue #929). Semantically identical to
+    /// [`deposit_collateral`] — the name communicates that the stake backs
+    /// the anchor's relayer bond requirement.
+    ///
+    /// The bond becomes **locked** the moment the anchor accepts a remittance
+    /// and stays locked until all active settlement tasks are finalized.
+    pub fn deposit_bond(env: Env, anchor: Address, amount: i128) -> Result<(), Error> {
+        Self::deposit_collateral(env, anchor, amount)
     }
 
     /// The sender opens a dispute on a remittance whose anchor missed its
@@ -372,6 +538,31 @@ impl RemittanceEscrow {
             return Err(Error::TooEarlyToDispute);
         }
 
+        // Liquidity bond guard (Issue #929): the anchor missed its
+        // payout-proof deadline, so slash 20% of its locked bond into the
+        // protocol treasury.
+        let treasury = get_treasury(&env)?;
+        let current_bond = get_collateral_balance(&env, &remittance.anchor);
+        if current_bond > 0 {
+            let slash = (current_bond * BOND_SLASH_PERCENT) / 100;
+            if slash > 0 {
+                let slash_client = token::Client::new(&env, &get_token(&env)?);
+                slash_client.transfer(&env.current_contract_address(), &treasury, &slash);
+                let remaining = checked_sub(current_bond, slash)?;
+                set_collateral_balance(&env, &remittance.anchor, remaining);
+
+                env.events().publish(
+                    (symbol_short!("bondslash"),),
+                    BondSlashedEvent {
+                        anchor: remittance.anchor.clone(),
+                        remittance_id,
+                        slashed: slash,
+                        treasury,
+                    },
+                );
+            }
+        }
+
         // Lock up to `amount` of the anchor's available collateral. An
         // under-collateralized anchor never blocks the sender's refund; see
         // the "Collateral shortfall" note in the module docs.
@@ -392,8 +583,9 @@ impl RemittanceEscrow {
         remittance.status = RemittanceStatus::Refunded;
         set_remittance(&env, &remittance);
 
+        let dispute_seq = next_event_sequence_id(&env)?;
         env.events().publish(
-            (symbol_short!("paydisp"),),
+            (symbol_short!("paydisp"), dispute_seq),
             PayoutDisputedEvent {
                 id: remittance_id,
                 sender: sender.clone(),
@@ -401,14 +593,18 @@ impl RemittanceEscrow {
                 locked_collateral: locked,
             },
         );
+        let refund_seq = next_event_sequence_id(&env)?;
         env.events().publish(
-            (symbol_short!("remrefnd"),),
+            (symbol_short!("remrefnd"), refund_seq),
             RemittanceRefundedEvent {
                 id: remittance_id,
                 sender,
                 amount: remittance.amount,
             },
         );
+
+        // Finalize this settlement task; unlock the bond when none remain.
+        decrement_pending_and_unlock(&env, &remittance.anchor);
 
         Ok(())
     }
@@ -422,6 +618,16 @@ impl RemittanceEscrow {
     /// Returns the current collateral balance staked by `anchor` (0 if none).
     pub fn get_collateral(env: Env, anchor: Address) -> i128 {
         get_collateral_balance(&env, &anchor)
+    }
+
+    /// Returns the number of active (Pending) settlement tasks for `anchor`.
+    pub fn get_pending_remittance_count(env: Env, anchor: Address) -> u32 {
+        get_pending_remittances(&env, &anchor)
+    }
+
+    /// Returns `true` while the anchor's bond is locked by active settlements.
+    pub fn is_bond_locked(env: Env, anchor: Address) -> bool {
+        is_bond_locked(&env, &anchor)
     }
 
     /// Returns the configured admin address.

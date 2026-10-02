@@ -108,6 +108,86 @@ pub fn calculate_spread_bps(rate_a: i128, rate_b: i128) -> Result<i128, Contract
         .ok_or(ContractError::DivisionByZero)
 }
 
+/// Compare two non-negative ratios exactly, without overflow.
+///
+/// Returns `true` when `a / b >= c / d`. Requires `b > 0` and `d > 0`.
+///
+/// # Why this exists
+///
+/// The obvious spelling — `a * d >= c * b` — silently wraps as soon as the
+/// operands are large, which is precisely the regime risk guards operate in:
+/// balances are `i128`, and a healthy position can push the cross-product past
+/// `i128::MAX`. A wrapped comparison answers the *wrong* question, and in a
+/// collateralisation or drawdown guard the wrong answer is "safe".
+///
+/// # Algorithm
+///
+/// Compare the integer quotients first. When they agree, the question reduces
+/// to the fractional remainders `ra / b` versus `rc / d`; because all four
+/// terms are then positive, dividing through by `ra * rc` rewrites that as the
+/// equivalent — and strictly shrinking — comparison `b / ra <= d / rc`. That
+/// flips the direction of the question, which `direction_ge` tracks.
+///
+/// Every step replaces a denominator with a strictly smaller remainder, so the
+/// loop runs in `O(log max(a, b, c, d))` steps and never forms an
+/// intermediate product.
+///
+/// # Equality
+///
+/// A tie satisfies both `>=` and `<=`, so the two exact-equal exits answer
+/// `true` regardless of direction. `a = 0` and `c = 0` need no special case:
+/// `0 / x` compares as `0`.
+///
+/// # Examples
+///
+/// ```
+/// use stellarflow_contracts::math::ratio_ge;
+///
+/// // 120 % clears a 120 % floor, and misses a 120.1 % one.
+/// assert!(ratio_ge(1_200, 1_000, 12_000, 10_000));
+/// assert!(!ratio_ge(1_200, 1_000, 12_001, 10_000));
+/// ```
+pub fn ratio_ge(a: i128, b: i128, c: i128, d: i128) -> bool {
+    debug_assert!(b > 0 && d > 0, "ratio_ge requires non-zero denominators");
+
+    let (mut a, mut b, mut c, mut d) = (a, b, c, d);
+    // `true` while the current tuple answers `a / b >= c / d`; a reciprocal
+    // step turns the question into `a / b <= c / d` and flips this.
+    let mut direction_ge = true;
+
+    loop {
+        let qa = a / b;
+        let qc = c / d;
+        if qa != qc {
+            // Integer parts settle it outright.
+            return if direction_ge { qa > qc } else { qa < qc };
+        }
+
+        // Integer parts agree, so compare the fractional remainders.
+        let ra = a % b;
+        let rc = c % d;
+        if ra == 0 && rc == 0 {
+            // Exactly equal, which satisfies both directions.
+            return true;
+        }
+        if ra == 0 {
+            // `a / b` is exactly `qa` while `c / d` sits strictly above `qc`.
+            return !direction_ge;
+        }
+        if rc == 0 {
+            // `c / d` is exactly `qc` while `a / b` sits strictly above `qa`.
+            return direction_ge;
+        }
+
+        // Recurse on `b / ra` against `d / rc`, flipping the direction.
+        a = b;
+        b = ra;
+        c = d;
+        d = rc;
+        direction_ge = !direction_ge;
+    }
+}
+
 /// Multiplies two numbers and scales the result down by a fixed-point factor.
 ///
 /// This function implements a rigid fixed-point arithmetic scaler that
@@ -498,5 +578,80 @@ mod tests {
             compute_cema(i128::MAX, 100, 1_000_000, scale),
             Err(ContractError::Overflow)
         );
+    }
+
+    // ── ratio_ge ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn ratio_ge_matches_exact_cross_multiplication() {
+        // Exhaustive over a small grid. `a * d` and `c * b` cannot overflow
+        // here, so the expected answer is directly computable and independent
+        // of the Euclidean implementation under test.
+        for b in 1i128..=24 {
+            for d in 1i128..=24 {
+                for a in 0i128..=24 {
+                    for c in 0i128..=24 {
+                        assert_eq!(
+                            ratio_ge(a, b, c, d),
+                            a * d >= c * b,
+                            "ratio_ge({a}, {b}, {c}, {d})"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ratio_ge_never_overflows_at_i128_bounds() {
+        // The naive `a * d >= c * b` wraps on every one of these, which is the
+        // whole reason this function exists.
+        assert!(ratio_ge(i128::MAX, 1, i128::MAX / 2, 1));
+        assert!(ratio_ge(1, i128::MAX, 1, i128::MAX));
+        assert!(!ratio_ge(i128::MAX - 1, i128::MAX, 1, 1));
+        assert!(ratio_ge(i128::MAX, 2, i128::MAX / 2, 1));
+    }
+
+    #[test]
+    fn ratio_ge_handles_zero_numerators() {
+        assert!(ratio_ge(0, 7, 0, 3));
+        assert!(!ratio_ge(0, 7, 1, 3));
+        assert!(ratio_ge(1, 3, 0, 3));
+        assert!(ratio_ge(0, i128::MAX, 0, 1));
+    }
+
+    #[test]
+    fn ratio_ge_handles_long_continued_fraction_chains() {
+        // Successive Fibonacci ratios are the worst case for the Euclidean
+        // recursion: the chain runs for the maximum number of steps. Two
+        // ladders seeded differently keep the reference products inside i128.
+        let (mut a, mut b) = (1i128, 2i128);
+        let (mut c, mut d) = (1i128, 3i128);
+        let mut checked = 0;
+        for _ in 0..40 {
+            let next = a + b;
+            a = b;
+            b = next;
+            let next_c = c + d;
+            c = d;
+            d = next_c;
+            if a * d != c * b {
+                assert_eq!(ratio_ge(a, b, c, d), a * d > c * b);
+                checked += 1;
+            }
+        }
+        assert!(
+            checked > 0,
+            "the Fibonacci ladder should exercise the recursion"
+        );
+    }
+
+    #[test]
+    fn ratio_ge_equality_satisfies_both_directions() {
+        // 120 % clears a 120 % floor; the reciprocal step must not flip a tie
+        // into a false negative.
+        assert!(ratio_ge(1_200, 1_000, 12_000, 10_000));
+        assert!(ratio_ge(12_000, 10_000, 1_200, 1_000));
+        assert!(ratio_ge(7, 3, 14, 6));
     }
 }

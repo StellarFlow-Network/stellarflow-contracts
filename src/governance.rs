@@ -104,6 +104,11 @@ pub(crate) const GOV_PROPOSAL_COUNTER_KEY: Symbol = symbol_short!("GOVCNT");
 /// to cancel a proposal during the timelock window).
 pub(crate) const GOV_CANCEL_THRESHOLD_KEY: Symbol = symbol_short!("GOVTHRSH");
 
+/// Storage key for the designated emergency guardian address (Issue #927).
+/// The guardian may unilaterally nullify active administrative proposals and
+/// expunge their unexecuted hashes from persistent state.
+pub(crate) const EMERGENCY_GUARDIAN_KEY: Symbol = symbol_short!("EMRG_G");
+
 // ── Types ───────────────────────────────────────────────────────────────────
 
 /// Lifecycle status of a governance proposal.
@@ -161,6 +166,10 @@ pub fn submit_governance_proposal(
         {
             return Err(ContractError::ProposalAlreadyActive);
         }
+    }
+
+    if crate::veto::is_hash_vetoed(env, &wasm_hash) {
+        return Err(ContractError::ProposalAlreadyVetoed);
     }
 
 /// Proposal state enumeration for governance lifecycle management.
@@ -290,6 +299,101 @@ pub fn cancel_governance_proposal(
     env.events().publish(
         (symbol_short!("GovCancel"), proposal_id),
         canceller,
+    );
+
+    Ok(())
+}
+
+// ── Emergency Guardian (Issue #927) ─────────────────────────────────────────
+
+/// Return the currently designated emergency guardian, if any.
+pub fn get_emergency_guardian(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&EMERGENCY_GUARDIAN_KEY)
+}
+
+/// Designate (or rotate) the emergency guardian address.
+///
+/// Only the contract admin may designate the guardian. The guardian is a
+/// high-privilege recovery address that can nullify active administrative
+/// proposals without waiting for a multi-sig quorum.
+pub fn designate_emergency_guardian(
+    env: &Env,
+    admin: Address,
+    guardian: Address,
+) -> Result<(), ContractError> {
+    admin.require_auth();
+
+    let data: crate::ContractData = env
+        .storage()
+        .instance()
+        .get(&crate::DATA_KEY)
+        .ok_or(ContractError::NotInitialized)?;
+
+    if data.admin != admin {
+        return Err(ContractError::NotAdmin);
+    }
+
+    env.storage().instance().set(&EMERGENCY_GUARDIAN_KEY, &guardian);
+
+    env.events().publish(
+        (symbol_short!("GovEmerG"),),
+        (guardian,),
+    );
+
+    Ok(())
+}
+
+/// Emergency-guardian nullification of an active administrative proposal.
+///
+/// Unlike [`vote_cancel_proposal`] (multi-sig quorum) and
+/// [`cancel_governance_proposal`] (admin-only), this entry point lets the
+/// designated emergency guardian unilaterally nullify a pending proposal and
+/// permanently **remove its unexecuted `wasm_hash` from persistent state** —
+/// before the timelock expires or at any point while it remains unexecuted.
+///
+/// # Errors
+///
+/// - [`ContractError::NotEmergencyGuardian`]             – caller is not the
+///   designated emergency guardian.
+/// - [`ContractError::NoActiveProposal`]                 – no active proposal
+///   with the given ID.
+/// - [`ContractError::ProposalAlreadyCancelledOrExecuted`] – proposal is no
+///   longer pending (already executed or cancelled).
+pub fn emergency_cancel_proposal(
+    env: &Env,
+    guardian: Address,
+    proposal_id: u64,
+) -> Result<(), ContractError> {
+    guardian.require_auth();
+
+    let designated = get_emergency_guardian(env)
+        .ok_or(ContractError::NotEmergencyGuardian)?;
+    if designated != guardian {
+        return Err(ContractError::NotEmergencyGuardian);
+    }
+
+    let mut proposal: GovernanceProposal = env
+        .storage()
+        .instance()
+        .get(&GOVERNANCE_PROPOSAL_KEY)
+        .ok_or(ContractError::NoActiveProposal)?;
+
+    if proposal.proposal_id != proposal_id {
+        return Err(ContractError::NoActiveProposal);
+    }
+
+    if proposal.status != ProposalStatus::Pending {
+        return Err(ContractError::ProposalAlreadyCancelledOrExecuted);
+    }
+
+    // Nullify the proposal and permanently free its storage slot (the
+    // `wasm_hash` and the cancellation-vote ledger live on that record).
+    proposal.status = ProposalStatus::Cancelled;
+    env.storage().instance().remove(&GOVERNANCE_PROPOSAL_KEY);
+
+    env.events().publish(
+        (symbol_short!("GovEmrCxl"), proposal_id),
+        (guardian,),
     );
 
     Ok(())
@@ -773,6 +877,98 @@ mod tests {
             result,
             Err(Ok(ContractError::ProposalAlreadyCancelledOrExecuted))
         );
+    }
+
+    // ── Emergency Guardian (Issue #927) ───────────────────────────────────
+
+    #[test]
+    fn test_designate_emergency_guardian_by_admin() {
+        let (env, client) = setup();
+        let admin = soroban_sdk::Address::generate(&env);
+        let treasury = soroban_sdk::Address::generate(&env);
+        client.initialize(&admin, &treasury);
+
+        let guardian = soroban_sdk::Address::generate(&env);
+        client.designate_emergency_guardian(&admin, &guardian);
+
+        assert_eq!(client.get_emergency_guardian(), Some(guardian));
+    }
+
+    #[test]
+    fn test_non_admin_cannot_designate_guardian() {
+        let (env, client) = setup();
+        let admin = soroban_sdk::Address::generate(&env);
+        let treasury = soroban_sdk::Address::generate(&env);
+        client.initialize(&admin, &treasury);
+
+        let outsider = soroban_sdk::Address::generate(&env);
+        let guardian = soroban_sdk::Address::generate(&env);
+        let result = client.try_designate_emergency_guardian(&outsider, &guardian);
+        assert_eq!(result, Err(Ok(ContractError::NotAdmin)));
+    }
+
+    #[test]
+    fn test_emergency_guardian_cancels_proposal_and_removes_hash() {
+        let (env, client) = setup();
+        let admin = soroban_sdk::Address::generate(&env);
+        let treasury = soroban_sdk::Address::generate(&env);
+        client.initialize(&admin, &treasury);
+
+        let guardian = soroban_sdk::Address::generate(&env);
+        client.designate_emergency_guardian(&admin, &guardian);
+
+        let wasm_hash = make_wasm_hash(&env);
+        let proposal_id = client.submit_governance_proposal(&admin, &wasm_hash);
+
+        // The guardian nullifies the proposal before the timelock expires.
+        client.emergency_cancel_governance_proposal(&guardian, &proposal_id);
+
+        // The proposal (and with it the unexecuted wasm_hash) is fully
+        // expunged from persistent state.
+        let fetch = client.get_gov_proposal_tl(&proposal_id);
+        assert_eq!(fetch, None);
+
+        // A new proposal can be submitted immediately.
+        let id2 = client.submit_governance_proposal(&admin, &wasm_hash);
+        assert_eq!(id2, 2);
+    }
+
+    #[test]
+    fn test_emergency_cancel_by_undesignated_address_fails() {
+        let (env, client) = setup();
+        let admin = soroban_sdk::Address::generate(&env);
+        let treasury = soroban_sdk::Address::generate(&env);
+        client.initialize(&admin, &treasury);
+
+        let guardian = soroban_sdk::Address::generate(&env);
+        client.designate_emergency_guardian(&admin, &guardian);
+
+        let wasm_hash = make_wasm_hash(&env);
+        let proposal_id = client.submit_governance_proposal(&admin, &wasm_hash);
+
+        // An address that is not the guardian is rejected.
+        let impostor = soroban_sdk::Address::generate(&env);
+        let result = client.try_emergency_cancel_governance_proposal(&impostor, &proposal_id);
+        assert_eq!(result, Err(Ok(ContractError::NotEmergencyGuardian)));
+
+        // The proposal is untouched.
+        let remaining = client.get_gov_proposal_tl(&proposal_id);
+        assert_eq!(remaining, Some(MIN_LEDGER_DELAY));
+    }
+
+    #[test]
+    fn test_emergency_cancel_no_guardian_designated_fails() {
+        let (env, client) = setup();
+        let admin = soroban_sdk::Address::generate(&env);
+        let treasury = soroban_sdk::Address::generate(&env);
+        client.initialize(&admin, &treasury);
+
+        let wasm_hash = make_wasm_hash(&env);
+        let proposal_id = client.submit_governance_proposal(&admin, &wasm_hash);
+
+        let stranger = soroban_sdk::Address::generate(&env);
+        let result = client.try_emergency_cancel_governance_proposal(&stranger, &proposal_id);
+        assert_eq!(result, Err(Ok(ContractError::NotEmergencyGuardian)));
     }
 
     #[test]

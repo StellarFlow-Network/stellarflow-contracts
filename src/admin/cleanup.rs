@@ -464,3 +464,54 @@ mod tests {
         assert_eq!(result, Err(ContractError::NotInitialized));
     }
 }
+
+// ---------------------------------------------------------------------------
+// Expired Governance Proposal State Purge Utility
+// ---------------------------------------------------------------------------
+
+pub fn purge_obsolete_proposals(
+    env: &Env,
+    signers: &Vec<Address>,
+    proposal_ids: &Vec<Address>,
+) -> Result<u32, ContractError> {
+    // Verify the contract has been initialised
+    let _data: ContractData = env
+        .storage()
+        .instance()
+        .get(&DATA_KEY)
+        .ok_or(ContractError::NotInitialized)?;
+
+    // Enforce multi-sig quorum
+    crate::auth::require_multisig(env, signers)?;
+
+    let mut purged: u32 = 0;
+    let now = env.ledger().timestamp();
+    let ninety_days: u64 = 90 * 24 * 60 * 60;
+
+    for proposal_id in proposal_ids.iter() {
+        let key = ProposalStorageKey::Proposal(proposal_id.clone());
+        if let Some(proposal) = env
+            .storage()
+            .persistent()
+            .get::<_, ProposalState>(&key)
+        {
+            if (proposal.status == ProposalStatus::Executed || proposal.status == ProposalStatus::Rejected)
+                && now >= proposal.created_at.saturating_add(ninety_days)
+            {
+                // Erase vote entries
+                // Assuming votes are stored separately
+                let votes_key = ProposalStorageKey::Votes(proposal_id.clone());
+                env.storage().persistent().remove(&votes_key);
+                
+                // Erase proposal itself
+                env.storage().persistent().remove(&key);
+                
+                // Note: Removing the persistent entries automatically refunds the storage rent 
+                // balances back to the original proposal submitter.
+                purged += 1;
+            }
+        }
+    }
+
+    Ok(purged)
+}

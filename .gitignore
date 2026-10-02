@@ -10,3 +10,7 @@ target
 # generated content so developers run generate-bindings.sh locally.
 packages/*/
 !packages/.gitkeep
+branch_structure.json
+temp_auto_push.bat
+temp_interactive_push.bat
+.gitignore

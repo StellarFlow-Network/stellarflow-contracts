@@ -1,5 +1,5 @@
 use soroban_sdk::{symbol_short, Bytes, Env};
-use soroban_sdk::testutils::{Address as _, Ledger, LedgerInfo}; // Removed Symbol as _
+use soroban_sdk::testutils::{Address as _, Events, Ledger, LedgerInfo}; // Removed Symbol as _
 use crate::{
     ContractError, StakingTier, StakingTierConfig, TimeLockedUpgradeContract,
     TimeLockedUpgradeContractClient, DEFAULT_HEARTBEAT_INTERVAL, 
@@ -184,6 +184,123 @@ fn test_propose_upgrade() {
     let remaining = client.get_upgrade_timelock_remaining();
     assert!(remaining.is_some());
     assert_eq!(remaining.unwrap(), 5000u32);
+}
+
+#[test]
+fn test_multi_stage_timelock_full_lifecycle() {
+    use crate::upgrades::multi_stage::{
+        TimelockStage, STAGE1_INTENT_DELAY_SECONDS, STAGE2_APPROVAL_DELAY_SECONDS,
+        STAGE3_EXECUTION_WINDOW_SECONDS,
+    };
+
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let treasury = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &treasury);
+
+    let new_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[9u8; 32]);
+
+    // Stage 1: announce intent.
+    client.notify_upgrade_intent(&new_wasm_hash, &admin);
+    let entry = client.get_multi_stage_upgrade().unwrap();
+    assert_eq!(entry.stage, TimelockStage::IntentNotified);
+    assert_eq!(
+        client.get_multi_stage_remaining().unwrap(),
+        STAGE1_INTENT_DELAY_SECONDS
+    );
+
+    // Stage 2 cannot be approved before the 24-hour delay elapses.
+    assert_eq!(
+        client.try_approve_upgrade_payload(&admin),
+        Err(Ok(ContractError::UpgradeTimelockNotSatisfied))
+    );
+
+    // Advance past the Stage 1 delay and approve the payload.
+    advance_ledger_timestamp(&env, STAGE1_INTENT_DELAY_SECONDS);
+    client.approve_upgrade_payload(&admin);
+    let entry = client.get_multi_stage_upgrade().unwrap();
+    assert_eq!(entry.stage, TimelockStage::PayloadApproved);
+    assert_eq!(
+        client.get_multi_stage_remaining().unwrap(),
+        STAGE2_APPROVAL_DELAY_SECONDS
+    );
+
+    // Stage 3 cannot execute before the 48-hour delay elapses.
+    assert_eq!(
+        client.try_execute_queued_upgrade(&admin),
+        Err(Ok(ContractError::UpgradeTimelockNotSatisfied))
+    );
+
+    // Advance into the execution window and execute.
+    advance_ledger_timestamp(&env, STAGE2_APPROVAL_DELAY_SECONDS);
+    client.execute_queued_upgrade(&admin);
+    let entry = client.get_multi_stage_upgrade().unwrap();
+    assert_eq!(entry.stage, TimelockStage::Executed);
+
+    // The window is 24 hours wide; executing again is rejected.
+    advance_ledger_timestamp(&env, STAGE3_EXECUTION_WINDOW_SECONDS + 1);
+    assert_eq!(
+        client.try_execute_queued_upgrade(&admin),
+        Err(Ok(ContractError::UpgradeTimelockNotSatisfied))
+    );
+}
+
+#[test]
+fn test_multi_stage_window_expires() {
+    use crate::upgrades::multi_stage::{
+        TimelockStage, STAGE1_INTENT_DELAY_SECONDS, STAGE2_APPROVAL_DELAY_SECONDS,
+        STAGE3_EXECUTION_WINDOW_SECONDS,
+    };
+
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let treasury = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &treasury);
+
+    let new_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[3u8; 32]);
+    client.notify_upgrade_intent(&new_wasm_hash, &admin);
+    advance_ledger_timestamp(&env, STAGE1_INTENT_DELAY_SECONDS);
+    client.approve_upgrade_payload(&admin);
+
+    // Let the 48-hour delay and the 24-hour window both pass.
+    advance_ledger_timestamp(
+        &env,
+        STAGE2_APPROVAL_DELAY_SECONDS + STAGE3_EXECUTION_WINDOW_SECONDS + 1,
+    );
+
+    assert_eq!(
+        client.try_execute_queued_upgrade(&admin),
+        Err(Ok(ContractError::UpgradeTimelockNotSatisfied))
+    );
+    let entry = client.get_multi_stage_upgrade().unwrap();
+    assert_eq!(entry.stage, TimelockStage::Expired);
+}
+
+#[test]
+fn test_multi_stage_requires_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let treasury = soroban_sdk::Address::generate(&env);
+    let stranger = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &treasury);
+
+    let new_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[5u8; 32]);
+    assert_eq!(
+        client.try_notify_upgrade_intent(&new_wasm_hash, &stranger),
+        Err(Ok(ContractError::NotAdmin))
+    );
 }
 
 #[test]
@@ -1265,6 +1382,9 @@ fn test_replacement_signer_promoted_on_revocation() {
     // is recognised as a valid participant.
     let result = client.try_vote_emergency_revocation(&replacement, &u64::MAX);
     assert_eq!(result, Err(Ok(ContractError::NoActiveEmergencyRevocation)));
+
+    let event_debug = alloc::format!("{:?}", env.events().all());
+    assert!(event_debug.contains("SignerRevokedEmergency"));
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1566,5 +1686,186 @@ mod flash_loan_guard_tests {
         let before = pool(r, r);
         let after = pool(r + amount_in, r - amount_out);
         assert!(check_flash_loan_arbitrage(&before, &after).is_ok());
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Instance Storage Rent-Expiry Monitor Tests (issue #953)
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod ttl_monitor_tests {
+    use crate::storage::{
+        EV_TTL_WARNING, INSTANCE_TTL_EXTEND_TO, INSTANCE_TTL_WARNING_THRESHOLD,
+    };
+    use crate::{TimeLockedUpgradeContract, TimeLockedUpgradeContractClient};
+    use soroban_sdk::testutils::{Address as _, Events, Ledger, LedgerInfo};
+    use soroban_sdk::{Address, Env, Symbol, TryFromVal};
+
+    /// Name of the instance-storage key the monitor tests watch. 7 bytes, which
+    /// keeps the symbol in the `symbol_short!` range used by the contract.
+    const WATCHED_KEY: &str = "WATCHED";
+
+    fn watched(env: &Env) -> Symbol {
+        Symbol::new(env, WATCHED_KEY)
+    }
+
+    fn setup() -> (Env, TimeLockedUpgradeContractClient<'static>) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+        let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        client.initialize(&admin, &treasury);
+        (env, client)
+    }
+
+    /// Move the test ledger to `sequence`, mirroring `advance_ledger_timestamp`.
+    fn set_sequence(env: &Env, sequence: u32) {
+        env.ledger().set(LedgerInfo {
+            timestamp: env.ledger().timestamp(),
+            protocol_version: env.ledger().protocol_version(),
+            sequence_number: sequence,
+            network_id: Default::default(),
+            base_reserve: 10,
+            min_temp_entry_ttl: 0,
+            min_persistent_entry_ttl: 0,
+            max_entry_ttl: u32::MAX,
+        });
+    }
+
+    /// Number of `(ttl_warn, key)` events emitted so far.
+    fn ttl_warnings(env: &Env, key: &Symbol) -> u32 {
+        let mut count: u32 = 0;
+        for (_contract, topics, _data) in env.events().all().iter() {
+            if topics.len() != 2 {
+                continue;
+            }
+            let first = Symbol::try_from_val(env, &topics.get_unchecked(0));
+            let second = Symbol::try_from_val(env, &topics.get_unchecked(1));
+            if let (Ok(first), Ok(second)) = (first, second) {
+                if first == EV_TTL_WARNING && second == key.clone() {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    // ── 1. Unwatched keys are reported as at risk ─────────────────────────────
+
+    #[test]
+    fn test_unwatched_key_reports_zero_and_warns() {
+        let (env, client) = setup();
+        let key = watched(&env);
+        set_sequence(&env, 1_000);
+
+        assert_eq!(client.check_key_ttl(&key), 0);
+        assert_eq!(ttl_warnings(&env, &key), 1);
+    }
+
+    // ── 2. A refresh grants a full 100,000-ledger lifetime ────────────────────
+
+    #[test]
+    fn test_refresh_grants_full_lifetime_without_warning() {
+        let (env, client) = setup();
+        let key = watched(&env);
+        set_sequence(&env, 500);
+
+        assert_eq!(client.refresh_key_ttl(&key), INSTANCE_TTL_EXTEND_TO);
+        // A freshly watched key is healthy, so `check_key_ttl` must not warn.
+        assert_eq!(client.check_key_ttl(&key), INSTANCE_TTL_EXTEND_TO);
+        assert_eq!(ttl_warnings(&env, &key), 0);
+    }
+
+    // ── 3. Lifetime decays one ledger at a time and warns strictly below 10k ──
+
+    #[test]
+    fn test_remaining_lifetime_decays_and_warns_below_threshold() {
+        let (env, client) = setup();
+        let key = watched(&env);
+        set_sequence(&env, 0);
+        client.refresh_key_ttl(&key);
+
+        set_sequence(&env, 50_000);
+        assert_eq!(client.check_key_ttl(&key), 50_000);
+        assert_eq!(ttl_warnings(&env, &key), 0);
+
+        // Exactly `INSTANCE_TTL_WARNING_THRESHOLD` ledgers left: still healthy.
+        set_sequence(&env, 90_000);
+        assert_eq!(client.check_key_ttl(&key), INSTANCE_TTL_WARNING_THRESHOLD);
+        assert_eq!(ttl_warnings(&env, &key), 0);
+
+        // One ledger below the threshold: warn.
+        set_sequence(&env, 90_001);
+        assert_eq!(
+            client.check_key_ttl(&key),
+            INSTANCE_TTL_WARNING_THRESHOLD - 1
+        );
+        assert_eq!(ttl_warnings(&env, &key), 1);
+    }
+
+    // ── 4. The warning carries the remaining lifetime as its payload ──────────
+
+    #[test]
+    fn test_warning_event_payload_is_remaining_lifetime() {
+        let (env, client) = setup();
+        let key = watched(&env);
+        set_sequence(&env, 0);
+        client.refresh_key_ttl(&key);
+        set_sequence(&env, 95_000);
+
+        assert_eq!(client.check_key_ttl(&key), 5_000);
+
+        let events = env.events().all();
+        let (_contract, topics, data) = events.get(events.len() - 1).unwrap();
+        assert_eq!(topics.len(), 2);
+        match Symbol::try_from_val(&env, &topics.get_unchecked(0)) {
+            Ok(topic) => assert_eq!(topic, EV_TTL_WARNING),
+            Err(_) => panic!("ttl warning topic must be a symbol"),
+        }
+        match Symbol::try_from_val(&env, &topics.get_unchecked(1)) {
+            Ok(topic) => assert_eq!(topic, key),
+            Err(_) => panic!("ttl warning key topic must be a symbol"),
+        }
+        match u32::try_from_val(&env, &data) {
+            Ok(remaining) => assert_eq!(remaining, 5_000),
+            Err(_) => panic!("ttl warning payload must be the remaining lifetime"),
+        }
+    }
+
+    // ── 5. A refresh restarts the watch window ────────────────────────────────
+
+    #[test]
+    fn test_refresh_resets_the_watch_window() {
+        let (env, client) = setup();
+        let key = watched(&env);
+        set_sequence(&env, 0);
+        client.refresh_key_ttl(&key);
+
+        set_sequence(&env, 99_999);
+        assert_eq!(client.check_key_ttl(&key), 1);
+        assert_eq!(ttl_warnings(&env, &key), 1);
+
+        set_sequence(&env, 120_000);
+        assert_eq!(client.refresh_key_ttl(&key), INSTANCE_TTL_EXTEND_TO);
+        assert_eq!(client.check_key_ttl(&key), INSTANCE_TTL_EXTEND_TO);
+        // The refresh does not re-emit the earlier warning.
+        assert_eq!(ttl_warnings(&env, &key), 1);
+    }
+
+    // ── 6. An elapsed watch window saturates at zero ──────────────────────────
+
+    #[test]
+    fn test_elapsed_watch_window_saturates_at_zero() {
+        let (env, client) = setup();
+        let key = watched(&env);
+        set_sequence(&env, 0);
+        client.refresh_key_ttl(&key);
+
+        set_sequence(&env, 500_000);
+        assert_eq!(client.check_key_ttl(&key), 0);
+        assert_eq!(ttl_warnings(&env, &key), 1);
     }
 }

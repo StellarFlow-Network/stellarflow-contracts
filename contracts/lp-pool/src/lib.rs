@@ -12,7 +12,7 @@
 //! test-friendly while still exercising the same storage-access patterns a
 //! full pool would use.
 //!
-//! ## TTL extension (the actual deliverable of #768)
+//! ## TTL extension (the actual deliverable of #768, completed by #904)
 //!
 //! Soroban persistent storage entries are subject to expiration: if an entry's
 //! time-to-live (TTL) is not periodically extended, it can enter the
@@ -22,33 +22,30 @@
 //! stretch) could silently expire and then reject its next `swap`/`deposit`/
 //! `withdraw` outright.
 //!
-//! To prevent that, every one of `swap`, `deposit`, and `withdraw` calls
-//! [`bump_pool_ttl`] and [`bump_user_ttl`] *before* reading any pool or user
-//! state, via the shared helpers below. Both helpers are no-ops when the
-//! remaining TTL is still comfortably above [`BUMP_THRESHOLD`], so healthy
-//! pools pay no extra cost; only entries approaching expiration are extended,
-//! out to [`BUMP_AMOUNT`] ledgers.
+//! *Every* entry the pool depends on must be covered, not just the reserves:
+//! the two token addresses and the initialized flag are written once by
+//! `initialize` and only ever read afterwards, so they would archive well
+//! before the reserves that every call rewrites. The contract instance itself
+//! is a persistent entry too. All of those are extended through the shared
+//! [`ttl`] module — [`ttl::extend_instance`] for the instance and
+//! [`ttl::extend_if_present`] for each persistent key — from
+//! [`bump_pool_ttl`]/[`bump_user_ttl`], which run at the top of `initialize`,
+//! `swap`, `deposit`, and `withdraw` *before* any pool or user state is read.
+//! The helpers are no-ops when an entry's remaining TTL is still comfortably
+//! above [`BUMP_THRESHOLD`], so healthy pools pay no extra cost; only entries
+//! approaching expiration are extended, out to [`BUMP_AMOUNT`] ledgers.
 
 use soroban_sdk::{contract, contracterror, contractimpl, panic_with_error, Address, Env};
 
+mod ttl;
 mod types;
 pub use types::{DataKey, PoolReserves};
 
+/// Backwards-compatible aliases for the shared TTL constants in [`ttl`].
+pub use ttl::{BUMP_AMOUNT, BUMP_THRESHOLD};
+
 #[cfg(test)]
 mod test;
-
-/// Number of ledgers below which a persistent entry's TTL is proactively
-/// extended. At roughly 5 seconds/ledger, `518_400` ledgers is ~30 days —
-/// comfortably inside Soroban's minimum persistent TTL window, so any pool or
-/// user record that is touched at least once a month never approaches
-/// archival.
-pub const BUMP_THRESHOLD: u32 = 518_400;
-
-/// Number of ledgers a bumped entry's TTL is extended *to* (from the current
-/// ledger), when the remaining TTL falls below [`BUMP_THRESHOLD`]. At ~5
-/// seconds/ledger, `1_036_800` ledgers is ~60 days, giving a wide safety
-/// margin before the next bump is strictly required.
-pub const BUMP_AMOUNT: u32 = 1_036_800;
 
 /// Error types for the LP pool contract.
 #[contracterror]
@@ -87,18 +84,19 @@ fn require_initialized(env: &Env) -> Result<(), Error> {
     Ok(())
 }
 
-/// Extend the pool reserves entry's TTL if it is running low.
+/// Extend every pool-level entry a state-changing call depends on.
 ///
-/// Called at the top of every state-changing entrypoint, before any pool
-/// state is read, so an actively-used pool's reserves record never drifts
-/// into the archived state. A no-op if the entry does not exist yet (i.e.
-/// before `initialize`) or if its remaining TTL is still above
-/// [`BUMP_THRESHOLD`].
+/// Covers the contract instance, the reserves, both token addresses, and the
+/// initialized flag. Called at the top of `initialize` and of every
+/// state-changing entrypoint, before any pool state is read, so an
+/// actively-used pool never lets them drift into the archived state. Each
+/// individual extension is a no-op while the entry is still healthy.
 fn bump_pool_ttl(env: &Env) {
-    let storage = env.storage().persistent();
-    if storage.has(&DataKey::Reserves) {
-        storage.extend_ttl(&DataKey::Reserves, BUMP_THRESHOLD, BUMP_AMOUNT);
-    }
+    ttl::extend_instance(env);
+    ttl::extend_if_present(env, &DataKey::Reserves);
+    ttl::extend_if_present(env, &DataKey::TokenA);
+    ttl::extend_if_present(env, &DataKey::TokenB);
+    ttl::extend_if_present(env, &DataKey::Initialized);
 }
 
 /// Extend a user's share-record TTL if it is running low.
@@ -108,11 +106,7 @@ fn bump_pool_ttl(env: &Env) {
 /// ever `deposit`) or if its remaining TTL is still above
 /// [`BUMP_THRESHOLD`].
 fn bump_user_ttl(env: &Env, user: &Address) {
-    let storage = env.storage().persistent();
-    let key = DataKey::UserShares(user.clone());
-    if storage.has(&key) {
-        storage.extend_ttl(&key, BUMP_THRESHOLD, BUMP_AMOUNT);
-    }
+    ttl::extend_if_present(env, &DataKey::UserShares(user.clone()));
 }
 
 /// Read the current pool reserves, panicking if the pool has not been initialized.
@@ -181,6 +175,11 @@ impl LpPool {
             },
         );
         env.storage().persistent().set(&DataKey::Initialized, &true);
+
+        // Seal in the freshly written entries — and the contract instance
+        // itself — for a full TTL window, so an initialized pool that is not
+        // used immediately does not archive before its first deposit.
+        bump_pool_ttl(&env);
 
         Ok(())
     }

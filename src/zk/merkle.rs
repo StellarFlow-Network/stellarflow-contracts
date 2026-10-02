@@ -17,8 +17,8 @@ use crate::zk::nullifier::{is_nullifier_used, register_nullifier};
 /// Depth 20 supports 2^20 = 1,048,576 total deposit commitments.
 pub const TREE_DEPTH: u32 = 20;
 
-/// Maximum number of historical roots retained in the historical root ring buffer.
-pub const ROOT_BUFFER_CAPACITY: u32 = 100;
+/// Maximum number of historical roots retained in the historical root ring buffer (Issue #990).
+pub const ROOT_BUFFER_CAPACITY: u32 = 32;
 
 /// Default root validity duration in seconds (7 days = 604,800 seconds).
 /// Merkle roots older than this expiration window are rejected as expired.
