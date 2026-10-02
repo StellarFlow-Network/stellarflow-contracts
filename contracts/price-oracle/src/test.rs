@@ -4,8 +4,52 @@ use super::*;
 use soroban_sdk::{
     symbol_short,
     testutils::{Address as _, Events, Ledger},
-    Address, Env,
+    Address, Env, IntoVal, TryFromVal, Val,
 };
+
+/// Maximum number of topic elements allowed per emitted event.
+const MAX_EVENT_TOPICS: usize = 4;
+
+/// Returns the module identifier expected as the first topic of every event
+/// emitted by this contract. Indexers rely on this to route events to the
+/// correct module handler.
+fn expected_module_topic(env: &Env) -> soroban_sdk::Symbol {
+    symbol_short!("price_oracle")
+}
+
+/// Validates that an emitted event conforms to the indexer topic schema:
+/// - the first topic matches the target contract module identifier
+/// - the event carries at most `MAX_EVENT_TOPICS` topic elements
+fn assert_event_topic_schema(env: &Env, topics: &soroban_sdk::Vec<Val>) {
+    assert!(
+        !topics.is_empty(),
+        "emitted event must contain at least one topic"
+    );
+    assert!(
+        topics.len() as usize <= MAX_EVENT_TOPICS,
+        "emitted event exceeds maximum of {} topics",
+        MAX_EVENT_TOPICS
+    );
+
+    let first = topics.get(0).unwrap();
+    let first_symbol = soroban_sdk::Symbol::try_from_val(env, &first)
+        .expect("first event topic must be a Symbol module identifier");
+    assert_eq!(
+        first_symbol,
+        expected_module_topic(env),
+        "first event topic must match the contract module identifier"
+    );
+}
+
+/// Iterates over all events emitted during the current test and asserts that
+/// each one satisfies the indexer topic schema.
+fn assert_all_events_conform(env: &Env) {
+    let events = env.events().all();
+    for event in events.iter() {
+        let (_contract, topics, _data) = event;
+        assert_event_topic_schema(env, &topics);
+    }
+}
 
 fn setup() -> (Env, Address, PriceOracleClient<'static>) {
     let env = Env::default();
@@ -56,6 +100,9 @@ fn test_get_index_price() {
     let index_price = client.get_index_price(&components);
 
     // Assert the index_price equals the expected mathematical weighted average
+    assert!(index_price >= 0);
+
+    assert_all_events_conform(&env);
 }
 
 #[test]
@@ -72,6 +119,8 @@ fn test_initialize_sets_admin_and_assets() {
         assert_eq!(admins.get(0).unwrap(), admin);
     });
     assert_eq!(client.get_all_assets(), pairs);
+
+    assert_all_events_conform(&env);
 }
 
 #[test]
@@ -97,6 +146,8 @@ fn test_revoke_key_blocks_compromised_admin_and_provider() {
         assert!(!crate::auth::_is_provider(&env, &compromised));
         assert!(crate::auth::_is_revoked(&env, &compromised));
     });
+
+    assert_all_events_conform(&env);
 }
 
 #[test]
@@ -132,6 +183,8 @@ fn test_get_price_existing_asset() {
     assert_eq!(retrieved_price.timestamp, 1_234_567_890);
     assert_eq!(retrieved_price.decimals, 6u32);
     assert_eq!(retrieved_price.provider, contract_id);
+
+    assert_all_events_conform(&env);
 }
 
 #[test]
@@ -166,6 +219,8 @@ fn test_get_price_multiple_assets() {
         client.try_get_price(&kes, &true).unwrap().unwrap().price,
         50_000_000_000_i128
     );
+
+    assert_all_events_conform(&env);
 }
 
 #[test]
@@ -191,6 +246,8 @@ fn test_get_price_after_update() {
     let updated = client.try_get_price(&asset, &true).unwrap();
     assert_eq!(updated.price, 1_200_000_i128);
     assert_eq!(updated.timestamp, 1_234_567_900);
+
+    assert_all_events_conform(&env);
 }
 
 #[test]
@@ -206,6 +263,8 @@ fn test_get_price_with_status_marks_stale_entries() {
 
     assert_eq!(result.data.price, 1_500_i128);
     assert!(result.is_stale);
+
+    assert_all_events_conform(&env);
 }
 
 #[test]
@@ -324,6 +383,8 @@ fn test_set_and_get_max_deviation_percentage() {
 
     let max_deviation = client.get_max_deviation_percentage();
     assert_eq!(max_deviation, 500_i128);
+
+    assert_all_events_conform(&env);
 }
 
 #[test]
@@ -374,6 +435,8 @@ fn test_rollback_max_deviation_rejects_values_below_floor() {
     }
 
     assert_eq!(client.get_max_deviation_percentage(), 500_i128);
+
+    assert_all_events_conform(&env);
 }
 
 #[test]

@@ -13,6 +13,7 @@ pub mod ephemeral;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {
     Subscription(Address),
+    AssetPrice(Symbol),
 }
 
 /// NOTE: These are single-variant enums, not bare tuple structs. A single-field
@@ -99,6 +100,11 @@ pub struct FeedStakeValue {
 }
 
 /// --- Standardized TTL Helpers ---
+
+/// TTL threshold under which persistent/instance entries are bumped (~10k ledgers).
+const THRESHOLD: u32 = 10_000;
+/// TTL target applied on bump (~100k ledgers).
+const BUMP_AMOUNT: u32 = 100_000;
 
 /// Extends TTL for Persistent storage using strict 10k/100k rule.
 pub fn extend_persistent_ttl<K: soroban_sdk::IntoVal<Env, soroban_sdk::Val>>(env: &Env, key: &K) {

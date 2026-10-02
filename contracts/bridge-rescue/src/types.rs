@@ -17,6 +17,9 @@ pub enum DataKey {
     Token,
     /// Monotonically increasing counter used to hand out unique `BridgeLock` ids.
     NextLockId,
+    /// Default timeout (in ledger timestamps, i.e. seconds) applied to every lock
+    /// unless overridden per-lock. Set at initialization.
+    ClaimTimeout,
     /// The `BridgeLock` record for a given lock id.
     Lock(u64),
     /// Whether a given validator has already voted (submitted failure proof) on a lock.
@@ -40,6 +43,11 @@ pub enum LockStatus {
     /// Funds have been returned to the original sender via the rescue flow.
     /// Terminal state — a `Rescued` lock can never be rescued again.
     Rescued,
+    /// Funds have been returned to the original sender because the claim
+    /// request expired (`t_claim + T_timeout`) without validator signatures.
+    /// Terminal state — a `CANCELLED_EXPIRED` lock can never be rescued or
+    /// cancelled again.
+    CancelledExpired,
 }
 
 /// A single cross-chain bridge lock record.
@@ -60,4 +68,9 @@ pub struct BridgeLock {
     /// Whether validator consensus has confirmed permanent delivery failure for this lock.
     /// Once `true` this never reverts back to `false`.
     pub validator_confirmed: bool,
+    /// The claim request expiration timestamp (`t_claim + T_timeout`), in
+    /// Unix seconds as reported by the ledger timestamp. Once this is
+    /// reached without validator signatures, the lock becomes eligible for a
+    /// timeout refund via `claim_timeout`.
+    pub expires_at: u64,
 }

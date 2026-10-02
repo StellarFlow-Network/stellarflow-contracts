@@ -101,7 +101,7 @@ pub fn register_oracle(
 
     // Emit event
     env.events().publish(
-        (symbol_short!("orcl_reg"), asset),
+        (Symbol::new(env, "oracle_reg"), asset),
         oracle,
     );
 
@@ -123,7 +123,7 @@ fn verify_attestation_signature(
     amount: u64,
     signature: &BytesN<64>,
 ) -> Result<(), ContractError> {
-    // Reconstruct the signed payload: Tx_id || Amount (8 bytes LE)
+    // Reconstruct the signed payload: Tx_id || AmountErr (8 bytes LE)
     let mut payload = Bytes::new(env);
     payload.append(tx_id);
     let amount_bytes = amount.to_le_bytes();
@@ -439,7 +439,7 @@ pub fn remove_oracle(
     
     // Emit event
     env.events().publish(
-        (symbol_short!("orcl_rem"), asset),
+        (Symbol::new(env, "oracle_rem"), asset),
         oracle,
     );
     

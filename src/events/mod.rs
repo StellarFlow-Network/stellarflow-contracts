@@ -1,5 +1,4 @@
 pub mod events;
-pub mod governance;
 pub mod liquidity;
 pub mod swaps;
 
@@ -11,6 +10,7 @@ pub use liquidity::{
 pub use swaps::{publish_swap_executed, SwapExecutedEvent};
 
 use crate::errors::PROPOSAL_EXPIRY_SECONDS;
+use soroban_sdk::Vec;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProposalExpiredEvent {
@@ -32,7 +32,7 @@ pub fn has_proposal_expired(created_at: i64, now: i64) -> bool {
 pub fn cleanup_expired_proposals(proposals: &[(i64, i64)], now: i64) -> Vec<ProposalExpiredEvent> {
     proposals
         .iter()
-        .filter(|&(_, created_at)| has_proposal_expired(*created_at, now))
+        .filter(|(_, created_at)| has_proposal_expired(*created_at, now))
         .map(|(id, _)| publish_proposal_expired(*id, now))
         .collect()
 }

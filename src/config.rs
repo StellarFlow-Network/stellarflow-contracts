@@ -208,88 +208,6 @@ pub fn validate_price_variance_config(cfg: &PriceVarianceConfig) -> Result<(), C
 
     Ok(())
 }
-
-// ── Dynamic liquidity pool fee tier controller ──────────────────────────────
-
-/// Active fee tier configuration for the liquidity pool.
-#[contracttype]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FeeTierConfig {
-    /// Pool fee tier in basis points (5, 30 or 100).
-    pub fee_tier_bps: u32,
-}
-
-impl Default for FeeTierConfig {
-    fn default() -> Self {
-        Self {
-            fee_tier_bps: DEFAULT_FEE_TIER_BPS,
-        }
-    }
-}
-
-/// Validate fee tier is one of the allowed governance tiers.
-pub fn validate_fee_tier_config(cfg: &FeeTierConfig) -> Result<(), ContractError> {
-    if cfg.fee_tier_bps != MIN_FEE_TIER_BPS
-        && cfg.fee_tier_bps != DEFAULT_FEE_TIER_BPS
-        && cfg.fee_tier_bps != MAX_FEE_TIER_BPS
-    {
-        return Err(ContractError::InvalidVarianceConfig);
-    }
-    Ok(())
-}
-
-/// Set the active fee tier as the contract admin.
-pub fn set_fee_tier_config(
-    env: &Env,
-    caller: &Address,
-    cfg: FeeTierConfig,
-) -> Result<(), ContractError> {
-    let data: ContractData = env
-        .storage()
-        .instance()
-        .get(&DATA_KEY)
-        .ok_or(ContractError::NotInitialized)?;
-    if data.admin != *caller {
-        return Err(ContractError::NotAdmin);
-    }
-    caller.require_auth();
-    validate_fee_tier_config(&cfg)?;
-    env.storage().instance().set(&FEE_TIER_CONFIG_KEY, &cfg);
-    Ok(())
-}
-
-/// Read the active fee tier configuration.
-pub fn get_fee_tier_config(env: &Env) -> FeeTierConfig {
-    env.storage()
-        .instance()
-        .get(&FEE_TIER_CONFIG_KEY)
-        .unwrap_or_default()
-}
-
-/// Apply a governance vote to adjust the fee tier within safety bounds.
-pub fn vote_fee_tier_change(
-    env: &Env,
-    approving_signers: Vec<Address>,
-    proposed_fee_tier_bps: u32,
-) -> Result<(), ContractError> {
-    let keys = get_admin_key_set(env)?;
-    validate_admin_key_set(&keys)?;
-    if has_duplicate_addresses(&approving_signers) || approving_signers.len() < keys.threshold {
-        return Err(ContractError::NotAdmin);
-    }
-    for signer in approving_signers.iter() {
-        signer.require_auth();
-        if !keys.signers.iter().any(|member| member == signer) {
-            return Err(ContractError::NotAdmin);
-        }
-    }
-    let cfg = FeeTierConfig {
-        fee_tier_bps: proposed_fee_tier_bps,
-    };
-    validate_fee_tier_config(&cfg)?;
-    env.storage().instance().set(&FEE_TIER_CONFIG_KEY, &cfg);
-    Ok(())
-}
 /// Verify that a proposed admin key set satisfies multi-sig sanity rules.
 pub fn validate_admin_key_set(keys: &AdminKeySet) -> Result<(), ContractError> {
     if keys.signers.len() == 0 || keys.threshold == 0 || keys.threshold > keys.signers.len() {
@@ -349,18 +267,103 @@ pub fn rotate_admin_keys(
     };
     env.storage().instance().set(&ADMIN_KEY_SET_KEY, &new_key_set);
 
+    let mut data: ContractData = env
+        .storage()
+        .instance()
+        .get(&DATA_KEY)
+        .ok_or(ContractError::NotInitialized)?;
+
+    // Keep the legacy single-admin field aligned with the newly rotated key
+    // set so downstream `data.admin` checks keep authorizing the primary
+    // signer. `new_signers` is validated above to be non-empty.
+    if let Some(primary_signer) = new_signers.get(0) {
+        data.admin = primary_signer;
+        env.storage().instance().set(&DATA_KEY, &data);
+    }
+
     Ok(())
 }
 
-pub fn has_duplicate_addresses(addresses: &Vec<Address>) -> bool {
-    for i in 0..addresses.len() {
-        for j in (i + 1)..addresses.len() {
-            if addresses.get(i) == addresses.get(j) {
-                return true;
-            }
+// ── Dynamic liquidity pool fee tier controller ──────────────────────────────
+
+/// Active fee tier configuration for the liquidity pool.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FeeTierConfig {
+    /// Pool fee tier in basis points (5, 30 or 100).
+    pub fee_tier_bps: u32,
+}
+
+impl Default for FeeTierConfig {
+    fn default() -> Self {
+        Self {
+            fee_tier_bps: DEFAULT_FEE_TIER_BPS,
         }
     }
-    false
+}
+
+/// Validate fee tier is one of the allowed governance tiers.
+pub fn validate_fee_tier_config(cfg: &FeeTierConfig) -> Result<(), ContractError> {
+    if cfg.fee_tier_bps != MIN_FEE_TIER_BPS
+        && cfg.fee_tier_bps != DEFAULT_FEE_TIER_BPS
+        && cfg.fee_tier_bps != MAX_FEE_TIER_BPS
+    {
+        return Err(ContractError::InvalidVarianceConfig);
+    }
+    Ok(())
+}
+
+/// Set the active fee tier as the contract admin.
+pub fn set_fee_tier_config(
+    env: &Env,
+    caller: &Address,
+    cfg: FeeTierConfig,
+) -> Result<(), ContractError> {
+    let data: ContractData = env
+        .storage()
+        .instance()
+        .get(&DATA_KEY)
+        .ok_or(ContractError::NotInitialized)?;
+    if data.admin != *caller {
+        return Err(ContractError::NotAdmin);
+    }
+    caller.require_auth();
+    validate_fee_tier_config(&cfg)?;
+    env.storage().instance().set(&FEE_TIER_CONFIG_KEY, &cfg);
+    Ok((
+}
+
+/// Read the active fee tier configuration.
+pub fn get_fee_tier_config(env: &Env) -> FeeTierConfig {
+    env.storage()
+        .instance()
+        .get(&FEE_TIER_CONFIG_KEY)
+        .unwrap_or_default()
+}
+
+/// Apply a governance vote to adjust the fee tier within safety bounds.
+pub fn vote_fee_tier_change(
+    env: &Env,
+    approving_signers: Vec<Address>,
+    proposed_fee_tier_bps: u32,
+) -> Result<(), ContractError> {
+    let keys = get_admin_key_set(env)?;
+    validate_admin_key_set(&keys)?;
+    if has_duplicate_addresses(&approving_signers) || approving_signers.len() < keys.threshold {
+        return Err(ContractError::NotAdmin);
+    }
+    for signer in approving_signers.iter() {
+        signer.require_auth();
+        if !keys.signers.iter().any(|member| member == signer) {
+            return Err(ContractError::NotAdmin);
+        }
+    }
+    let cfg = FeeTierConfig {
+        fee_tier_bps: proposed_fee_tier_bps,
+    };
+    validate_fee_tier_config(&cfg)?;
+    env.storage().instance().set(&FEE_TIER_CONFIG_KEY, &cfg);
+    Ok(())
 }
 
 // ── Storage accessors ─────────────────────────────────────────────────────────

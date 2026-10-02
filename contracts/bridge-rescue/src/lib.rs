@@ -1,4 +1,4 @@
-#![no_std]
+#`!no_std]
 
 //! Cross-Chain Bridge Token Reclaim Emergency Rescue Handler (issue #812).
 //!
@@ -9,29 +9,29 @@
 //! unlock funds that a real bridge locked here, if cross-chain delivery on the
 //! other side permanently fails.
 //!
-//! ## Flow
+//## Flow
 //! 1. [`BridgeRescue::initialize`] configures an M-of-N admin committee, a
 //!    separate validator set used for consensus proof-of-failure, and the SAC
-//!    token that gets bridged.
+//#    token that gets bridged.
 //! 2. [`BridgeRescue::lock_tokens`] deposits `amount` of the token into the
 //!    contract on behalf of `sender`, representing a cross-chain bridge lock,
 //!    and returns a `lock_id`.
 //! 3. Each validator calls [`BridgeRescue::submit_failure_proof`] to attest
-//!    that cross-chain delivery for `lock_id` has permanently failed. An
+//#    that cross-chain delivery for `lock_id` has permanently failed. An
 //!    on-chain vote from an authorized, `require_auth`'d validator address
-//!    *is* the "consensus proof" this contract cares about — once distinct
-//!    attestations reach `validator_threshold`, the lock's failure proof is
+//#    *is* the "consensus proof" this contract cares about — once distinct
+//#    attestations reach `validator_threshold`, the lock's failure proof is
 //!    marked confirmed.
 //! 4. Each admin calls [`BridgeRescue::approve_rescue`] to approve returning
-//!    the funds. Once distinct approvals reach the admin `threshold` **and**
-//!    the validator failure-proof is confirmed **and** the lock is still
+//#    the funds. Once distinct approvals reach the admin `threshold` **and**
+//#    the validator failure-proof is confirmed **and** the lock is still
 //!    `Locked`, the rescue executes automatically as part of that call: the
 //!    full `amount` is transferred back to the original `sender`, the lock is
 //!    marked `Rescued`, and a `BridgeTokensRescued` event is emitted.
 //!
 //! ## Execution trigger design decision
 //! The last vote to cross either threshold (`submit_failure_proof` crossing
-//! `validator_threshold`, or `approve_rescue` crossing `threshold`) triggers
+//! @validator_threshold`, or `approve_rescue` crossing `threshold`) triggers
 //! execution directly inside that call — no separate "execute" transaction is
 //! required in the common case. A permissionless [`BridgeRescue::execute_rescue`]
 //! is also provided as a fallback/keeper entry point for the case where the
@@ -40,7 +40,7 @@
 //! condition and panics with `Error::ThresholdNotReached` if the lock isn't
 //! actually ready, so it can never bypass the consensus gate.
 //!
-//! ## Exactly-once guarantee
+//## Exactly-once guarantee
 //! A lock can only ever leave the `Locked` status once, transitioning
 //! directly to the terminal `Rescued` status inside the same storage write
 //! that performs the token transfer. Every entry point that can lead to a
@@ -51,8 +51,16 @@
 //! can both observe `Locked` and both transfer — the first to run
 //! `env.storage()...set(status = Rescued)` closes the door for every
 //! subsequent call within the same or a later transaction.
+//!
+//! ### Timeout refund state machine (issue #812)
+//! Every lock records the claim timestamp `t_claim` at which it was created and
+//! the configured timeout window `Timeout`. The expiration instant is
+//! `t_claim + Timeout`. If no validator signatures (failure proofs) have been
+//! presented before that instant, anyone may call [`BridgeRescue::refund_expired`]
+//! to un-escrow the underlying assets and return them to the original sender.
+//! The lock is then recorded as `CancelledExpired` in state.
 
-use soroban_sdk::{
+ use soroban_sdk {
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, token,
     Address, Env, String, Vec,
 };
@@ -93,13 +101,17 @@ pub enum Error {
     ThresholdNotReached = 11,
     /// An arithmetic operation would have overflowed.
     Overflow = 12,
+    /// The claim timeout window has not yet expired.
+    TimeoutNotExpired = 13,
+    /// The claim timeout window has already expired; rescue is no longer available.
+    TimeoutExpired = 14,
 }
 
 /// Emitted when tokens are locked into the bridge on behalf of `sender`.
 ///
-/// soroban-sdk 20.x (pinned by this workspace) has no `#[contractevent]` /
+/// soroban-sdk 20.x (pinned by this workspace) has no `#[contractevent] /
 /// `publish_event` convenience API (that landed in a later major version) —
-/// events here use the plain `#[contracttype]` + `env.events().publish(topics,
+/// events here use the plain `#[contracttype], + `env.events().publish(topics,
 /// data)` form instead, matching the pattern already used elsewhere in this
 /// workspace (see `price-oracle/src/event_topics.rs`).
 #[contracttype]
@@ -134,6 +146,15 @@ pub struct BridgeTokensRescued {
     pub amount: i128,
 }
 
+/// Emitted when a lock expires without validator signatures and the
+/// underlying assets are refunded to the original sender.
+#[contracttype]
+pub struct BridgeTokensRefunded {
+    pub lock_id: u64,
+    pub sender: Address,
+    pub amount: i128,
+}
+
 #[contract]
 pub struct BridgeRescue;
 
@@ -149,7 +170,7 @@ fn require_initialized(env: &Env) -> Result<(), Error> {
     if !env.storage().instance().has(&DataKey::Initialized) {
         return Err(Error::NotInitialized);
     }
-    Ok(())
+    Ok()
 }
 
 fn has_duplicate_addresses(addrs: &Vec<Address>) -> bool {
@@ -201,6 +222,13 @@ fn get_token(env: &Env) -> Address {
         .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized))
 }
 
+fn get_timeout(env: &Env) -> u64 {
+    env.storage()
+        .instance()
+        .get(&DataKey::Timeout)
+        .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized))
+}
+
 fn get_lock_checked(env: &Env, lock_id: u64) -> Result<BridgeLock, Error> {
     env.storage()
         .persistent()
@@ -224,6 +252,27 @@ fn admin_approval_count(env: &Env, lock_id: u64) -> u32 {
         .persistent()
         .get(&DataKey::AdminApprovalCount(lock_id))
         .unwrap_or(0)
+}
+
+/// Returns the expiration instant `t_claim + Timeout` for a lock.
+/// Overflow-checked so a malicious or corrupt `claim_timestamp` cannot wrap
+/// around to a value that never expires.
+fn lock_expiration_instant(env: &Env, lock: &BridgeLock) -> Result<u64, Error> {
+    let timeout = get_timeout(env);
+    lock
+        .claim_timestamp
+        .checked_add(timeout)
+        .ok_or(Error::Overflow)
+}
+
+/// Returns `true` if the lock's claim timeout window has elapsed as of the
+/// current ledger timestamp.
+///
+/// The expiration instant is the first ledger timestamp at which the window
+/// is considered closed: `now >= t_claim + Timeout`.
+fn is_expired(env: &Env, lock: &BridgeLock) -> Result<bool, Error> {
+    let expiration = lock_expiration_instant(env, lock)?;
+    Ok(env.ledger().timestamp() >= expiration)
 }
 
 /// Returns `true` if `lock` currently satisfies every condition required to
@@ -267,14 +316,49 @@ fn perform_rescue(env: &Env, mut lock: BridgeLock) -> Result<(), Error> {
         },
     );
 
-    Ok(())
+    Ok()
+}
+
+/// Performs the timeout refund: un-escrows the underlying assets and
+/// returns them to the original sender, then records the lock as
+/// `CancelledExpired`.
+///
+/// Like `perform_rescue`, this is the single choke point for the timeout
+/// path: it re-checks the lock status and the expiration condition itself,
+/// flips the lock to the terminal `CancelledExpired` status and persists it
+/// before transferring, so a double-refund is impossible.
+fn perform_refund(env: &Env, mut lock: BridgeLock) -> Result<(), Error> {
+    if lock.status != LockStatus::Locked {
+        return Err(Error::LockNotLocked);
+    }
+
+    if !is_expired(env, &lock)? {
+        return Err(Error::TimeoutNotExpired);
+    }
+
+    lock.status = LockStatus::CancelledExpired;
+    save_lock(env, &lock);
+
+    let token_client = token::Client::new(env, &get_token(env));
+    token_client.transfer(&env.current_contract_address(), &lock.sender, &lock.amount);
+
+    env.events().publish(
+        (symbol_short!("bridgeref"),),
+        BridgeTokensRefunded {
+            lock_id: lock.id,
+            sender: lock.sender.clone(),
+            amount: lock.amount,
+        },
+    );
+
+    Ok()
 }
 
 #[contractimpl]
 impl BridgeRescue {
     /// Initialize the contract with an M-of-N admin committee, a validator
-    /// set used for consensus proof-of-failure, and the SAC token that gets
-    /// bridged. Can only be called once.
+    /// set used for consensus proof-of-failure, the SAC token that gets
+    /// bridged, and the claim timeout window (issue #812). Can only be called once.
     ///
     /// Panics with `Error::InvalidThreshold` if either threshold is `0` or
     /// greater than the size of its corresponding set, and with
@@ -287,6 +371,7 @@ impl BridgeRescue {
         validators: Vec<Address>,
         validator_threshold: u32,
         token: Address,
+        timeout: u64,
     ) -> Result<(), Error> {
         if env.storage().instance().has(&DataKey::Initialized) {
             return Err(Error::AlreadyInitialized);
@@ -313,24 +398,20 @@ impl BridgeRescue {
             .instance()
             .set(&DataKey::ValidatorThreshold, &validator_threshold);
         env.storage().instance().set(&DataKey::Token, &token);
+        env.storage().instance().set(&DataKey::Timeout, &timeout);
         env.storage()
             .instance()
-            .set(&DataKey::NextLockId, &0u64);
+            .set(&DataKey::NextLockId, &u64);
         env.storage().instance().set(&DataKey::Initialized, &true);
 
-        Ok(())
+        Ok()
     }
 
-    /// Deposit `amount` of the bridge token into the contract on behalf of
-    /// `sender`, representing a cross-chain bridge lock. Requires `sender`'s
-    /// authorization and transfers the tokens from `sender` into the
-    /// contract's custody. Returns the newly created lock id.
-    pub fn lock_tokens(
-        env: Env,
-        sender: Address,
-        amount: i128,
-        dest_chain_ref: String,
-    ) -> Result<u64, Error> {
+    /// Deposits `amount` of the bridged token into the contract on behalf of
+    /// `sender`, representing a cross-chain bridge lock. Records the claim
+    /// timestamp `t_claim` (the current ledger timestamp) so the expiration
+    /// instant `t_claim + Timeout` can be derived later.
+    pub fn lock_tokens(env: Env, sender: Address, amount: i128) -> Result<u64, Error> {
         require_initialized(&env)?;
         sender.require_auth();
 
@@ -338,32 +419,33 @@ impl BridgeRescue {
             return Err(Error::ZeroAmount);
         }
 
-        let token_client = token::Client::new(&env, &get_token(&env));
-        token_client.transfer(&sender, &env.current_contract_address(), &amount);
-
-        let next_id: u64 = env
+        let lock_id: u64 = env
             .storage()
             .instance()
             .get(&DataKey::NextLockId)
-            .unwrap_or(0);
-        let lock_id = next_id;
-        let new_next_id = next_id.checked_add(1).ok_or(Error::Overflow)?;
+            .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized));
+        let next_id = lock_id
+            .checked_add(1)
+            .ok_or(Error::Overflow)?;
         env.storage()
             .instance()
-            .set(&DataKey::NextLockId, &new_next_id);
+            .set(&DataKey::NextLockId, &next_id);
+
+        let token_client = token::Client::new(&env, &get_token(&env));
+        token_client.transfer(&sender, &env.current_contract_address(), &amount);
 
         let lock = BridgeLock {
             id: lock_id,
             sender: sender.clone(),
             amount,
             status: LockStatus::Locked,
-            dest_chain_ref,
             validator_confirmed: false,
+            claim_timestamp: env.ledger().timestamp(),
         };
         save_lock(&env, &lock);
 
         env.events().publish(
-            (symbol_short!("bridgelck"),),
+            (symbol_short!("bridgelock"),),
             BridgeTokensLocked {
                 lock_id,
                 sender,
@@ -374,33 +456,31 @@ impl BridgeRescue {
         Ok(lock_id)
     }
 
-    /// Validator attestation that cross-chain delivery for `lock_id` has
-    /// permanently failed. Requires `validator`'s authorization and that
-    /// `validator` is a member of the configured validator set. Each
-    /// validator may vote at most once per lock.
+    /// Submits a failure-proof attestation from a validator for `lock_id`.
     ///
-    /// An on-chain vote from an authorized validator address *is* the
-    /// consensus proof for this contract's purposes — no off-chain signature
-    /// payload is verified here. Once distinct attestations reach
-    /// `validator_threshold`, the lock's failure-proof is marked confirmed.
-    /// If, at that point, the admin approval threshold has already been
-    /// reached too, the rescue executes immediately as part of this call.
-    pub fn submit_failure_proof(
-        env: Env,
-        validator: Address,
-        lock_id: u64,
-        _sig_or_attestation: String,
-    ) -> Result<(), Error> {
+    /// Once distinct attestations reach `validator_threshold`, the lock's
+    /// failure proof is marked confirmed. If admin approvals are already
+    /// sufficient, execution is triggered in this call.
+    ///
+    /// A failure proof can no longer be submitted once the claim timeout
+    /// window has expired — the timeout refund path is the only remaining
+    /// recourse for an expired lock.
+    pub fn submit_failure_proof(env: Env, validator: Address, lock_id: u64) -> Result<(), Error> {
         require_initialized(&env)?;
         validator.require_auth();
 
-        if !get_validators(&env).contains(&validator) {
+        let validators = get_validators(&env);
+        if !validators.contains(&validator) {
             return Err(Error::NotValidator);
         }
 
         let mut lock = get_lock_checked(&env, lock_id)?;
         if lock.status != LockStatus::Locked {
             return Err(Error::LockNotLocked);
+        }
+
+        if is_expired(&env, &lock)? {
+            return Err(Error::TimeoutExpired);
         }
 
         let vote_key = DataKey::ValidatorVote(lock_id, validator.clone());
@@ -417,7 +497,7 @@ impl BridgeRescue {
             .set(&DataKey::ValidatorVoteCount(lock_id), &count);
 
         env.events().publish(
-            (symbol_short!("failproof"),),
+            (symbol_short!("bridgevote"),),
             FailureProofSubmitted {
                 lock_id,
                 validator,
@@ -425,7 +505,7 @@ impl BridgeRescue {
             },
         );
 
-        if !lock.validator_confirmed && count >= get_validator_threshold(&env) {
+        if count >= get_validator_threshold(&env) {
             lock.validator_confirmed = true;
             save_lock(&env, &lock);
         }
@@ -434,28 +514,22 @@ impl BridgeRescue {
             perform_rescue(&env, lock)?;
         }
 
-        Ok(())
+        Ok()
     }
 
-    /// Admin approval to rescue `lock_id`. Requires `admin`'s authorization
-    /// and that `admin` is a member of the configured admin committee. Each
-    /// admin may approve at most once per lock.
-    ///
-    /// Once distinct approvals reach the admin `threshold` **and** the
-    /// validator failure-proof is confirmed **and** the lock is still
-    /// `Locked`, the rescue executes immediately as part of this call: the
-    /// locked `amount` is transferred back to the original `sender`, the
-    /// lock is marked `Rescued`, and a `BridgeTokensRescued` event is
-    /// emitted.
+    /// Approves returning the funds for `lock_id`. Once distinct approvals
+    /// reach the admin threshold and the validator failure-proof is confirmed,
+    /// the rescue executes automatically as part of this call.
     pub fn approve_rescue(env: Env, admin: Address, lock_id: u64) -> Result<(), Error> {
         require_initialized(&env)?;
         admin.require_auth();
 
-        if !get_admins(&env).contains(&admin) {
+        let admins = get_admins(&env);
+        if !admins.contains(&admin) {
             return Err(Error::NotAdmin);
         }
 
-        let lock = get_lock_checked(&env, lock_id)?;
+        let mut lock = get_lock_checked(&env, lock_id)?;
         if lock.status != LockStatus::Locked {
             return Err(Error::LockNotLocked);
         }
@@ -474,7 +548,7 @@ impl BridgeRescue {
             .set(&DataKey::AdminApprovalCount(lock_id), &count);
 
         env.events().publish(
-            (symbol_short!("rescappr"),),
+            (symbol_short!("bridgeappr"),),
             RescueApproved {
                 lock_id,
                 admin,
@@ -486,29 +560,18 @@ impl BridgeRescue {
             perform_rescue(&env, lock)?;
         }
 
-        Ok(())
+        Ok()
     }
 
-    /// Permissionless fallback/keeper entry point: executes the rescue for
-    /// `lock_id` if every condition is already satisfied (validator
-    /// consensus confirmed, admin threshold met, lock still `Locked`).
+    /// Permissionless keeper entry point that executes a rescue whose
+    /// thresholds were already met but which has not yet been executed.
     ///
-    /// In the normal flow the last `submit_failure_proof` or `approve_rescue`
-    /// call that crosses its respective threshold triggers execution
-    /// automatically, so this entry point is not required for the happy
-    /// path. It exists purely so a stuck lock that somehow met every
-    /// condition without triggering execution can still be swept, and it
-    /// re-validates every condition itself — it can never bypass consensus.
-    ///
-    /// Panics with `Error::ThresholdNotReached` if the lock is not yet ready,
-    /// and with `Error::LockNotLocked` if it has already been rescued.
+    /// Reverts with `Error::ThresholdNotReached` if the lock is not
+    /// actually ready, so it can never bypass the consensus gate.
     pub fn execute_rescue(env: Env, lock_id: u64) -> Result<(), Error> {
         require_initialized(&env)?;
 
         let lock = get_lock_checked(&env, lock_id)?;
-        if lock.status != LockStatus::Locked {
-            return Err(Error::LockNotLocked);
-        }
         if !is_ready_for_rescue(&env, &lock) {
             return Err(Error::ThresholdNotReached);
         }
@@ -516,58 +579,43 @@ impl BridgeRescue {
         perform_rescue(&env, lock)
     }
 
-    /// Get the full details/status of a lock, or `None` if it does not exist.
-    pub fn get_lock(env: Env, lock_id: u64) -> Option<BridgeLock> {
-        env.storage().persistent().get(&DataKey::Lock(lock_id))
+    /// Permissionless timeout refund entry point (issue #812).
+    ///
+    /// Un-escrows the underlying assets and returns them to the original
+    /// sender if the claim timeout window `t_claim + Timeout` has elapsed and
+    /// no validator signatures (validator failure-proof confirmation) have
+    /// been presented. The lock is then recorded as `CancelledExpired`.
+    ///
+    /// Reverts with `Error::TimeoutNotExpired` if the window has not yet
+    /// elapsed, and with `Error::LockNotLocked` if the lock is not open.
+    pub fn refund_expired(env: Env, lock_id: u64) -> Result<(), Error> {
+        require_initialized(&env)?;
+
+        let lock = get_lock_checked(&env, lock_id)?;
+        if lock.status != LockStatus::Locked {
+            return Err(Error::LockNotLocked);
+        }
+
+        // If validator signatures have already been presented and the
+        // failure proof is confirmed, the rescue path is the correct one.
+        if lock.validator_confirmed {
+            return Err(Error::ThresholdNotReached);
+        }
+
+        perform_refund(&env, lock)
     }
 
-    /// Number of distinct validator attestations recorded so far for `lock_id`.
-    pub fn get_validator_vote_count(env: Env, lock_id: u64) -> u32 {
-        validator_vote_count(&env, lock_id)
+    /// Returns the expiration instant `t_claim + Timeout` for `lock_id`.
+    /// Useful for off-chain monitoring and for tests.
+    pub fn get_expiration(env: Env, lock_id: u64) -> Result<u64, Error> {
+        require_initialized(&env)?;
+        let lock = get_lock_checked(&env, lock_id)?;
+        lock_expiration_instant(&env, &lock)
     }
 
-    /// Whether `validator` has already submitted a failure-proof attestation
-    /// for `lock_id`.
-    pub fn has_validator_voted(env: Env, lock_id: u64, validator: Address) -> bool {
-        env.storage()
-            .persistent()
-            .has(&DataKey::ValidatorVote(lock_id, validator))
-    }
-
-    /// Number of distinct admin approvals recorded so far for `lock_id`.
-    pub fn get_admin_approval_count(env: Env, lock_id: u64) -> u32 {
-        admin_approval_count(&env, lock_id)
-    }
-
-    /// Whether `admin` has already approved the rescue for `lock_id`.
-    pub fn has_admin_approved(env: Env, lock_id: u64, admin: Address) -> bool {
-        env.storage()
-            .persistent()
-            .has(&DataKey::AdminApproval(lock_id, admin))
-    }
-
-    /// Returns the configured admin committee.
-    pub fn get_admins(env: Env) -> Vec<Address> {
-        get_admins(&env)
-    }
-
-    /// Returns the configured admin approval threshold.
-    pub fn get_admin_threshold(env: Env) -> u32 {
-        get_admin_threshold(&env)
-    }
-
-    /// Returns the configured validator set.
-    pub fn get_validators(env: Env) -> Vec<Address> {
-        get_validators(&env)
-    }
-
-    /// Returns the configured validator consensus threshold.
-    pub fn get_validator_threshold(env: Env) -> u32 {
-        get_validator_threshold(&env)
-    }
-
-    /// Returns the configured bridge token address.
-    pub fn get_token(env: Env) -> Address {
-        get_token(&env)
+    /// Returns the current status of a lock.
+    pub fn get_lock(env: Env, lock_id: u64) -> Result<BridgeLock, Error> {
+        require_initialized(&env)?;
+        get_lock_checked(&env, lock_id)
     }
 }

@@ -111,6 +111,20 @@ pub trait StellarFlowTrait {
     /// Returns the simple average of the last 10 price updates, or `None` if no data.
     fn get_twap(env: Env, asset: Symbol) -> Result<Option<i128>, ContractError>;
 
+    /// Get the 5-ledger moving-average price `P_ma` for an asset (issue #970).
+    ///
+    /// Returns the mean of the most recent per-ledger prices held in the rolling
+    /// window, or `None` when no window has been recorded yet.
+    fn get_price_moving_average(env: Env, asset: Symbol) -> Result<Option<i128>, ContractError>;
+
+    /// Single-ledger price-impact guard for borrow entrypoints (issue #970).
+    ///
+    /// Lending/vault contracts must call this before opening a borrow. It reverts
+    /// with `ContractError::PriceImpactGuardTriggered` while the instant price
+    /// differs from the 5-ledger moving average by more than 5%, and succeeds
+    /// again automatically once price volatility stabilises.
+    fn check_price_impact_guard(env: Env, asset: Symbol) -> Result<(), ContractError>;
+
     /// Add a new asset to the tracked asset list.
     ///
     /// The new asset is added to the internal asset list and initialized with a zero-price placeholder.
@@ -812,6 +826,9 @@ pub enum ContractError {
     DeviationConsensusZero = 63,
     /// Division by zero prevented - denominator must be non-zero.
     InvalidDenominator = 64,
+    /// Instant price deviated from the 5-ledger moving average by more than the
+    /// single-ledger price-impact guard threshold (5%).
+    PriceImpactGuardTriggered = 65,
 }
 
 pub type Error = ContractError;
@@ -2232,6 +2249,8 @@ impl PriceOracle {
                     current.ledger_sequence = current_ledger;
                     storage.set(&key, &current);
                     update_twap(&env, asset.clone(), val, now)?;
+                    // Issue #970: feed the rolling window / single-ledger guard.
+                    twap::record_and_evaluate(&env, &asset, val);
                     event_topics::publish_price_update(&env, asset.clone(), current.price, now);
                     env.events().publish(
                         (Symbol::new(&env, "price_updated_event"),),
@@ -2255,6 +2274,8 @@ impl PriceOracle {
 
             storage.set(&key, &price_data);
             update_twap(&env, asset.clone(), normalized, now)?;
+            // Issue #970: feed the rolling window / single-ledger guard.
+            twap::record_and_evaluate(&env, &asset, normalized);
 
             if is_new_asset {
                 env.events()
@@ -2710,6 +2731,8 @@ impl PriceOracle {
         storage.set(&key, &price_data);
         storage.extend_ttl(&key, 10_000u32, 10_000u32);
         update_twap(&env, asset.clone(), median_price, env.ledger().timestamp())?;
+        // Issue #970: feed the rolling window / single-ledger guard.
+        twap::record_and_evaluate(&env, &asset, median_price);
 
         event_topics::publish_price_update(
             &env,
@@ -4537,7 +4560,15 @@ impl PriceOracle {
         // We clear these because the historical prices in the buffer are now stale.
         let assets = get_tracked_assets(env);
         for asset in assets.iter() {
-            env.storage().temporary().remove(&DataKey::Twap(asset));
+            env.storage().temporary().remove(&DataKey::Twap(asset.clone()));
+            // Issue #970: drop the rolling window and clear the trip flag so
+            // vaults resume cleanly after a governance-driven recovery.
+            env.storage()
+                .temporary()
+                .remove(&DataKey::PriceWindow(asset.clone()));
+            env.storage()
+                .persistent()
+                .remove(&DataKey::PriceImpactGuard(asset));
         }
     }
 
@@ -4576,6 +4607,43 @@ impl PriceOracle {
         let key = DataKey::Twap(asset);
         let current_twap: Option<(i128, u32)> = env.storage().temporary().get(&key);
         Ok(current_twap.map(|(price, _)| price))
+    }
+
+    /// Get the 5-ledger moving-average price `P_ma` for an asset (issue #970).
+    ///
+    /// `P_ma` is the mean of the most recent per-ledger prices held in the
+    /// rolling window that every canonical price write maintains. Returns `None`
+    /// when the asset has no recorded window yet.
+    pub fn get_price_moving_average(
+        env: Env,
+        asset: Symbol,
+    ) -> Result<Option<i128>, ContractError> {
+        if crate::auth::_is_halted(&env) {
+            return Err(ContractError::EmergencyHalted);
+        }
+        Ok(twap::moving_average(&twap::read_window(&env, &asset)))
+    }
+
+    /// Single-ledger price-impact guard for borrow entrypoints (issue #970).
+    ///
+    /// Reverts with `ContractError::PriceImpactGuardTriggered` while the guard is
+    /// tripped for `asset`; otherwise returns `Ok(())` so the caller may proceed
+    /// with the borrow. The flag is maintained by `twap::record_and_evaluate` on
+    /// every price write and clears itself once the moving-average deviation
+    /// falls back within 5%, resuming normal vault operations.
+    pub fn check_price_impact_guard(env: Env, asset: Symbol) -> Result<(), ContractError> {
+        if crate::auth::_is_halted(&env) {
+            return Err(ContractError::EmergencyHalted);
+        }
+        twap::enforce_price_impact_guard(&env, &asset)
+    }
+
+    /// Whether the single-ledger price-impact guard is currently tripped.
+    ///
+    /// Non-reverting companion to [`Self::check_price_impact_guard`] for
+    /// dashboards and pre-flight checks.
+    pub fn is_price_impact_guard_tripped(env: Env, asset: Symbol) -> bool {
+        twap::is_tripped(&env, &asset)
     }
 
     /// Subscribe a contract to receive price update callbacks.
@@ -5240,5 +5308,6 @@ mod median;
 pub mod slashing;
 pub mod slippage;
 mod test;
+mod twap;
 mod types;
 mod validation;

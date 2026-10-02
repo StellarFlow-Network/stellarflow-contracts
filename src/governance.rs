@@ -7,20 +7,15 @@
 //!
 //! The handler also supports direct admin cancellation for emergency scenarios.
 
-use soroban_sdk::{contracttype, symbol_short, Address, BytesN, Env, Map, Symbol, Vec};
+use soroban_sdk::{contracttype, symbol_short, Address, Bytes, BytesN, Env, Map, Symbol, Vec};
+
+pub(crate) use crate::governance_upgrade::*;
 
 pub(crate) const VALIDATORS_KEY: Symbol = symbol_short!("VALIDS");
 pub(crate) const VALIDATOR_SEQUENCE_KEY: Symbol = symbol_short!("VALSEQ");
-pub(crate) const BRIDGE_VALIDATORS_UPDATED_EVENT: Symbol = symbol_short!("val_updt");
+pub(crate) const BRIDGE_VALIDATORS_UPDATED_EVENT: Symbol = symbol_short!("BRVAL");
 
-#[contracttype]
-#[derive(Clone)]
-pub struct StagedUpgrade {
-    pub wasm_hash: BytesN<32>,
-    pub staged_at: u32,
-}
-
-use crate::ContractError;
+use crate::{ContractData, ContractError, DATA_KEY, SIGNERS_KEY};
 
 #[contracttype]
 #[derive(Clone)]
@@ -93,6 +88,9 @@ pub fn _cancellation_threshold_for_signers(env: &Env, _key: &Symbol) -> u32 {
 /// Minimum number of ledger sequences that must elapse between proposal
 /// submission and eligible execution.
 pub const MIN_LEDGER_DELAY: u32 = 5000;
+
+/// Approval window before an unapproved governance proposal expires: 7 days.
+pub const PROPOSAL_TTL_SECONDS: u64 = 7 * 24 * 60 * 60;
 
 /// Storage key for the active governance proposal (only one at a time).
 pub(crate) const GOVERNANCE_PROPOSAL_KEY: Symbol = symbol_short!("GOVPROP");
@@ -213,6 +211,22 @@ pub fn get_multisig_config(env: &Env) -> MultiSigConfig {
     );
 
     Ok(proposal_id)
+}
+
+/// Query a governance proposal by ID.
+pub fn get_governance_proposal(
+    env: &Env,
+    proposal_id: u64,
+) -> Result<GovernanceProposal, ContractError> {
+    let proposal: GovernanceProposal = env
+        .storage()
+        .instance()
+        .get(&GOVERNANCE_PROPOSAL_KEY)
+        .ok_or(ContractError::NoActiveProposal)?;
+    if proposal.proposal_id != proposal_id {
+        return Err(ContractError::NoActiveProposal);
+    }
+    Ok(proposal)
 }
 
 /// Vote to cancel a governance proposal during its timelock window.
@@ -413,7 +427,7 @@ pub fn rotate_admin_keys(
     }
 
     if new_threshold == 0 || new_threshold > signer_set.len() {
-        return Err(ContractError::InvalidThreshold);
+        return Err(ContractError::InvalidArgument);
     }
 
     let mut weights: Map<Address, u32> = Map::new(env);
@@ -428,7 +442,7 @@ pub fn rotate_admin_keys(
         .ok_or(ContractError::NotInitialized)?;
     data.admin = new_signers
         .get(0)
-        .ok_or(ContractError::InvalidThreshold)?
+        .ok_or(ContractError::InvalidArgument)?
         .clone();
 
     env.storage().instance().set(&DATA_KEY, &data);
@@ -542,10 +556,6 @@ pub struct GovernanceUpgradeProposedEvent {
     pub required_weight: u32,
     pub collected_weight: u32,
 }
-pub fn verify_staged_delay(staged_at: u64, current_time: u64, delay_seconds: u64) -> bool {
-    current_time.saturating_sub(staged_at) >= delay_seconds
-}
-
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Verify that at least `MIN_LEDGER_DELAY` ledger sequences have elapsed
@@ -587,17 +597,14 @@ pub fn open_ballot(
 fn _next_proposal_id(env: &Env) -> u64 {
     let current: u64 = env
         .storage()
-        .temporary()
-        .get(&key)
-        .ok_or(ContractError::NoActiveProposal)?;
-    if ballot.votes.contains_key(voter.clone()) {
-        return Err(ContractError::AlreadyVoted);
-    }
-    ballot.votes.set(voter, ());
-    env.storage().temporary().set(&key, &ballot);
-    env.storage().temporary().extend_ttl(&key, BALLOT_TTL_THRESHOLD, BALLOT_TTL_LEDGERS);
-    crate::instance::bump_instance_ttl(env);
-    Ok(ballot)
+        .instance()
+        .get(&GOV_PROPOSAL_COUNTER_KEY)
+        .unwrap_or(0u64);
+    let next = current.saturating_add(1);
+    env.storage()
+        .instance()
+        .set(&GOV_PROPOSAL_COUNTER_KEY, &next);
+    next
 }
 
 /// The cancellation quorum is the number of distinct signer votes required
@@ -615,6 +622,15 @@ pub fn close_ballot(env: &Env, proposal_id: Symbol) {
 
 fn _cancellation_threshold(env: &Env) -> u32 {
     _cancellation_threshold_for_signers(env, &crate::SIGNERS_KEY)
+}
+
+fn _cancellation_threshold_for_signers(env: &Env, key: &Symbol) -> u32 {
+    let signers: Map<Address, ()> = env
+        .storage()
+        .instance()
+        .get(key)
+        .unwrap_or_else(|| Map::new(env));
+    cancellation_threshold(signers.len())
 }
 
 /// Returns true when a proposal has been active for at least 7 days without approval.
@@ -702,7 +718,7 @@ pub fn set_fee_tier(
         && new_fee_tier_bps != config.medium_fee_tier_bps
         && new_fee_tier_bps != config.high_fee_tier_bps
     {
-        return Err(ContractError::InvalidThreshold);
+        return Err(ContractError::InvalidArgument);
     }
     env.storage().instance().set(&FEE_TIER_KEY, &FeeTierConfig {
         fee_tier_bps: new_fee_tier_bps,
@@ -726,7 +742,7 @@ pub fn set_fee_split_config(
 ) -> Result<(), ContractError> {
     verify_upgrade_quorum(env, signers)?;
     if lp_share_bps.checked_add(treasury_share_bps) != Some(10000) {
-        return Err(ContractError::InvalidThreshold);
+        return Err(ContractError::InvalidArgument);
     }
     env.storage().instance().set(&FEE_SPLIT_KEY, &FeeSplitConfig {
         lp_share_bps,

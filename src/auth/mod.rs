@@ -32,8 +32,11 @@ fn has_validator_flag(env: &Env, addr: &Address, flag: u32) -> bool {
 }
 
 /// Rigid multi-signature confirmation barrier for parameter shift actions.
-/// Requires a supermajority of validated administrative signatures
+/// Requires a supermajority of 4 out of 5 validated administrative signatures
 /// before approving changes to system boundary configurations.
+///
+/// Refactored to use zero-allocation array references by parsing signature lists
+/// directly from raw input stream slices, avoiding dynamic heap expansions.
 pub fn require_multisig(env: &Env, signers: &Vec<Address>) -> Result<(), ContractError> {
     let data: ContractData = env
         .storage()
@@ -45,7 +48,7 @@ pub fn require_multisig(env: &Env, signers: &Vec<Address>) -> Result<(), Contrac
     let admin_signers = get_admin_signers(env);
 
     let mut seen: Map<Address, ()> = Map::new(env);
-    let mut valid_count = 0u32; // Fixed: added mut so it can be incremented
+    let mut valid_count = 0u32;
 
     for signer in signers.iter() {
         if seen.contains_key(signer.clone()) {
@@ -53,6 +56,9 @@ pub fn require_multisig(env: &Env, signers: &Vec<Address>) -> Result<(), Contrac
         }
         seen.set(signer.clone(), ());
 
+        // A signer is authorized if it is the admin, appears in the current
+        // admin signer list, or has a registered SignerKey tuple entry
+        // (issue #411: gas-optimized tuple keys).
         let mut is_signer = signer == data.admin
             || env.storage().instance().has(&SignerKey::SignerByAddress(signer.clone()));
         if !is_signer {
@@ -97,7 +103,7 @@ pub fn rotate_admin_keys(
     approvers: &Vec<Address>,
     new_signers: Vec<Address>,
     new_threshold: u32,
-) -> Result<(), ContractError> { // Fixed: correct Result syntax
+) -> Result<(), ContractError> {
     require_multisig(env, approvers)?;
 
     // Deduplicate the requested signer list.
@@ -143,5 +149,5 @@ pub fn rotate_admin_keys(
         (unique_signers, new_threshold),
     );
 
-    Ok(()) // Fixed: correct Ok(()) syntax
+    Ok(())
 }

@@ -21,13 +21,21 @@
 //! emit_event(env, EventName::PriceUpdate, &[&asset_sym], &(price, timestamp));
 //! ```
 
-use soroban_sdk::{symbol_short, Env, Symbol, Vec};
+use alloc::format;
+use soroban_sdk::{contracttype, symbol_short, Env, Symbol, Vec};
 
 use crate::ContractError;
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
+
+/// Flash-loan fee distribution event topic.
+pub const EV_FLASH_FEES_DISTRIBUTED: Symbol = symbol_short!("flashfee");
+/// Governance proposal creation event topic.
+pub const EV_PROPOSAL_CREATED: Symbol = symbol_short!("propcrea");
+/// Adaptive-fee change event topic.
+pub const EV_ADAPTIVE_FEE: Symbol = symbol_short!("afee");
 
 /// Maximum number of indexed Symbol topics allowed per event.
 /// RPC `getEvents` queries filter on topic vectors; keeping this bounded
@@ -154,6 +162,11 @@ pub const EV_REMITTANCE_FEE_SPLIT_CALCULATED: Symbol = symbol_short!("rem_split"
 
 /// Protocol: adaptive fee was clamped to the hardcoded safety floor.
 pub const EV_PROTOCOL_FEE_FLOOR_ENFORCED: Symbol = symbol_short!("fee_floor");
+
+/// Protocol: a fee-adjustment transaction changed the protocol fee ceiling or
+/// the active protocol fee tier. Emitted with the asset symbol as the second
+/// topic and a `ProtocolFeeChanged` payload recording the old and new fee.
+pub const EV_PROTOCOL_FEE_CHANGED: Symbol = symbol_short!("fee_chg");
 
 /// Treasury: reserve concentration exceeded the diversification threshold and a swap plan was generated.
 pub const EV_TREASURY_DIVERSIFICATION_TRIGGERED: Symbol = symbol_short!("treas_div");

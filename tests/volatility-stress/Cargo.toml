@@ -1,0 +1,36 @@
+[package]
+name = "stellarflow-contracts-volatility-stress"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "End-to-end dynamic volatility stress test suite for AMM pools (issue #1025)"
+
+# This crate is a native-only test harness and is never compiled to WASM.
+#
+# `soroban-sdk` is pinned to the same exact version the root workspace uses, and
+# `testutils` is enabled because the harness genuinely needs the host test
+# environment: `Env::default`, `register_stellar_asset_contract`, and the auth
+# mocking that makes the production entry points callable outside a dispatch
+# trampoline. Those live in the library target, not only in the test binaries, so
+# the feature cannot be confined to a dev-dependency.
+#
+# The pin is what keeps the harness reproducible against the pinned graph in
+# `Cargo.lock`.
+[lib]
+name = "volatility_stress"
+path = "src/lib.rs"
+
+[dependencies]
+soroban-sdk = { version = "=20.0.0", default-features = false, features = ["testutils"] }
+amm-contract = { path = "../../contracts/amm" }
+
+# Keep this crate out of the repository root workspace.
+#
+# The root `stellarflow-contracts` package currently carries unresolved
+# merge-time compile artifacts, so this harness deliberately does not take
+# part in that workspace and never depends on the root crate compiling. This
+# is the same isolation strategy the sibling `tests/fuzz` harness documents in
+# its own README; the empty `[workspace]` table is what actually makes that
+# isolation work, since without it cargo refuses to build the package at all
+# ("current package believes it's in a workspace when it's not").
+[workspace]
