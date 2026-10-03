@@ -106,9 +106,6 @@ pub mod veto;
 pub mod voting_delegation;
 pub mod upgrades;
 pub mod validation;
-pub mod vaults;
-pub mod veto;
-pub mod voting_delegation;
 pub use voting_delegation::*;
 pub mod zk;
 pub use state_verification::{
@@ -219,7 +216,6 @@ pub enum ContractError {
     InvalidProof = 49,
     /// Reentrancy guard detected a reentrant call during execution.
     ReentrancyDetected = 50,
-    ReentrancyDetected = 58,
     MerkleTreeFull = 59,
     NotSecurityCouncil = 60,
     ProposalNotFound = 61,
@@ -279,9 +275,9 @@ pub enum ContractError {
     /// Dynamic remittance fee split configuration is invalid.
     InvalidFeeSplitConfig = 90,
     /// A fee allocation does not add up to the original total.
-    FeeDistributionMismatch = 83,
+    FeeDistributionMismatch = 91,
     /// Public inputs to zero-knowledge proof do not match contract state parameters.
-    InvalidZKPublicInputs = 84,
+    InvalidZKPublicInputs = 92,
 }
 
 impl ContractError {

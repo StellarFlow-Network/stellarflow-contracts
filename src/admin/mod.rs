@@ -100,8 +100,6 @@ use crate::temp_governance::{
     get_temp_proposal, has_temp_proposal, remove_temp_proposal, store_temp_proposal,
     DEFAULT_PROPOSAL_TTL, EMERGENCY_REVOCATION_TEMP_KEY, EXTENDED_PROPOSAL_TTL,
 };
-use crate::{ContractData, ContractError, DATA_KEY, REVOKED_SIGNER_KEY, SIGNERS_KEY};
-use soroban_sdk::{contracttype, symbol_short, Address, Env, Symbol, TryFromVal, Val, Vec};
 
 pub(crate) const PENDING_OWNER_KEY: Symbol = symbol_short!("PNDOWN");
 pub(crate) const PENDING_ADMIN_KEY: Symbol = symbol_short!("PADMIN");
