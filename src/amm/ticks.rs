@@ -76,6 +76,10 @@ pub const TREASURY_FEE_SHARE_BPS: u16 = 2_000;
 /// LP token holders share of collected fees (80.00%).
 pub const LP_FEE_SHARE_BPS: u16 = 8_000;
 
+/// Fixed-point scale for fee-growth-per-unit-liquidity accumulators,
+/// matching `fees::LP_FEE_GROWTH_SCALE` (1e14).
+pub const FEE_GROWTH_SCALE: u128 = 100_000_000_000_000;
+
 // ---------------------------------------------------------------------------
 // Storage keys
 // ---------------------------------------------------------------------------
@@ -118,6 +122,10 @@ pub struct TickIndexMeta {
     pub active_liquidity: u64,
     /// Number of initialized ticks.
     pub tick_count: u32,
+    /// Pool-wide fee growth per unit of liquidity, scaled by
+    /// [`FEE_GROWTH_SCALE`]. Monotonically increasing; see
+    /// [`accrue_fee_growth`].
+    pub fee_growth_global: u128,
 }
 
 /// Per-tick liquidity accounting record.
@@ -129,6 +137,13 @@ pub struct TickData {
     pub liquidity_net: i64,
     /// Total liquidity referencing this tick (absolute, both sides).
     pub liquidity_gross: u64,
+    /// Fee growth accrued on the side of this tick "outside" the current
+    /// price, scaled by [`FEE_GROWTH_SCALE`]. Set at tick-initialization
+    /// time by [`ensure_tick_initialized`] using the standard convention
+    /// (all growth so far is "outside" a tick at or below the current
+    /// price). Used by [`get_fee_growth_inside`] to derive the fee growth
+    /// accrued strictly inside a `[tick_lower, tick_upper]` range.
+    pub fee_growth_outside: u128,
 }
 
 /// Result of executing a swap across tick boundaries.
@@ -188,6 +203,7 @@ pub fn initialize_tick_index(
         current_tick: 0,
         active_liquidity: 0,
         tick_count: 0,
+        fee_growth_global: 0,
     };
     env.storage().persistent().set(&key, &meta);
 
@@ -212,10 +228,14 @@ pub fn get_tick_index(env: &Env, asset: AssetId) -> Result<TickIndexMeta, Contra
 /// initialized.
 pub fn get_tick_data(env: &Env, asset: AssetId, tick: i32) -> TickData {
     let key = TickDataKey(asset, tick);
-    env.storage().persistent().get(&key).unwrap_or(TickData {
-        liquidity_net: 0,
-        liquidity_gross: 0,
-    })
+    env.storage()
+        .persistent()
+        .get(&key)
+        .unwrap_or(TickData {
+            liquidity_net: 0,
+            liquidity_gross: 0,
+            fee_growth_outside: 0,
+        })
 }
 
 /// Persist a tick's data.
@@ -275,26 +295,39 @@ pub fn place_liquidity(
     let mut meta = get_tick_index(env, asset)?;
 
     // ── Atomic update of gross liquidity ────────────────────────────────
+    //
+    // `active_liquidity` is documented (see `TickIndexMeta::active_liquidity`)
+    // as the sum of `liquidity_net` over ticks at or below `current_tick` —
+    // i.e. the liquidity actually in range at the pool's current price. A
+    // tick placement only affects that sum when the tick being modified is
+    // itself at or below `current_tick`; a placement at a tick above the
+    // current price changes future crossing behavior but must not move
+    // `active_liquidity` today.
+    let affects_active_liquidity = tick <= meta.current_tick;
     if liquidity_delta > 0 {
         let delta = liquidity_delta as u64;
         tick_data.liquidity_gross = tick_data
             .liquidity_gross
             .checked_add(delta)
             .ok_or(ContractError::Overflow)?;
-        meta.active_liquidity = meta
-            .active_liquidity
-            .checked_add(delta)
-            .ok_or(ContractError::Overflow)?;
+        if affects_active_liquidity {
+            meta.active_liquidity = meta
+                .active_liquidity
+                .checked_add(delta)
+                .ok_or(ContractError::Overflow)?;
+        }
     } else if liquidity_delta < 0 {
         let delta = (-liquidity_delta) as u64;
         tick_data.liquidity_gross = tick_data
             .liquidity_gross
             .checked_sub(delta)
             .ok_or(ContractError::Overflow)?;
-        meta.active_liquidity = meta
-            .active_liquidity
-            .checked_sub(delta)
-            .ok_or(ContractError::Overflow)?;
+        if affects_active_liquidity {
+            meta.active_liquidity = meta
+                .active_liquidity
+                .checked_sub(delta)
+                .ok_or(ContractError::Overflow)?;
+        }
     }
 
     // ── Atomic update of net liquidity ──────────────────────────────────
@@ -330,6 +363,120 @@ pub fn place_liquidity(
     env.storage().persistent().set(&meta_key, &meta);
 
     Ok(tick_data)
+}
+
+// ---------------------------------------------------------------------------
+// Fee growth accounting (Issue #986)
+// ---------------------------------------------------------------------------
+//
+// Standard Uniswap-V3-style fee-growth-outside/inside accounting: the pool
+// tracks a monotonically increasing `fee_growth_global` (total fees earned
+// per unit of active liquidity since the pool's inception), and each tick
+// snapshots `fee_growth_outside` — the portion of `fee_growth_global` that
+// accrued "outside" the tick (i.e. on the far side from the current price)
+// at the moment the tick was first initialized.
+//
+// Subtracting a tick's `fee_growth_outside` from `fee_growth_global` uses
+// wrapping arithmetic intentionally: these are unbounded accumulators, and
+// the difference between two snapshots of a monotonically increasing value
+// is well-defined under wraparound as long as it never wraps more than once
+// between snapshots (the same convention Uniswap V3 uses for its U256
+// accumulators). Fee amounts in this codebase are `u64`, and
+// `FEE_GROWTH_SCALE` is 1e14, so wraparound of the u128 accumulator is not a
+// practical concern.
+//
+// NOTE: nothing in this module currently *crosses* a tick during live swap
+// execution with a storage-mutating side effect — `simulate_swap_across_ticks`
+// is a read-only simulation. A real swap-execution path that crosses ticks
+// on-chain would need to flip each crossed tick's `fee_growth_outside` (new
+// outside = fee_growth_global - old outside) as part of this accounting;
+// that hook does not exist yet because there is no mutating swap-execution
+// entry point to attach it to. `accrue_fee_growth` is provided so a future
+// swap implementation (or tests) can feed collected fees into the global
+// accumulator.
+
+/// Ensure a tick's storage record exists, initializing `fee_growth_outside`
+/// per the standard convention if this is the tick's first reference:
+/// a tick at or below the current price has all fee growth so far counted
+/// as "outside" it; a tick above the current price starts at zero. No-op if
+/// the tick has already been initialized (so repeated calls — e.g. once per
+/// side when opening a range — never clobber an already-crossed tick's
+/// accounting).
+pub fn ensure_tick_initialized(env: &Env, asset: AssetId, tick: i32) -> Result<(), ContractError> {
+    let key = TickDataKey(asset, tick);
+    if env.storage().persistent().has(&key) {
+        return Ok(());
+    }
+    let meta = get_tick_index(env, asset)?;
+    let fee_growth_outside = if tick <= meta.current_tick {
+        meta.fee_growth_global
+    } else {
+        0
+    };
+    let data = TickData {
+        liquidity_net: 0,
+        liquidity_gross: 0,
+        fee_growth_outside,
+    };
+    env.storage().persistent().set(&key, &data);
+    Ok(())
+}
+
+/// Accrue collected swap fees into the pool's global fee-growth accumulator,
+/// distributed per unit of the pool's current active liquidity.
+pub fn accrue_fee_growth(env: &Env, asset: AssetId, fee_amount: u64) -> Result<(), ContractError> {
+    if fee_amount == 0 {
+        return Ok(());
+    }
+    let mut meta = get_tick_index(env, asset)?;
+    if meta.active_liquidity == 0 {
+        return Err(ContractError::InsufficientLiquidityDepth);
+    }
+    let delta = (fee_amount as u128)
+        .checked_mul(FEE_GROWTH_SCALE)
+        .ok_or(ContractError::Overflow)?
+        .checked_div(meta.active_liquidity as u128)
+        .ok_or(ContractError::DivisionByZero)?;
+    meta.fee_growth_global = meta
+        .fee_growth_global
+        .checked_add(delta)
+        .ok_or(ContractError::Overflow)?;
+
+    let key = TickIndexKey(asset);
+    env.storage().persistent().set(&key, &meta);
+    Ok(())
+}
+
+/// Compute the fee growth accrued strictly inside `[tick_lower, tick_upper]`,
+/// scaled by [`FEE_GROWTH_SCALE`]. This is the standard Uniswap-V3
+/// `fee_growth_global - fee_growth_below - fee_growth_above` formula; see the
+/// module-level note above on the intentional use of wrapping subtraction.
+pub fn get_fee_growth_inside(
+    env: &Env,
+    asset: AssetId,
+    tick_lower: i32,
+    tick_upper: i32,
+) -> Result<u128, ContractError> {
+    let meta = get_tick_index(env, asset)?;
+    let lower = get_tick_data(env, asset, tick_lower);
+    let upper = get_tick_data(env, asset, tick_upper);
+
+    let fee_growth_below = if meta.current_tick >= tick_lower {
+        lower.fee_growth_outside
+    } else {
+        meta.fee_growth_global.wrapping_sub(lower.fee_growth_outside)
+    };
+
+    let fee_growth_above = if meta.current_tick < tick_upper {
+        upper.fee_growth_outside
+    } else {
+        meta.fee_growth_global.wrapping_sub(upper.fee_growth_outside)
+    };
+
+    Ok(meta
+        .fee_growth_global
+        .wrapping_sub(fee_growth_below)
+        .wrapping_sub(fee_growth_above))
 }
 
 // ---------------------------------------------------------------------------
@@ -1567,6 +1714,127 @@ mod tests {
         assert_eq!(MAX_TICKS_PER_POOL, 256);
     }
 
+    // ── Active liquidity across a straddling range (Issue #986 bugfix) ──
+
+    #[test]
+    fn opening_a_straddling_range_increases_active_liquidity_once() {
+        let env = Env::default();
+        let asset: AssetId = 1;
+        initialize_tick_index(&env, asset, 1).unwrap();
+        // current_tick defaults to 0; range [-10, 10] straddles it.
+        place_liquidity(&env, asset, -10, 1000).unwrap();
+        place_liquidity(&env, asset, 10, -1000).unwrap();
+
+        let meta = get_tick_index(&env, asset).unwrap();
+        assert_eq!(meta.active_liquidity, 1000);
+    }
+
+    #[test]
+    fn placing_liquidity_above_current_tick_does_not_affect_active_liquidity() {
+        let env = Env::default();
+        let asset: AssetId = 1;
+        initialize_tick_index(&env, asset, 1).unwrap();
+        // current_tick is 0; a tick placed above it must not be "active" yet.
+        place_liquidity(&env, asset, 10, 500).unwrap();
+
+        let meta = get_tick_index(&env, asset).unwrap();
+        assert_eq!(meta.active_liquidity, 0);
+    }
+
+    // ── Fee growth accounting ────────────────────────────────────────────
+
+    #[test]
+    fn ensure_tick_initialized_below_current_takes_global_snapshot() {
+        let env = Env::default();
+        let asset: AssetId = 1;
+        initialize_tick_index(&env, asset, 1).unwrap();
+        place_liquidity(&env, asset, -10, 1000).unwrap();
+        place_liquidity(&env, asset, 10, -1000).unwrap();
+        accrue_fee_growth(&env, asset, 1000).unwrap();
+
+        ensure_tick_initialized(&env, asset, -5).unwrap();
+        let td = get_tick_data(&env, asset, -5);
+        let meta = get_tick_index(&env, asset).unwrap();
+        assert_eq!(td.fee_growth_outside, meta.fee_growth_global);
+    }
+
+    #[test]
+    fn ensure_tick_initialized_above_current_starts_at_zero() {
+        let env = Env::default();
+        let asset: AssetId = 1;
+        initialize_tick_index(&env, asset, 1).unwrap();
+        place_liquidity(&env, asset, -10, 1000).unwrap();
+        place_liquidity(&env, asset, 10, -1000).unwrap();
+        accrue_fee_growth(&env, asset, 1000).unwrap();
+
+        ensure_tick_initialized(&env, asset, 5).unwrap();
+        let td = get_tick_data(&env, asset, 5);
+        assert_eq!(td.fee_growth_outside, 0);
+    }
+
+    #[test]
+    fn ensure_tick_initialized_is_idempotent() {
+        let env = Env::default();
+        let asset: AssetId = 1;
+        initialize_tick_index(&env, asset, 1).unwrap();
+        place_liquidity(&env, asset, -10, 1000).unwrap();
+        place_liquidity(&env, asset, 10, -1000).unwrap();
+
+        ensure_tick_initialized(&env, asset, -5).unwrap();
+        accrue_fee_growth(&env, asset, 1000).unwrap();
+        // Second call must not re-snapshot now that fee growth has moved on.
+        ensure_tick_initialized(&env, asset, -5).unwrap();
+        let td = get_tick_data(&env, asset, -5);
+        assert_eq!(td.fee_growth_outside, 0);
+    }
+
+    #[test]
+    fn accrue_fee_growth_rejects_no_active_liquidity() {
+        let env = Env::default();
+        let asset: AssetId = 1;
+        initialize_tick_index(&env, asset, 1).unwrap();
+        assert_eq!(
+            accrue_fee_growth(&env, asset, 100),
+            Err(ContractError::InsufficientLiquidityDepth)
+        );
+    }
+
+    #[test]
+    fn fee_growth_inside_full_range_equals_global_when_current_tick_inside() {
+        let env = Env::default();
+        let asset: AssetId = 1;
+        initialize_tick_index(&env, asset, 1).unwrap();
+        place_liquidity(&env, asset, -10, 1000).unwrap();
+        place_liquidity(&env, asset, 10, -1000).unwrap();
+        ensure_tick_initialized(&env, asset, -10).unwrap();
+        ensure_tick_initialized(&env, asset, 10).unwrap();
+
+        accrue_fee_growth(&env, asset, 1000).unwrap();
+
+        let inside = get_fee_growth_inside(&env, asset, -10, 10).unwrap();
+        let meta = get_tick_index(&env, asset).unwrap();
+        assert_eq!(inside, meta.fee_growth_global);
+    }
+
+    #[test]
+    fn fee_growth_inside_is_zero_outside_the_range() {
+        let env = Env::default();
+        let asset: AssetId = 1;
+        initialize_tick_index(&env, asset, 1).unwrap();
+        place_liquidity(&env, asset, -10, 1000).unwrap();
+        place_liquidity(&env, asset, 10, -1000).unwrap();
+        ensure_tick_initialized(&env, asset, -10).unwrap();
+        ensure_tick_initialized(&env, asset, 10).unwrap();
+
+        accrue_fee_growth(&env, asset, 1000).unwrap();
+
+        // A disjoint range [20, 30], entirely above current_tick (0), has
+        // earned none of the growth that accrued to the [-10, 10] range.
+        ensure_tick_initialized(&env, asset, 20).unwrap();
+        ensure_tick_initialized(&env, asset, 30).unwrap();
+        let inside = get_fee_growth_inside(&env, asset, 20, 30).unwrap();
+        assert_eq!(inside, 0);
+    }
     // ── Batch Swap Instance Storage Allocation Profiler Tests (#1003) ──
 
     #[test]

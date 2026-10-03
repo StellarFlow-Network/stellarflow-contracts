@@ -461,6 +461,12 @@ impl ContractError {
     pub const RescueProposalNotFound: Self = Self::NotRegistered;
     pub const RescueProposalNotPending: Self = Self::NoActiveProposal;
     pub const RescueTimelockNotExpired: Self = Self::UpgradeTimelockNotSatisfied;
+    /// No concentrated-liquidity position exists for a given receipt id
+    /// (Issue #986).
+    pub const PositionNotFound: Self = Self::NotRegistered;
+    /// A proposed tick-range boundary (e.g. a split's mid tick) does not
+    /// satisfy `tick_lower < tick_mid < tick_upper` (Issue #986).
+    pub const InvalidSplitBoundary: Self = Self::InvalidVarianceConfig;
     pub const TickIndexAlreadyExists: Self = Self::AlreadyRegistered;
     pub const TickIndexNotFound: Self = Self::NotRegistered;
     pub const TickNotAligned: Self = Self::InvalidVarianceConfig;
@@ -2755,6 +2761,55 @@ impl TimeLockedUpgradeContract {
     ) -> Result<i128, ContractError> {
         let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
         orders::limit::withdraw_balance(&env, owner, asset, amount)
+    }
+
+    // ── Concentrated-liquidity positions (Issue #986) ────────────────────
+
+    /// Initialize a pool's tick index so it can accept concentrated-liquidity
+    /// positions. Must be called once per `asset` before `amm_open_position`.
+    pub fn amm_initialize_tick_pool(
+        env: Env,
+        asset: AssetId,
+        tick_spacing: i32,
+    ) -> Result<(), ContractError> {
+        amm::ticks::initialize_tick_index(&env, asset, tick_spacing)?;
+        Ok(())
+    }
+
+    /// Open a new concentrated-liquidity range position in `[tick_lower,
+    /// tick_upper)`, minting a fresh position-receipt id to `owner`.
+    pub fn amm_open_position(
+        env: Env,
+        owner: Address,
+        asset: AssetId,
+        tick_lower: i32,
+        tick_upper: i32,
+        liquidity: u64,
+    ) -> Result<amm::positions::Position, ContractError> {
+        let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
+        amm::positions::open_position(&env, owner, asset, tick_lower, tick_upper, liquidity)
+    }
+
+    /// Split an existing position's range at `tick_mid` into
+    /// `[tick_lower, tick_mid]` and `[tick_mid, tick_upper]` sub-ranges,
+    /// without withdrawing the underlying pool liquidity. Burns
+    /// `position_id` and mints two new position-receipt ids.
+    pub fn amm_split_position(
+        env: Env,
+        caller: Address,
+        position_id: u64,
+        tick_mid: i32,
+    ) -> Result<amm::positions::SplitPositionResult, ContractError> {
+        let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
+        amm::positions::split_position(&env, caller, position_id, tick_mid)
+    }
+
+    /// Load a concentrated-liquidity position by its receipt-token id.
+    pub fn amm_get_position(
+        env: Env,
+        position_id: u64,
+    ) -> Result<amm::positions::Position, ContractError> {
+        amm::positions::get_position(&env, position_id)
     }
 
     /// Tick-volume market matcher (Issue #915): sweep the book by price/time
