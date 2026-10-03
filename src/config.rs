@@ -330,7 +330,7 @@ pub fn set_fee_tier_config(
     caller.require_auth();
     validate_fee_tier_config(&cfg)?;
     env.storage().instance().set(&FEE_TIER_CONFIG_KEY, &cfg);
-    Ok((
+    Ok(())
 }
 
 /// Read the active fee tier configuration.
