@@ -79,6 +79,7 @@ pub mod kernel;
 pub use kernel::instance;
 pub mod errors;
 pub mod events;
+pub mod expiry;
 pub mod fees;
 pub mod flash_fee_engine;
 pub mod flash_loan_guard;
