@@ -44,11 +44,16 @@ pub struct VaultHealthWarning {
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum Error {
+pub enum ContractError {
+    /// Recovery steps: Inspect the state for AlreadyInitialized and retry with valid inputs or proper conditions.
     AlreadyInitialized = 1,
+    /// Recovery steps: Inspect the state for NotInitialized and retry with valid inputs or proper conditions.
     NotInitialized = 2,
+    /// Recovery steps: Inspect the state for UnauthorizedVault and retry with valid inputs or proper conditions.
     UnauthorizedVault = 3,
+    /// Recovery steps: Inspect the state for InvalidValue and retry with valid inputs or proper conditions.
     InvalidValue = 4,
+    /// Recovery steps: Inspect the state for ArithmeticOverflow and retry with valid inputs or proper conditions.
     ArithmeticOverflow = 5,
 }
 
@@ -58,9 +63,9 @@ pub struct VaultHealthMonitor;
 #[contractimpl]
 impl VaultHealthMonitor {
     /// Bind this monitor to the lending vault permitted to submit account valuations.
-    pub fn initialize(env: Env, vault: Address) -> Result<(), Error> {
+    pub fn initialize(env: Env, vault: Address) -> Result<(), ContractError> {
         if env.storage().instance().has(&DataKey::Vault) {
-            return Err(Error::AlreadyInitialized);
+            return Err(ContractError::AlreadyInitialized);
         }
         vault.require_auth();
         env.storage().instance().set(&DataKey::Vault, &vault);
@@ -80,14 +85,14 @@ impl VaultHealthMonitor {
         collateral_value: i128,
         debt_value: i128,
         liquidation_threshold_bps: i128,
-    ) -> Result<i128, Error> {
+    ) -> Result<i128, ContractError> {
         let configured_vault: Address = env
             .storage()
             .instance()
             .get(&DataKey::Vault)
-            .ok_or(Error::NotInitialized)?;
+            .ok_or(ContractError::NotInitialized)?;
         if vault != configured_vault {
-            return Err(Error::UnauthorizedVault);
+            return Err(ContractError::UnauthorizedVault);
         }
         vault.require_auth();
 
@@ -96,14 +101,14 @@ impl VaultHealthMonitor {
             || liquidation_threshold_bps <= 0
             || liquidation_threshold_bps > HEALTH_FACTOR_SCALE
         {
-            return Err(Error::InvalidValue);
+            return Err(ContractError::InvalidValue);
         }
 
         let health_factor_bps = collateral_value
             .checked_mul(liquidation_threshold_bps)
-            .ok_or(Error::ArithmeticOverflow)?
+            .ok_or(ContractError::ArithmeticOverflow)?
             .checked_div(debt_value)
-            .ok_or(Error::ArithmeticOverflow)?;
+            .ok_or(ContractError::ArithmeticOverflow)?;
 
         if health_factor_bps > HEALTH_FACTOR_SCALE && health_factor_bps <= WARNING_HEALTH_FACTOR_BPS
         {
@@ -176,7 +181,7 @@ impl VaultHealthMonitor {
         env.storage()
             .instance()
             .get(&DataKey::Vault)
-            .ok_or(Error::NotInitialized)
+            .ok_or(ContractError::NotInitialized)
     }
 }
 

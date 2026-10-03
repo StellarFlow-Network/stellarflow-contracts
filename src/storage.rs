@@ -381,28 +381,32 @@ pub fn check_key_ttl(env: &Env, key: Symbol) -> u32 {
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::testutils::Ledger;
+    use soroban_sdk::testutils::{Address as _, Ledger};
     use soroban_sdk::{Env, Address};
 
     #[test]
     fn test_strict_ttl_extension_survival() {
         let env = Env::default();
+        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
         let test_address = Address::generate(&env);
         let key = DataKey::Subscription(test_address.clone());
         
         // Initial setup
-        env.storage().persistent().set(&key, &true);
-        extend_persistent_ttl(&env, &key);
+        env.as_contract(&contract_id, || env.storage().persistent().set(&key, &true));
+        env.as_contract(&contract_id, || extend_persistent_ttl(&env, &key));
 
         // Jump to 95,000 ledgers (within the 10,000 threshold of initial 100k bump)
-        env.ledger().set_sequence(95_000);
-        assert!(env.storage().persistent().has(&key));
+        env.ledger().with_mut(|li| li.sequence_number = 95_000);
+        assert!(env.as_contract(&contract_id, || env.storage().persistent().has(&key)));
 
         // Trigger secondary bump
-        extend_persistent_ttl(&env, &key);
+        env.as_contract(&contract_id, || extend_persistent_ttl(&env, &key));
 
         // Jump to 150,000 ledgers. Without the secondary bump, it would have expired at 100k.
-        env.ledger().set_sequence(150_000);
-        assert!(env.storage().persistent().has(&key), "Storage should survive via 100k bump");
+        env.ledger().with_mut(|li| li.sequence_number = 150_000);
+        assert!(
+            env.as_contract(&contract_id, || env.storage().persistent().has(&key)),
+            "Storage should survive via 100k bump"
+        );
     }
 }

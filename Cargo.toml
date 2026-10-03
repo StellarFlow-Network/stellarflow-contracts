@@ -56,7 +56,12 @@ libm = "0.2.16"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 soroban-sdk = { version = "=20.0.0", default-features = false, features = ["testutils"] }
 
+[features]
+default = []
+testutils = ["soroban-sdk/testutils"]
+
 [dev-dependencies]
+stellarflow-contracts = { path = ".", features = ["testutils"] }
 soroban-sdk = { version = "=20.0.0", default-features = false, features = ["testutils"] }
 ed25519-dalek = "2.0.0"
 
@@ -75,7 +80,3 @@ lto = true
 
 [patch.crates-io]
 ethnum = { path = "ethnum-patched" }
-
-[features]
-default = []
-testutils = ["soroban-sdk/testutils"]

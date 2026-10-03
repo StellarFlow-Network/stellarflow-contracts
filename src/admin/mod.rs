@@ -164,9 +164,29 @@ fn consume_admin_nonce(
 }
 
 /// Helper function to check if an address is a registered signer.
+///
+/// Signers are registered by `register_signer` into the `SIGNERS_KEY` map
+/// (`Map<Address, ()>` in instance storage); this check reads that same map
+/// so the two paths stay consistent.
 fn _is_signer(env: &Env, addr: &Address) -> bool {
-    let signer_key = SignerKey::SignerByAddress(addr.clone());
-    env.storage().instance().has(&signer_key)
+    let signers: soroban_sdk::Map<Address, ()> = env
+        .storage()
+        .instance()
+        .get(&SIGNERS_KEY)
+        .unwrap_or_else(|| soroban_sdk::Map::new(env));
+    signers.contains_key(addr.clone())
+}
+
+/// Number of currently registered signers (admin is never stored in the
+/// signer registry; revocation proposals against the admin need only one
+/// additional vote, handled by the 0-count default in the threshold fn).
+fn _signer_count(env: &Env) -> u32 {
+    let signers: soroban_sdk::Map<Address, ()> = env
+        .storage()
+        .instance()
+        .get(&SIGNERS_KEY)
+        .unwrap_or_else(|| soroban_sdk::Map::new(env));
+    signers.len()
 }
 
 /// Helper function to calculate the revocation threshold.
@@ -354,7 +374,6 @@ pub fn propose_emergency_revocation(
     )?;
 
     // Guard: only one active emergency proposal at a time.
-    prune::prune_expired_keys(env, prune::PruneTarget::EmergencyRevocation)?;
     if has_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY) {
         return Err(ContractError::EmergencyRevocationAlreadyActive);
     }
@@ -484,7 +503,8 @@ pub fn vote_emergency_revocation(
 /// Returns the active emergency revocation proposal, if one exists.
 /// Proposals are stored in temporary storage and will auto-purge after TTL.
 pub fn get_emergency_revocation_proposal(env: &Env) -> Option<EmergencyRevocationProposal> {
-    let proposal = get_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY)?;
+    let proposal: EmergencyRevocationProposal =
+        get_temp_proposal(env, &EMERGENCY_REVOCATION_TEMP_KEY)?;
     if proposal_state(env, proposal.proposed_at) == ProposalState::Expired {
         None
     } else {

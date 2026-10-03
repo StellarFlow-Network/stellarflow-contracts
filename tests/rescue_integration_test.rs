@@ -41,7 +41,7 @@ mod rescue_integration_tests {
             base_reserve: 10,
             min_temp_entry_ttl: 0,
             min_persistent_entry_ttl: 0,
-            max_entry_ttl: u32::MAX,
+            max_entry_ttl: 6_312_000,
         });
     }
 

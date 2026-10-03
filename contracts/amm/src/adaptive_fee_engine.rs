@@ -3,7 +3,9 @@
 //! Adjusts AMM dynamic swap fees automatically during market volatility.
 //! Queries volatility scalar Vsigma from live dynamic oracle feeds and computes:
 //!
-//!     fswap = fbase + (Vsigma * fscalar) constrained to fswap <= 0.01 (100 BPS)
+//! ```text
+//! fswap = fbase + (Vsigma * fscalar) constrained to fswap <= 0.01 (100 BPS)
+//! ```
 //!
 //! Pool swap executions apply the updated fee instantly within the current ledger.
 //!

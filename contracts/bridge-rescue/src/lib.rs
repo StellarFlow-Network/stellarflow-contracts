@@ -37,7 +37,7 @@
 //! is also provided as a fallback/keeper entry point for the case where the
 //! thresholds were already met by other means (e.g. threshold config edge
 //! cases) but nothing has attempted execution yet; it re-checks every
-//! condition and panics with `Error::ThresholdNotReached` if the lock isn't
+//! condition and panics with `ContractError::ThresholdNotReached` if the lock isn't
 //! actually ready, so it can never bypass the consensus gate.
 //!
 //## Exactly-once guarantee
@@ -46,7 +46,7 @@
 //! that performs the token transfer. Every entry point that can lead to a
 //! transfer (`approve_rescue`'s auto-trigger and `execute_rescue`) re-reads
 //! the lock's current status immediately before transferring and panics with
-//! `Error::LockNotLocked` if it is not `Locked`. Because Soroban contract
+//! `ContractError::LockNotLocked` if it is not `Locked`. Because Soroban contract
 //! invocations are atomic, there is no window in which two concurrent calls
 //! can both observe `Locked` and both transfer — the first to run
 //! `env.storage()...set(status = Rescued)` closes the door for every
@@ -76,30 +76,42 @@ mod test;
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
-pub enum Error {
+pub enum ContractError {
     /// Contract has not been initialized yet.
+    /// Recovery steps: Inspect the state for NotInitialized and retry with valid inputs or proper conditions.
     NotInitialized = 1,
     /// Contract has already been initialized.
+    /// Recovery steps: Inspect the state for AlreadyInitialized and retry with valid inputs or proper conditions.
     AlreadyInitialized = 2,
     /// `threshold` must be > 0 and <= the size of the corresponding set.
+    /// Recovery steps: Inspect the state for InvalidThreshold and retry with valid inputs or proper conditions.
     InvalidThreshold = 3,
     /// `admins` or `validators` contained a duplicate address.
+    /// Recovery steps: Inspect the state for DuplicateAddress and retry with valid inputs or proper conditions.
     DuplicateAddress = 4,
     /// `amount` must be greater than zero.
+    /// Recovery steps: Inspect the state for ZeroAmount and retry with valid inputs or proper conditions.
     ZeroAmount = 5,
     /// No `BridgeLock` exists for the given lock id.
+    /// Recovery steps: Inspect the state for LockNotFound and retry with valid inputs or proper conditions.
     LockNotFound = 6,
     /// Caller is not a member of the admin committee.
+    /// Recovery steps: Inspect the state for NotAdmin and retry with valid inputs or proper conditions.
     NotAdmin = 7,
     /// Caller is not a member of the validator set.
+    /// Recovery steps: Inspect the state for NotValidator and retry with valid inputs or proper conditions.
     NotValidator = 8,
     /// This address has already voted/approved for this lock.
+    /// Recovery steps: Inspect the state for DuplicateVote and retry with valid inputs or proper conditions.
     DuplicateVote = 9,
     /// The lock is not in `Locked` status (already rescued, or otherwise not open).
+    /// Recovery steps: Inspect the state for LockNotLocked and retry with valid inputs or proper conditions.
     LockNotLocked = 10,
     /// Validator consensus and/or admin approval threshold has not been reached yet.
+    /// Recovery steps: Inspect the state for ThresholdNotReached and retry with valid inputs or proper conditions.
     ThresholdNotReached = 11,
     /// An arithmetic operation would have overflowed.
+    /// Recovery steps: Inspect the state for Overflow and retry with valid inputs or proper conditions.
     Overflow = 12,
     /// The claim timeout window has not yet expired.
     TimeoutNotExpired = 13,
@@ -158,7 +170,7 @@ pub struct BridgeTokensRefunded {
 #[contract]
 pub struct BridgeRescue;
 
-/// Returns `Err(Error::NotInitialized)` unless `initialize` has run.
+/// Returns `Err(ContractError::NotInitialized)` unless `initialize` has run.
 ///
 /// Deliberately returns a `Result` (propagated via `?`) rather than
 /// panicking: soroban-sdk 20.x (pinned by this workspace) contract
@@ -166,9 +178,9 @@ pub struct BridgeRescue;
 /// normal, structured failure, whereas an actual Rust panic has to survive
 /// a panic/unwind round trip through the host — routine, fully-expected
 /// validation failures use the former on every entrypoint below.
-fn require_initialized(env: &Env) -> Result<(), Error> {
+fn require_initialized(env: &Env) -> Result<(), ContractError> {
     if !env.storage().instance().has(&DataKey::Initialized) {
-        return Err(Error::NotInitialized);
+        return Err(ContractError::NotInitialized);
     }
     Ok()
 }
@@ -191,35 +203,35 @@ fn get_admins(env: &Env) -> Vec<Address> {
     env.storage()
         .instance()
         .get(&DataKey::Admins)
-        .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized))
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::NotInitialized))
 }
 
 fn get_admin_threshold(env: &Env) -> u32 {
     env.storage()
         .instance()
         .get(&DataKey::AdminThreshold)
-        .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized))
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::NotInitialized))
 }
 
 fn get_validators(env: &Env) -> Vec<Address> {
     env.storage()
         .instance()
         .get(&DataKey::Validators)
-        .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized))
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::NotInitialized))
 }
 
 fn get_validator_threshold(env: &Env) -> u32 {
     env.storage()
         .instance()
         .get(&DataKey::ValidatorThreshold)
-        .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized))
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::NotInitialized))
 }
 
 fn get_token(env: &Env) -> Address {
     env.storage()
         .instance()
         .get(&DataKey::Token)
-        .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized))
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::NotInitialized))
 }
 
 fn get_timeout(env: &Env) -> u64 {
@@ -233,7 +245,7 @@ fn get_lock_checked(env: &Env, lock_id: u64) -> Result<BridgeLock, Error> {
     env.storage()
         .persistent()
         .get(&DataKey::Lock(lock_id))
-        .ok_or(Error::LockNotFound)
+        .ok_or(ContractError::LockNotFound)
 }
 
 fn save_lock(env: &Env, lock: &BridgeLock) {
@@ -296,9 +308,9 @@ fn is_ready_for_rescue(env: &Env, lock: &BridgeLock) -> bool {
 /// is the single choke point that makes a double-rescue structurally
 /// impossible: the very first thing it does after the status check is flip
 /// the lock to `Rescued` and persist it, before any further logic runs.
-fn perform_rescue(env: &Env, mut lock: BridgeLock) -> Result<(), Error> {
+fn perform_rescue(env: &Env, mut lock: BridgeLock) -> Result<(), ContractError> {
     if lock.status != LockStatus::Locked {
-        return Err(Error::LockNotLocked);
+        return Err(ContractError::LockNotLocked);
     }
 
     lock.status = LockStatus::Rescued;
@@ -360,9 +372,9 @@ impl BridgeRescue {
     /// set used for consensus proof-of-failure, the SAC token that gets
     /// bridged, and the claim timeout window (issue #812). Can only be called once.
     ///
-    /// Panics with `Error::InvalidThreshold` if either threshold is `0` or
+    /// Panics with `ContractError::InvalidThreshold` if either threshold is `0` or
     /// greater than the size of its corresponding set, and with
-    /// `Error::DuplicateAddress` if `admins` or `validators` contain a
+    /// `ContractError::DuplicateAddress` if `admins` or `validators` contain a
     /// repeated address.
     pub fn initialize(
         env: Env,
@@ -374,17 +386,17 @@ impl BridgeRescue {
         timeout: u64,
     ) -> Result<(), Error> {
         if env.storage().instance().has(&DataKey::Initialized) {
-            return Err(Error::AlreadyInitialized);
+            return Err(ContractError::AlreadyInitialized);
         }
 
         if threshold == 0 || threshold > admins.len() {
-            return Err(Error::InvalidThreshold);
+            return Err(ContractError::InvalidThreshold);
         }
         if validator_threshold == 0 || validator_threshold > validators.len() {
-            return Err(Error::InvalidThreshold);
+            return Err(ContractError::InvalidThreshold);
         }
         if has_duplicate_addresses(&admins) || has_duplicate_addresses(&validators) {
-            return Err(Error::DuplicateAddress);
+            return Err(ContractError::DuplicateAddress);
         }
 
         env.storage().instance().set(&DataKey::Admins, &admins);
@@ -416,7 +428,7 @@ impl BridgeRescue {
         sender.require_auth();
 
         if amount <= 0 {
-            return Err(Error::ZeroAmount);
+            return Err(ContractError::ZeroAmount);
         }
 
         let lock_id: u64 = env
@@ -476,7 +488,7 @@ impl BridgeRescue {
 
         let mut lock = get_lock_checked(&env, lock_id)?;
         if lock.status != LockStatus::Locked {
-            return Err(Error::LockNotLocked);
+            return Err(ContractError::LockNotLocked);
         }
 
         if is_expired(&env, &lock)? {
@@ -485,13 +497,13 @@ impl BridgeRescue {
 
         let vote_key = DataKey::ValidatorVote(lock_id, validator.clone());
         if env.storage().persistent().has(&vote_key) {
-            return Err(Error::DuplicateVote);
+            return Err(ContractError::DuplicateVote);
         }
         env.storage().persistent().set(&vote_key, &true);
 
         let count = validator_vote_count(&env, lock_id)
             .checked_add(1)
-            .ok_or(Error::Overflow)?;
+            .ok_or(ContractError::Overflow)?;
         env.storage()
             .persistent()
             .set(&DataKey::ValidatorVoteCount(lock_id), &count);
@@ -531,18 +543,18 @@ impl BridgeRescue {
 
         let mut lock = get_lock_checked(&env, lock_id)?;
         if lock.status != LockStatus::Locked {
-            return Err(Error::LockNotLocked);
+            return Err(ContractError::LockNotLocked);
         }
 
         let approval_key = DataKey::AdminApproval(lock_id, admin.clone());
         if env.storage().persistent().has(&approval_key) {
-            return Err(Error::DuplicateVote);
+            return Err(ContractError::DuplicateVote);
         }
         env.storage().persistent().set(&approval_key, &true);
 
         let count = admin_approval_count(&env, lock_id)
             .checked_add(1)
-            .ok_or(Error::Overflow)?;
+            .ok_or(ContractError::Overflow)?;
         env.storage()
             .persistent()
             .set(&DataKey::AdminApprovalCount(lock_id), &count);
@@ -573,7 +585,7 @@ impl BridgeRescue {
 
         let lock = get_lock_checked(&env, lock_id)?;
         if !is_ready_for_rescue(&env, &lock) {
-            return Err(Error::ThresholdNotReached);
+            return Err(ContractError::ThresholdNotReached);
         }
 
         perform_rescue(&env, lock)

@@ -275,7 +275,7 @@ mod tests {
     use soroban_sdk::testutils::{Address as _, Ledger, LedgerInfo};
     use soroban_sdk::Env;
 
-    fn setup_env() -> (Env, Address, Address) {
+    fn setup_env() -> (Env, Address, Address, Address) {
         let env = Env::default();
         env.mock_all_auths();
         let admin = Address::generate(&env);
@@ -291,7 +291,7 @@ mod tests {
             env.storage().instance().set(&DATA_KEY, &data);
         });
 
-        (env, admin, treasury)
+        (env, admin, treasury, contract_id)
     }
 
     fn advance_timestamp(env: &Env, delta_seconds: u64) {
@@ -304,16 +304,14 @@ mod tests {
             base_reserve: 10,
             min_temp_entry_ttl: 0,
             min_persistent_entry_ttl: 0,
-            max_entry_ttl: u32::MAX,
+            max_entry_ttl: 6_312_000,
         });
     }
 
     #[test]
     fn test_register_and_check_protected_asset() {
-        let (env, admin, _treasury) = setup_env();
+        let (env, admin, _treasury, contract_id) = setup_env();
         let pool_asset = Address::generate(&env);
-
-        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
         env.as_contract(&contract_id, || {
             assert!(!is_protected_asset(&env, &pool_asset));
             assert!(register_protected_asset(&env, admin.clone(), pool_asset.clone()).is_ok());
@@ -323,11 +321,9 @@ mod tests {
 
     #[test]
     fn test_non_admin_cannot_register_protected_asset() {
-        let (env, _admin, _treasury) = setup_env();
+        let (env, _admin, _treasury, contract_id) = setup_env();
         let non_admin = Address::generate(&env);
         let pool_asset = Address::generate(&env);
-
-        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
         env.as_contract(&contract_id, || {
             let res = register_protected_asset(&env, non_admin, pool_asset);
             assert_eq!(res, Err(ContractError::NotAdmin));
@@ -336,24 +332,22 @@ mod tests {
 
     #[test]
     fn test_cannot_queue_rescue_for_protected_asset() {
-        let (env, admin, treasury) = setup_env();
+        let (env, admin, treasury, contract_id) = setup_env();
         let pool_asset = Address::generate(&env);
-
-        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
         env.as_contract(&contract_id, || {
             register_protected_asset(&env, admin.clone(), pool_asset.clone()).unwrap();
-
-            let res = queue_token_rescue(&env, admin, pool_asset, 1_000, treasury);
-            assert_eq!(res, Err(ContractError::ProtectedAssetNotRescueable));
         });
+
+        let res = env.as_contract(&contract_id, || {
+            queue_token_rescue(&env, admin, pool_asset, 1_000, treasury)
+        });
+        assert_eq!(res, Err(ContractError::ProtectedAssetNotRescueable));
     }
 
     #[test]
     fn test_queue_and_get_rescue_proposal() {
-        let (env, admin, treasury) = setup_env();
+        let (env, admin, treasury, contract_id) = setup_env();
         let mis_sent_token = Address::generate(&env);
-
-        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
         env.as_contract(&contract_id, || {
             let pid = queue_token_rescue(&env, admin.clone(), mis_sent_token.clone(), 5_000, treasury.clone()).unwrap();
             assert_eq!(pid, 1);
@@ -370,36 +364,37 @@ mod tests {
 
     #[test]
     fn test_cannot_execute_before_timelock_expires() {
-        let (env, admin, treasury) = setup_env();
+        let (env, admin, treasury, contract_id) = setup_env();
         let mis_sent_token = Address::generate(&env);
+        let pid = env.as_contract(&contract_id, || {
+            queue_token_rescue(&env, admin.clone(), mis_sent_token, 5_000, treasury)
+        })
+        .unwrap();
 
-        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
-        env.as_contract(&contract_id, || {
-            let pid = queue_token_rescue(&env, admin.clone(), mis_sent_token, 5_000, treasury).unwrap();
-
-            advance_timestamp(&env, RESCUE_TIMELOCK_DELAY - 10);
-            let res = execute_token_rescue(&env, admin, pid);
-            assert_eq!(res, Err(ContractError::RescueTimelockNotExpired));
-        });
+        advance_timestamp(&env, RESCUE_TIMELOCK_DELAY - 10);
+        let res = env.as_contract(&contract_id, || execute_token_rescue(&env, admin, pid));
+        assert_eq!(res, Err(ContractError::RescueTimelockNotExpired));
     }
 
     #[test]
     fn test_cancel_rescue_proposal() {
-        let (env, admin, treasury) = setup_env();
+        let (env, admin, treasury, contract_id) = setup_env();
         let mis_sent_token = Address::generate(&env);
+        let pid = env.as_contract(&contract_id, || {
+            queue_token_rescue(&env, admin.clone(), mis_sent_token, 5_000, treasury)
+        })
+        .unwrap();
 
-        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
-        env.as_contract(&contract_id, || {
-            let pid = queue_token_rescue(&env, admin.clone(), mis_sent_token, 5_000, treasury).unwrap();
-
+        let cancelled = env.as_contract(&contract_id, || {
             assert!(cancel_token_rescue(&env, admin.clone(), pid).is_ok());
 
             let proposal = get_rescue_proposal(&env, pid).unwrap();
             assert_eq!(proposal.status, RescueProposalStatus::Cancelled);
-
-            advance_timestamp(&env, RESCUE_TIMELOCK_DELAY + 10);
-            let res = execute_token_rescue(&env, admin, pid);
-            assert_eq!(res, Err(ContractError::RescueProposalNotPending));
         });
+
+        advance_timestamp(&env, RESCUE_TIMELOCK_DELAY + 10);
+        let res = env.as_contract(&contract_id, || execute_token_rescue(&env, admin, pid));
+        assert_eq!(res, Err(ContractError::RescueProposalNotPending));
+        let _ = cancelled;
     }
 }

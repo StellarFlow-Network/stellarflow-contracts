@@ -396,15 +396,22 @@ fn apply_queued_action(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, Env};
+    use soroban_sdk::{
+        testutils::{Address as _, Ledger},
+        Env,
+    };
 
-    fn bootstrap() -> (Env, Address) {
+    fn bootstrap() -> (Env, Address, Address) {
         let env = Env::default();
         env.mock_all_auths();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
         let admin = Address::generate(&env);
-        let data = ContractData { admin: admin.clone(), value: 0, max_fee_ceiling: 10_000 };
-        env.storage().instance().set(&DATA_KEY, &data);
-        (env, admin)
+        // Instance-storage writes require a running contract context.
+        env.as_contract(&cid, || {
+            let data = ContractData { admin: admin.clone(), value: 0, max_fee_ceiling: 10_000 };
+            env.storage().instance().set(&DATA_KEY, &data);
+        });
+        (env, admin, cid)
     }
 
     fn ceiling_payload(new_ceiling: u64) -> QueuedActionPayload {
@@ -413,77 +420,113 @@ mod tests {
 
     #[test]
     fn queue_fee_ceiling_stores_pending_record() {
-        let (env, admin) = bootstrap();
+        let (env, admin, cid) = bootstrap();
 
-        let queued = queue_admin_action(&env, admin.clone(), ceiling_payload(5_000))
+        let queued = env
+            .as_contract(&cid, || {
+                queue_admin_action(&env, admin.clone(), ceiling_payload(5_000))
+            })
             .expect("should queue");
 
         assert_eq!(queued.proposer, admin);
         assert_eq!(queued.execute_not_before, queued.queued_at + ADMIN_ACTION_DELAY_SECONDS);
 
-        let fetched = get_queued_action(&env, ceiling_payload(0));
+        let fetched = env.as_contract(&cid, || get_queued_action(&env, ceiling_payload(0)));
         assert!(fetched.is_some());
     }
 
     #[test]
     fn duplicate_queue_returns_pending_error() {
-        let (env, admin) = bootstrap();
+        let (env, admin, cid) = bootstrap();
 
-        queue_admin_action(&env, admin.clone(), ceiling_payload(5_000)).expect("first queue");
+        env.as_contract(&cid, || {
+            queue_admin_action(&env, admin.clone(), ceiling_payload(5_000))
+        })
+        .expect("first queue");
 
-        let err = queue_admin_action(&env, admin.clone(), ceiling_payload(3_000)).unwrap_err();
+        let err = env
+            .as_contract(&cid, || {
+                queue_admin_action(&env, admin.clone(), ceiling_payload(3_000))
+            })
+            .unwrap_err();
         assert_eq!(err, ContractError::AdminChangePending);
     }
 
     #[test]
     fn cancel_action_clears_proposal() {
-        let (env, admin) = bootstrap();
+        let (env, admin, cid) = bootstrap();
 
-        queue_admin_action(&env, admin.clone(), ceiling_payload(5_000)).expect("queue");
-        cancel_action(&env, admin.clone(), ceiling_payload(0)).expect("cancel");
+        env.as_contract(&cid, || {
+            queue_admin_action(&env, admin.clone(), ceiling_payload(5_000))
+        })
+        .expect("queue");
+        env.as_contract(&cid, || cancel_action(&env, admin.clone(), ceiling_payload(0)))
+            .expect("cancel");
 
-        let fetched = get_queued_action(&env, ceiling_payload(0));
+        let fetched = env.as_contract(&cid, || get_queued_action(&env, ceiling_payload(0)));
         assert!(fetched.is_none());
     }
 
     #[test]
     fn execute_before_delay_returns_timelock_error() {
-        let (env, admin) = bootstrap();
+        let (env, admin, cid) = bootstrap();
 
-        queue_admin_action(&env, admin.clone(), ceiling_payload(5_000)).expect("queue");
+        env.as_contract(&cid, || {
+            queue_admin_action(&env, admin.clone(), ceiling_payload(5_000))
+        })
+        .expect("queue");
 
-        let err = execute_action(&env, admin.clone(), ceiling_payload(0)).unwrap_err();
+        let err = env
+            .as_contract(&cid, || {
+                execute_action(&env, admin.clone(), ceiling_payload(0))
+            })
+            .unwrap_err();
         assert_eq!(err, ContractError::AdminTimelockNotSatisfied);
     }
 
     #[test]
     fn execute_after_delay_updates_fee_ceiling() {
-        let (env, admin) = bootstrap();
+        let (env, admin, cid) = bootstrap();
 
-        queue_admin_action(&env, admin.clone(), ceiling_payload(5_000)).expect("queue");
+        env.as_contract(&cid, || {
+            queue_admin_action(&env, admin.clone(), ceiling_payload(5_000))
+        })
+        .expect("queue");
 
         // Advance time past the 48-hour window.
         env.ledger().with_mut(|l| {
             l.timestamp += ADMIN_ACTION_DELAY_SECONDS + 1;
         });
 
-        execute_action(&env, admin.clone(), ceiling_payload(0))
-            .expect("execute should succeed after timelock");
+        env.as_contract(&cid, || {
+            execute_action(&env, admin.clone(), ceiling_payload(0))
+        })
+        .expect("execute should succeed after timelock");
 
-        let data: ContractData = env.storage().instance().get(&DATA_KEY).unwrap();
+        let data: ContractData = env
+            .as_contract(&cid, || {
+                env.storage().instance().get(&DATA_KEY).unwrap()
+            });
         assert_eq!(data.max_fee_ceiling, 5_000);
 
         // Queue entry should be gone.
-        assert!(get_queued_action(&env, ceiling_payload(0)).is_none());
+        let gone = env.as_contract(&cid, || get_queued_action(&env, ceiling_payload(0)));
+        assert!(gone.is_none());
     }
 
     #[test]
     fn timelock_remaining_decreases_over_time() {
-        let (env, admin) = bootstrap();
+        let (env, admin, cid) = bootstrap();
 
-        queue_admin_action(&env, admin.clone(), ceiling_payload(2_000)).expect("queue");
+        env.as_contract(&cid, || {
+            queue_admin_action(&env, admin.clone(), ceiling_payload(2_000))
+        })
+        .expect("queue");
 
-        let remaining = get_action_timelock_remaining(&env, ceiling_payload(0))
+        let remaining = env
+            .as_contract(&cid, || {
+                get_action_timelock_remaining(&env, ceiling_payload(0))
+            })
             .expect("should have remaining");
         assert_eq!(remaining, ADMIN_ACTION_DELAY_SECONDS);
 
@@ -491,17 +534,24 @@ mod tests {
             l.timestamp += 3600;
         });
 
-        let remaining_after = get_action_timelock_remaining(&env, ceiling_payload(0))
+        let remaining_after = env
+            .as_contract(&cid, || {
+                get_action_timelock_remaining(&env, ceiling_payload(0))
+            })
             .expect("still queued");
         assert_eq!(remaining_after, ADMIN_ACTION_DELAY_SECONDS - 3600);
     }
 
     #[test]
     fn non_admin_cannot_queue_action() {
-        let (env, _admin) = bootstrap();
+        let (env, _admin, cid) = bootstrap();
         let outsider = Address::generate(&env);
 
-        let err = queue_admin_action(&env, outsider, ceiling_payload(5_000)).unwrap_err();
+        let err = env
+            .as_contract(&cid, || {
+                queue_admin_action(&env, outsider, ceiling_payload(5_000))
+            })
+            .unwrap_err();
         assert_eq!(err, ContractError::NotAdmin);
     }
 

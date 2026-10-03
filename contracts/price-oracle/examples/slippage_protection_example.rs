@@ -48,7 +48,7 @@ fn example_simple_conversion_with_slippage() {
         enforce_slippage_tolerance(expected_rate, actual_rate_bad, user_slippage_tolerance);
     assert_eq!(
         result,
-        Err(Error::SlippageToleranceExceeded),
+        Err(ContractError::SlippageToleranceExceeded),
         "Conversion should fail when tolerance exceeded"
     );
 }
@@ -149,7 +149,7 @@ fn example_slippage_monitoring() {
 
         match enforce_slippage_tolerance(*expected, *actual, tolerance) {
             Ok(_) => successful_conversions += 1,
-            Err(Error::SlippageToleranceExceeded) => rejected_conversions += 1,
+            Err(ContractError::SlippageToleranceExceeded) => rejected_conversions += 1,
             Err(e) => panic!("Unexpected error: {:?}", e),
         }
     }
@@ -195,7 +195,7 @@ impl MockPriceOracle {
         amount: i128,
         expected_rate: i128,
         max_slippage_bps: u32,
-    ) -> Result<i128, Error> {
+    ) -> Result<i128, ContractError> {
         // Step 1: Get current prices (mocked here)
         let from_price = Self::mock_get_price(from_asset);
         let to_price = Self::mock_get_price(to_asset);
@@ -239,7 +239,7 @@ fn example_oracle_integration() {
             println!("Conversion successful: {} NGN → {} GHS", amount, ghs_amount);
             println!("Effective rate: {}", (amount * 1_000_000_000) / ghs_amount);
         }
-        Err(Error::SlippageToleranceExceeded) => {
+        Err(ContractError::SlippageToleranceExceeded) => {
             println!("Conversion rejected: slippage tolerance exceeded");
         }
         Err(e) => {
@@ -269,7 +269,7 @@ fn example_edge_cases() {
     let result = enforce_slippage_tolerance(expected, actual, zero_tolerance);
     assert_eq!(
         result,
-        Err(Error::SlippageToleranceExceeded),
+        Err(ContractError::SlippageToleranceExceeded),
         "Zero slippage with any deviation should fail"
     );
 

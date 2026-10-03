@@ -107,8 +107,8 @@ use crate::Error;
 /// calling. Use [`normalize_to_nine`] if the inputs have different native precisions.
 ///
 /// # Errors
-/// - `Error::DeviationConsensusZero` — when `consensus` is zero (divide-by-zero guard).
-/// - `Error::PriceMathOverflow` — on arithmetic overflow.
+/// - `ContractError::DeviationConsensusZero` — when `consensus` is zero (divide-by-zero guard).
+/// - `ContractError::PriceMathOverflow` — on arithmetic overflow.
 ///
 /// # Examples
 /// ```text
@@ -117,9 +117,9 @@ use crate::Error;
 /// calculate_deviation_bps(500, 0)         => Err(DeviationConsensusZero)
 /// ```
 #[inline]
-pub fn calculate_deviation_bps(submitted: i128, consensus: i128) -> Result<u32, Error> {
+pub fn calculate_deviation_bps(submitted: i128, consensus: i128) -> Result<u32, ContractError> {
     if consensus == 0 {
-        return Err(Error::DeviationConsensusZero);
+        return Err(ContractError::DeviationConsensusZero);
     }
     let diff = if submitted >= consensus {
         submitted - consensus
@@ -130,37 +130,37 @@ pub fn calculate_deviation_bps(submitted: i128, consensus: i128) -> Result<u32, 
     // (e.g. i128::MAX) don't panic; they saturate to u32::MAX which maps to
     // the highest DeviationTier (Manipulation).
     let bps = match diff.checked_mul(10_000) {
-        Some(v) => v.checked_div(consensus).ok_or(Error::PriceMathOverflow)?,
+        Some(v) => v.checked_div(consensus).ok_or(ContractError::PriceMathOverflow)?,
         None => i128::MAX,
     };
     Ok(bps.min(u32::MAX as i128) as u32)
 }
 
 #[inline]
-pub fn normalize_to_seven(value: i128, input_decimals: u32) -> Result<i128, Error> {
+pub fn normalize_to_seven(value: i128, input_decimals: u32) -> Result<i128, ContractError> {
     // Early trap: validate input value is within safe range
     if value == i128::MIN || value == i128::MAX {
-        return Err(Error::PriceMathOverflow);
+        return Err(ContractError::PriceMathOverflow);
     }
 
     if input_decimals < 7 {
         let diff = 7 - input_decimals;
-        let multiplier = 10_i128.checked_pow(diff).ok_or(Error::PriceMathOverflow)?;
+        let multiplier = 10_i128.checked_pow(diff).ok_or(ContractError::PriceMathOverflow)?;
 
         // Explicit overflow trap before multiplication
         value
             .checked_mul(multiplier)
-            .ok_or(Error::PriceMathOverflow)
+            .ok_or(ContractError::PriceMathOverflow)
     } else if input_decimals > 7 {
         let diff = input_decimals - 7;
-        let divisor = 10_i128.checked_pow(diff).ok_or(Error::PriceMathOverflow)?;
+        let divisor = 10_i128.checked_pow(diff).ok_or(ContractError::PriceMathOverflow)?;
 
         // Explicit divide-by-zero trap (though 10^n cannot be zero)
         if divisor == 0 {
-            return Err(Error::PriceMathOverflow);
+            return Err(ContractError::PriceMathOverflow);
         }
 
-        value.checked_div(divisor).ok_or(Error::PriceMathOverflow)
+        value.checked_div(divisor).ok_or(ContractError::PriceMathOverflow)
     } else {
         Ok(value)
     }
@@ -185,7 +185,7 @@ pub fn normalize_to_seven(value: i128, input_decimals: u32) -> Result<i128, Erro
 /// normalize_to_nine(1_000_000_000_00, 11) => 1_000_000_000 (scale down)
 /// ```
 #[inline]
-pub fn normalize_to_nine(value: i128, native_decimals: u32) -> Result<i128, Error> {
+pub fn normalize_to_nine(value: i128, native_decimals: u32) -> Result<i128, ContractError> {
     const TARGET: u32 = 9;
     const INTERIOR_SCALE: i128 = 1_000_000_000_000_000; // 10^15
 
@@ -195,29 +195,29 @@ pub fn normalize_to_nine(value: i128, native_decimals: u32) -> Result<i128, Erro
 
     // Early trap: validate input value is within safe range for scaled arithmetic
     if value == i128::MIN || value == i128::MAX {
-        return Err(Error::PriceMathOverflow);
+        return Err(ContractError::PriceMathOverflow);
     }
 
     // Explicit overflow trap on initial scaling operation
     let scaled = value
         .checked_mul(INTERIOR_SCALE)
-        .ok_or(Error::PriceMathOverflow)?;
+        .ok_or(ContractError::PriceMathOverflow)?;
 
     let normalized_in_interior_space = if native_decimals < TARGET {
         let diff = TARGET - native_decimals;
 
         // Trap power overflow early
-        let multiplier = 10_i128.checked_pow(diff).ok_or(Error::PriceMathOverflow)?;
+        let multiplier = 10_i128.checked_pow(diff).ok_or(ContractError::PriceMathOverflow)?;
 
         // Use checked_mul to explicitly trap multiplication overflow
         scaled
             .checked_mul(multiplier)
-            .ok_or(Error::PriceMathOverflow)?
+            .ok_or(ContractError::PriceMathOverflow)?
     } else if native_decimals > TARGET {
         let diff = native_decimals - TARGET;
 
         // Trap power overflow early
-        let divisor = 10_i128.checked_pow(diff).ok_or(Error::PriceMathOverflow)?;
+        let divisor = 10_i128.checked_pow(diff).ok_or(ContractError::PriceMathOverflow)?;
 
         // Explicit divide-by-zero trap (defensive, 10^n cannot be zero)
         require_nonzero_denominator(divisor)?;
@@ -225,7 +225,7 @@ pub fn normalize_to_nine(value: i128, native_decimals: u32) -> Result<i128, Erro
         // Use checked_div to trap any division anomalies
         scaled
             .checked_div(divisor)
-            .ok_or(Error::PriceMathOverflow)?
+            .ok_or(ContractError::PriceMathOverflow)?
     } else {
         scaled
     };
@@ -234,7 +234,7 @@ pub fn normalize_to_nine(value: i128, native_decimals: u32) -> Result<i128, Erro
     require_nonzero_denominator(INTERIOR_SCALE)?;
     normalized_in_interior_space
         .checked_div(INTERIOR_SCALE)
-        .ok_or(Error::PriceMathOverflow)
+        .ok_or(ContractError::PriceMathOverflow)
 }
 
 /// Calculate the inverse of a price (e.g., NGN/XLM → XLM/NGN).
@@ -280,13 +280,13 @@ pub fn calculate_inverse_price(price: i128, decimals: u32) -> Option<i128> {
 
 /// Require that a denominator is non-zero before performing division.
 ///
-/// Returns `Ok(())` when `n != 0`, or `Err(Error::InvalidDenominator)` when `n` is zero.
+/// Returns `Ok(())` when `n != 0`, or `Err(ContractError::InvalidDenominator)` when `n` is zero.
 /// Call this proactively before every division to prevent runtime panics
 /// and to provide a clear error signal to callers.
 #[inline]
-pub fn require_nonzero_denominator(n: i128) -> Result<(), Error> {
+pub fn require_nonzero_denominator(n: i128) -> Result<(), ContractError> {
     if n == 0 {
-        Err(Error::InvalidDenominator)
+        Err(ContractError::InvalidDenominator)
     } else {
         Ok(())
     }
@@ -302,7 +302,7 @@ pub fn require_nonzero_denominator(n: i128) -> Result<(), Error> {
 /// * `slippage_bps` - The slippage tolerance in basis points
 ///
 /// # Returns
-/// `Ok(())` if valid, or `Err(Error::InvalidSlippageTolerance)` if out of range.
+/// `Ok(())` if valid, or `Err(ContractError::InvalidSlippageTolerance)` if out of range.
 ///
 /// # Examples
 /// ```text
@@ -311,11 +311,11 @@ pub fn require_nonzero_denominator(n: i128) -> Result<(), Error> {
 /// validate_slippage_tolerance(10_000) => Ok(())   // 100% is valid (max)
 /// validate_slippage_tolerance(10_001) => Err(InvalidSlippageTolerance)
 /// ```
-pub fn validate_slippage_tolerance(slippage_bps: u32) -> Result<(), Error> {
+pub fn validate_slippage_tolerance(slippage_bps: u32) -> Result<(), ContractError> {
     const MAX_SLIPPAGE_BPS: u32 = 10_000; // 100%
 
     if slippage_bps > MAX_SLIPPAGE_BPS {
-        Err(Error::InvalidSlippageTolerance)
+        Err(ContractError::InvalidSlippageTolerance)
     } else {
         Ok(())
     }
@@ -339,8 +339,8 @@ pub fn validate_slippage_tolerance(slippage_bps: u32) -> Result<(), Error> {
 /// The absolute deviation in basis points, or an error if `expected_rate` is zero.
 ///
 /// # Errors
-/// - `Error::DeviationConsensusZero` — when `expected_rate` is zero (divide-by-zero guard).
-/// - `Error::PriceMathOverflow` — on arithmetic overflow.
+/// - `ContractError::DeviationConsensusZero` — when `expected_rate` is zero (divide-by-zero guard).
+/// - `ContractError::PriceMathOverflow` — on arithmetic overflow.
 ///
 /// # Examples
 /// ```text
@@ -349,9 +349,9 @@ pub fn validate_slippage_tolerance(slippage_bps: u32) -> Result<(), Error> {
 /// calculate_rate_deviation_bps(10_000, 10_000) => Ok(0)     // no deviation
 /// calculate_rate_deviation_bps(0, 10_000)      => Err(DeviationConsensusZero)
 /// ```
-pub fn calculate_rate_deviation_bps(expected_rate: i128, actual_rate: i128) -> Result<u32, Error> {
+pub fn calculate_rate_deviation_bps(expected_rate: i128, actual_rate: i128) -> Result<u32, ContractError> {
     if expected_rate == 0 {
-        return Err(Error::DeviationConsensusZero);
+        return Err(ContractError::DeviationConsensusZero);
     }
 
     let diff = if actual_rate >= expected_rate {
@@ -364,7 +364,7 @@ pub fn calculate_rate_deviation_bps(expected_rate: i128, actual_rate: i128) -> R
     let bps = match diff.checked_mul(10_000) {
         Some(v) => v
             .checked_div(expected_rate)
-            .ok_or(Error::PriceMathOverflow)?,
+            .ok_or(ContractError::PriceMathOverflow)?,
         None => i128::MAX,
     };
 
@@ -375,7 +375,7 @@ pub fn calculate_rate_deviation_bps(expected_rate: i128, actual_rate: i128) -> R
 ///
 /// This function validates that the deviation between expected and actual rates
 /// does not exceed the user-specified slippage tolerance. It immediately terminates
-/// execution with `Error::SlippageToleranceExceeded` if the threshold is breached.
+/// execution with `ContractError::SlippageToleranceExceeded` if the threshold is breached.
 ///
 /// # Arguments
 /// * `expected_rate` - The expected exchange rate for the conversion
@@ -386,10 +386,10 @@ pub fn calculate_rate_deviation_bps(expected_rate: i128, actual_rate: i128) -> R
 /// `Ok(())` if the rate is within tolerance, or an error if validation fails.
 ///
 /// # Errors
-/// - `Error::SlippageToleranceExceeded` — when actual deviation exceeds `max_slippage_bps`
-/// - `Error::InvalidSlippageTolerance` — when `max_slippage_bps` is out of valid range
-/// - `Error::DeviationConsensusZero` — when `expected_rate` is zero
-/// - `Error::PriceMathOverflow` — on arithmetic overflow
+/// - `ContractError::SlippageToleranceExceeded` — when actual deviation exceeds `max_slippage_bps`
+/// - `ContractError::InvalidSlippageTolerance` — when `max_slippage_bps` is out of valid range
+/// - `ContractError::DeviationConsensusZero` — when `expected_rate` is zero
+/// - `ContractError::PriceMathOverflow` — on arithmetic overflow
 ///
 /// # Examples
 /// ```text
@@ -406,7 +406,7 @@ pub fn enforce_slippage_tolerance(
     expected_rate: i128,
     actual_rate: i128,
     max_slippage_bps: u32,
-) -> Result<(), Error> {
+) -> Result<(), ContractError> {
     // Validate the slippage tolerance parameter
     validate_slippage_tolerance(max_slippage_bps)?;
 
@@ -415,7 +415,7 @@ pub fn enforce_slippage_tolerance(
 
     // Check if deviation exceeds tolerance
     if actual_deviation_bps > max_slippage_bps {
-        return Err(Error::SlippageToleranceExceeded);
+        return Err(ContractError::SlippageToleranceExceeded);
     }
 
     Ok(())
@@ -443,18 +443,18 @@ pub fn enforce_slippage_tolerance(
 pub fn calculate_min_acceptable_rate(
     expected_rate: i128,
     slippage_bps: u32,
-) -> Result<i128, Error> {
+) -> Result<i128, ContractError> {
     validate_slippage_tolerance(slippage_bps)?;
 
     let slippage_multiplier = 10_000_i128
         .checked_sub(slippage_bps as i128)
-        .ok_or(Error::PriceMathOverflow)?;
+        .ok_or(ContractError::PriceMathOverflow)?;
 
     let min_rate = expected_rate
         .checked_mul(slippage_multiplier)
-        .ok_or(Error::PriceMathOverflow)?
+        .ok_or(ContractError::PriceMathOverflow)?
         .checked_div(10_000)
-        .ok_or(Error::PriceMathOverflow)?;
+        .ok_or(ContractError::PriceMathOverflow)?;
 
     Ok(min_rate)
 }
@@ -480,18 +480,18 @@ pub fn calculate_min_acceptable_rate(
 pub fn calculate_max_acceptable_rate(
     expected_rate: i128,
     slippage_bps: u32,
-) -> Result<i128, Error> {
+) -> Result<i128, ContractError> {
     validate_slippage_tolerance(slippage_bps)?;
 
     let slippage_multiplier = 10_000_i128
         .checked_add(slippage_bps as i128)
-        .ok_or(Error::PriceMathOverflow)?;
+        .ok_or(ContractError::PriceMathOverflow)?;
 
     let max_rate = expected_rate
         .checked_mul(slippage_multiplier)
-        .ok_or(Error::PriceMathOverflow)?
+        .ok_or(ContractError::PriceMathOverflow)?
         .checked_div(10_000)
-        .ok_or(Error::PriceMathOverflow)?;
+        .ok_or(ContractError::PriceMathOverflow)?;
 
     Ok(max_rate)
 }
@@ -579,7 +579,7 @@ mod tests {
     fn test_deviation_bps_zero_consensus() {
         assert_eq!(
             calculate_deviation_bps(500, 0),
-            Err(Error::DeviationConsensusZero)
+            Err(ContractError::DeviationConsensusZero)
         );
     }
 
@@ -675,11 +675,11 @@ mod tests {
         // Extreme values should be trapped early to prevent overflow
         assert_eq!(
             normalize_to_nine(i128::MAX, 0),
-            Err(Error::PriceMathOverflow)
+            Err(ContractError::PriceMathOverflow)
         );
         assert_eq!(
             normalize_to_nine(i128::MIN, 0),
-            Err(Error::PriceMathOverflow)
+            Err(ContractError::PriceMathOverflow)
         );
     }
 
@@ -696,11 +696,11 @@ mod tests {
         // Extreme values should be trapped early
         assert_eq!(
             normalize_to_seven(i128::MAX, 0),
-            Err(Error::PriceMathOverflow)
+            Err(ContractError::PriceMathOverflow)
         );
         assert_eq!(
             normalize_to_seven(i128::MIN, 0),
-            Err(Error::PriceMathOverflow)
+            Err(ContractError::PriceMathOverflow)
         );
     }
 
@@ -757,15 +757,15 @@ mod tests {
     fn test_validate_slippage_tolerance_invalid_values() {
         assert_eq!(
             validate_slippage_tolerance(10_001),
-            Err(Error::InvalidSlippageTolerance)
+            Err(ContractError::InvalidSlippageTolerance)
         );
         assert_eq!(
             validate_slippage_tolerance(50_000),
-            Err(Error::InvalidSlippageTolerance)
+            Err(ContractError::InvalidSlippageTolerance)
         );
         assert_eq!(
             validate_slippage_tolerance(u32::MAX),
-            Err(Error::InvalidSlippageTolerance)
+            Err(ContractError::InvalidSlippageTolerance)
         );
     }
 
@@ -800,7 +800,7 @@ mod tests {
     fn test_calculate_rate_deviation_bps_zero_expected() {
         assert_eq!(
             calculate_rate_deviation_bps(0, 10_000),
-            Err(Error::DeviationConsensusZero)
+            Err(ContractError::DeviationConsensusZero)
         );
     }
 
@@ -828,17 +828,17 @@ mod tests {
         // 5% deviation with 2% tolerance
         assert_eq!(
             enforce_slippage_tolerance(10_000, 10_500, 200),
-            Err(Error::SlippageToleranceExceeded)
+            Err(ContractError::SlippageToleranceExceeded)
         );
         // 10% deviation with 5% tolerance
         assert_eq!(
             enforce_slippage_tolerance(10_000, 11_000, 500),
-            Err(Error::SlippageToleranceExceeded)
+            Err(ContractError::SlippageToleranceExceeded)
         );
         // Negative deviation exceeds tolerance
         assert_eq!(
             enforce_slippage_tolerance(10_000, 9_000, 500),
-            Err(Error::SlippageToleranceExceeded)
+            Err(ContractError::SlippageToleranceExceeded)
         );
     }
 
@@ -846,7 +846,7 @@ mod tests {
     fn test_enforce_slippage_tolerance_invalid_tolerance() {
         assert_eq!(
             enforce_slippage_tolerance(10_000, 10_100, 15_000),
-            Err(Error::InvalidSlippageTolerance)
+            Err(ContractError::InvalidSlippageTolerance)
         );
     }
 
@@ -854,7 +854,7 @@ mod tests {
     fn test_enforce_slippage_tolerance_zero_expected() {
         assert_eq!(
             enforce_slippage_tolerance(0, 10_000, 500),
-            Err(Error::DeviationConsensusZero)
+            Err(ContractError::DeviationConsensusZero)
         );
     }
 
@@ -890,11 +890,11 @@ mod tests {
     fn test_calculate_min_max_rate_invalid_tolerance() {
         assert_eq!(
             calculate_min_acceptable_rate(10_000, 15_000),
-            Err(Error::InvalidSlippageTolerance)
+            Err(ContractError::InvalidSlippageTolerance)
         );
         assert_eq!(
             calculate_max_acceptable_rate(10_000, 15_000),
-            Err(Error::InvalidSlippageTolerance)
+            Err(ContractError::InvalidSlippageTolerance)
         );
     }
 
@@ -935,13 +935,13 @@ mod tests {
         let toxic_rate_low = 480_000; // 4% below expected
         assert_eq!(
             enforce_slippage_tolerance(expected_rate, toxic_rate_low, slippage_tolerance_bps),
-            Err(Error::SlippageToleranceExceeded)
+            Err(ContractError::SlippageToleranceExceeded)
         );
 
         let toxic_rate_high = 520_000; // 4% above expected
         assert_eq!(
             enforce_slippage_tolerance(expected_rate, toxic_rate_high, slippage_tolerance_bps),
-            Err(Error::SlippageToleranceExceeded)
+            Err(ContractError::SlippageToleranceExceeded)
         );
     }
 
@@ -962,7 +962,7 @@ mod tests {
         let excessive_rate = 1_006_000_000; // 0.6% above
         assert_eq!(
             enforce_slippage_tolerance(expected_rate, excessive_rate, tight_slippage),
-            Err(Error::SlippageToleranceExceeded)
+            Err(ContractError::SlippageToleranceExceeded)
         );
     }
 
@@ -1004,7 +1004,7 @@ mod tests {
         );
         assert_eq!(
             enforce_slippage_tolerance(small_expected, 90, slippage_bps),
-            Err(Error::SlippageToleranceExceeded)
+            Err(ContractError::SlippageToleranceExceeded)
         );
     }
 }

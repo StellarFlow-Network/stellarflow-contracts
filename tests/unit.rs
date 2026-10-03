@@ -33,7 +33,7 @@ fn advance(env: &Env, delta: u64) {
         base_reserve: 10,
         min_temp_entry_ttl: 0,
         min_persistent_entry_ttl: 0,
-        max_entry_ttl: u32::MAX,
+        max_entry_ttl: 6_312_000,
     });
 }
 
@@ -186,7 +186,7 @@ fn test_deposit_unstake_unregistered_rejected() {
 fn test_deposit_stake_and_register_for_feed() {
     let (env, client, admin) = setup_env();
     let node = Address::generate(&env);
-    let asset = stellarflow_contracts::symbol_to_asset_id(&symbol_short!("NGN"));
+    let asset = symbol_short!("NGN");
     let feed_record = client.stake_and_register_for_feed(&node, &asset, &2000);
     assert_eq!(feed_record.amount, 2000);
     assert_eq!(feed_record.node, node);
@@ -197,7 +197,7 @@ fn test_deposit_stake_and_register_for_feed() {
 fn test_deposit_stake_for_feed_zero_rejected() {
     let (env, client, admin) = setup_env();
     let node = Address::generate(&env);
-    let asset = stellarflow_contracts::symbol_to_asset_id(&symbol_short!("NGN"));
+    let asset = symbol_short!("NGN");
     let result = client.try_stake_and_register_for_feed(&node, &asset, &0);
     assert_eq!(result, Err(Ok(ContractError::InvalidStakeAmount)));
 }
@@ -206,7 +206,7 @@ fn test_deposit_stake_for_feed_zero_rejected() {
 fn test_deposit_feed_stake_and_unstake() {
     let (env, client, admin) = setup_env();
     let node = Address::generate(&env);
-    let asset = stellarflow_contracts::symbol_to_asset_id(&symbol_short!("NGN"));
+    let asset = symbol_short!("NGN");
     client.stake_and_register_for_feed(&node, &asset, &5000);
     let withdrawn = client.unstake_from_feed(&node, &asset);
     assert_eq!(withdrawn, 5000);
@@ -217,10 +217,9 @@ fn test_deposit_feed_stake_and_unstake() {
 fn test_deposit_set_and_get_staking_tier_config() {
     let (env, client, admin) = setup_env();
     let config = StakingTierConfig {
-        tier1_min: 100,
-        tier2_min: 500,
-        tier3_min: 2000,
-        tier4_min: 10000,
+        regional_min_stake: 100,
+        standard_min_stake: 500,
+        premier_min_stake: 2000,
     };
     let signers: Vec<Address> = Vec::new(&env);
     assert!(client

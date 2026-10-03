@@ -170,6 +170,9 @@ mod tests {
     #[test]
     fn queue_binds_payload_hash_and_deadline() {
         let env = Env::default();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
+
         let payload = Bytes::from_slice(&env, b"governance-action-v1");
         let expected_hash = QueuedAction::hash_payload(&env, &payload);
 
@@ -179,7 +182,9 @@ mod tests {
         assert_eq!(action.queued_timestamp, env.ledger().timestamp());
         assert_eq!(action.execute_at, env.ledger().timestamp() + TIMELOCK_DELAY);
         assert!(!action.cancelled);
-    }
+    
+
+});}
 
     #[test]
     fn execution_deadline_flows_from_queued_timestamp() {
@@ -228,7 +233,7 @@ mod tests {
         let queued = BytesN::from_array(&env, &[7u8; 32]);
         let offered = BytesN::from_array(&env, &[9u8; 32]);
         let action = QueuedAction {
-            payload_hash: queued,
+            payload_hash: queued.clone(),
             queued_timestamp: env.ledger().timestamp(),
             execute_at: env.ledger().timestamp(),
             cancelled: false,
@@ -244,6 +249,9 @@ mod tests {
     #[test]
     fn verify_gates_on_timelock_then_hash() {
         let env = Env::default();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
+
         let hash = BytesN::from_array(&env, &[3u8; 32]);
 
         // Nothing queued.
@@ -275,5 +283,7 @@ mod tests {
 
         clear_queued_action(&env);
         assert!(get_queued_action(&env).is_none());
-    }
+    
+
+});}
 }

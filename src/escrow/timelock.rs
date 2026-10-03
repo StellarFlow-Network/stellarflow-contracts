@@ -230,16 +230,21 @@ mod tests {
     #[test]
     fn test_create_escrow() {
         let (env, token_id, depositor, sender, receiver) = setup();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
         let current = env.ledger().sequence();
         let escrow = create(&env, sender.clone(), receiver.clone(), depositor.clone(), token_id.clone(), 1000, current + 100);
         assert!(!escrow.sender_approved);
         assert!(!escrow.receiver_approved);
         assert!(!escrow.released);
-    }
+    });
+}
 
     #[test]
     fn test_dual_approval_before_expiry_releases() {
         let (env, token_id, depositor, sender, receiver) = setup();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
         let current = env.ledger().sequence();
         let mut escrow = create(&env, sender.clone(), receiver.clone(), depositor.clone(), token_id.clone(), 1000, current + 100);
         approve_by_sender(&mut escrow, &sender).unwrap();
@@ -248,79 +253,103 @@ mod tests {
         assert!(escrow.is_approved());
         assert!(release(&env, &mut escrow, current + 50).is_ok());
         assert!(escrow.released);
-    }
+    });
+}
 
     #[test]
     fn test_release_fails_without_dual_approval() {
         let (env, token_id, depositor, sender, receiver) = setup();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
         let current = env.ledger().sequence();
         let mut escrow = create(&env, sender.clone(), receiver.clone(), depositor.clone(), token_id.clone(), 1000, current + 100);
         approve_by_sender(&mut escrow, &sender).unwrap();
         assert!(release(&env, &mut escrow, current + 50).is_err());
         assert!(!escrow.released);
-    }
+    });
+}
 
     #[test]
     fn test_refund_after_expiry_by_depositor() {
         let (env, token_id, depositor, sender, receiver) = setup();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
         let current = env.ledger().sequence();
         let mut escrow = create(&env, sender.clone(), receiver.clone(), depositor.clone(), token_id.clone(), 1000, current + 10);
         assert!(refund(&env, &mut escrow, &depositor, current + 20).is_ok());
         assert!(escrow.released);
-    }
+    });
+}
 
     #[test]
     fn test_refund_fails_before_expiry() {
         let (env, token_id, depositor, sender, receiver) = setup();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
         let current = env.ledger().sequence();
         let mut escrow = create(&env, sender.clone(), receiver.clone(), depositor.clone(), token_id.clone(), 1000, current + 100);
         assert!(refund(&env, &mut escrow, &depositor, current + 50).is_err());
         assert!(!escrow.released);
-    }
+    });
+}
 
     #[test]
     fn test_refund_rejects_non_depositor() {
         let (env, token_id, depositor, sender, receiver) = setup();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
         let current = env.ledger().sequence();
         let mut escrow = create(&env, sender.clone(), receiver.clone(), depositor.clone(), token_id.clone(), 1000, current + 10);
         let attacker = Address::generate(&env);
         assert!(refund(&env, &mut escrow, &attacker, current + 20).is_err());
-    }
+    });
+}
 
     #[test]
     fn test_approve_by_wrong_sender_fails() {
         let (env, token_id, depositor, sender, receiver) = setup();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
         let current = env.ledger().sequence();
         let mut escrow = create(&env, sender.clone(), receiver.clone(), depositor.clone(), token_id.clone(), 1000, current + 100);
         let wrong = Address::generate(&env);
         assert!(approve_by_sender(&mut escrow, &wrong).is_err());
         assert!(!escrow.sender_approved);
-    }
+    });
+}
 
     #[test]
     fn test_release_fails_after_expiry() {
         let (env, token_id, depositor, sender, receiver) = setup();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
         let current = env.ledger().sequence();
         let mut escrow = create(&env, sender.clone(), receiver.clone(), depositor.clone(), token_id.clone(), 1000, current + 10);
         approve_by_sender(&mut escrow, &sender).unwrap();
         approve_by_receiver(&mut escrow, &receiver).unwrap();
         assert!(release(&env, &mut escrow, current + 20).is_err());
-    }
+    });
+}
 
     #[test]
     fn test_release_fails_once_already_released() {
         let (env, token_id, depositor, sender, receiver) = setup();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
         let current = env.ledger().sequence();
         let mut escrow = create(&env, sender.clone(), receiver.clone(), depositor.clone(), token_id.clone(), 1000, current + 100);
         approve_by_sender(&mut escrow, &sender).unwrap();
         approve_by_receiver(&mut escrow, &receiver).unwrap();
         assert!(release(&env, &mut escrow, current + 50).is_ok());
         assert!(release(&env, &mut escrow, current + 50).is_err());
-    }
+    });
+}
 
     #[test]
     fn test_escrow_state_transitions() {
         let (env, token_id, depositor, sender, receiver) = setup();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
         let current = env.ledger().sequence();
         let mut escrow = create(&env, sender.clone(), receiver.clone(), depositor.clone(), token_id.clone(), 1000, current + 50);
         assert!(!escrow.is_approved());
@@ -328,5 +357,6 @@ mod tests {
         assert!(!escrow.is_expired(current + 49));
         assert!(escrow.is_expired(current + 50));
         assert!(escrow.is_expired(current + 100));
-    }
+    });
+}
 }

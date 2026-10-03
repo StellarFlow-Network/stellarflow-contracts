@@ -10,8 +10,4 @@ doctest = false
 
 [dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
-price-oracle = { path = "../../contracts/price-oracle" }
-
-[dev-dependencies]
-soroban-sdk = { workspace = true, features = ["testutils"] }
-price-oracle = { path = "../../contracts/price-oracle" }
+stellarflow-contracts = { path = "../..", features = ["testutils"] }

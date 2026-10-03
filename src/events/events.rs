@@ -173,6 +173,15 @@ pub const EV_TREASURY_DIVERSIFICATION_TRIGGERED: Symbol = symbol_short!("treas_d
 
 /// Governance: a proposal was vetoed by the Security Council.
 
+/// Flash loans: fees were distributed to the reward pools.
+pub const EV_FLASH_FEES_DISTRIBUTED: Symbol = symbol_short!("flashfee");
+
+/// Governance: a new proposal was created.
+pub const EV_PROPOSAL_CREATED: Symbol = symbol_short!("prop_new");
+
+/// AMM: the adaptive fee controller adjusted a pool's fee.
+pub const EV_ADAPTIVE_FEE: Symbol = symbol_short!("adap_fee");
+
 /// Orders: a trader committed to a hidden trade (commit-reveal, Issue #761).
 pub const EV_COMMIT_NEW: Symbol = symbol_short!("cmt_new");
 
@@ -277,6 +286,34 @@ pub fn validate_topics(topic_count: u32) -> Result<(), ContractError> {
     } else {
         Ok(())
     }
+}
+
+/// Publish a standardized event with a compressed payload (Issue #1019).
+///
+/// Numeric state values are varint-encoded into a compact byte array and
+/// status flags / sequence / timestamp are bit-packed into a single 64-bit
+/// word, minimizing ledger event storage fees. Off-chain tools decode the
+/// payload with `compression::decode_varint` and `compression::unpack_word`.
+///
+/// # Arguments
+/// * `env` - Soroban environment.
+/// * `event_name` - The primary event topic (determines RPC filter key).
+/// * `extra_topics` - Additional indexed topics (up to 3 more).
+/// * `numeric_fields` - Numeric state values, in declaration order.
+/// * `packed_word` - Flags/sequence/timestamp word from `compression::pack_word`.
+///
+/// # Errors
+/// Returns [`ContractError::EventTopicLimitExceeded`] if the total topic
+/// count exceeds [`MAX_EVENT_TOPICS`].
+pub fn emit_compressed_event(
+    env: &Env,
+    event_name: Symbol,
+    extra_topics: &[&Symbol],
+    numeric_fields: &[u64],
+    packed_word: u64,
+) -> Result<(), ContractError> {
+    let payload = super::compression::CompressedEventPayload::new(env, numeric_fields, packed_word);
+    emit_event(env, event_name, extra_topics, payload)
 }
 
 /// Event payload emitted when flash loan service fees are distributed.
@@ -384,7 +421,7 @@ pub fn emit_proposal_vetoed(
     vetoed_at: u64,
     reason: soroban_sdk::String,
 ) -> Result<(), ContractError> {
-    let proposal_id_sym = soroban_sdk::Symbol::new(env, &format!("prop_{}", proposal_id));
+    let proposal_id_sym = symbol_short!("proposal");
     
     let event = ProposalVetoedEvent {
         proposal_id,
@@ -430,7 +467,7 @@ pub fn emit_proposal_created(
     ipfs_cid: soroban_sdk::Bytes,
     created_at: u64,
 ) -> Result<(), ContractError> {
-    let proposal_id_sym = soroban_sdk::Symbol::new(env, &format!("prop_{}", proposal_id));
+    let proposal_id_sym = symbol_short!("prop_id");
     
     let event = ProposalCreatedEvent {
         proposal_id,

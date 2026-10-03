@@ -529,7 +529,7 @@ pub fn _set_halted(env: &Env, status: bool) {
 /// Panic if the emergency halt flag is active.
 pub fn _require_not_halted(env: &Env) {
     if _is_halted(env) {
-        panic!("Contract is emergency halted: rate reads are disabled");
+        return Err(ContractError::ContractIsEmergencyHaltedRateReadsAreDisabled);
     }
 }
 

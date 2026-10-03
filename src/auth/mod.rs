@@ -145,7 +145,7 @@ pub fn rotate_admin_keys(
     set_admin_threshold(env, new_threshold);
 
     env.events().publish(
-        (Symbol::new(env, "AdminKeysRotated")),
+        (Symbol::new(env, "AdminKeysRotated"),),
         (unique_signers, new_threshold),
     );
 

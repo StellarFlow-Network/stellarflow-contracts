@@ -2,8 +2,9 @@
 extern crate alloc;
 use soroban_sdk::{
     contract, contracterror, contractimpl, contractmeta, contracttype, symbol_short,
-    Address, Bytes, BytesN, Env, Map, Symbol, Vec,
+    Address, Bytes, BytesN, ConversionError, Env, Map, Symbol, TryFromVal, Val, Vec,
 };
+use soroban_sdk::xdr::ScVal;
 
 /// Numeric asset identifier for gas-optimized storage.
 /// Replaces heavy Symbol identifiers in high-frequency paths.
@@ -62,7 +63,7 @@ pub fn symbol_to_asset_id(symbol: &Symbol) -> AssetId {
     }
 }
 
-pub(crate) mod nonce;
+pub mod nonce;
 use crate::nonce::{consume_nonce, get_nonce};
 
 pub mod action_guard;
@@ -78,6 +79,7 @@ pub mod kernel;
 pub use kernel::instance;
 pub mod errors;
 pub mod events;
+pub mod expiry;
 pub mod fees;
 pub mod flash_fee_engine;
 pub mod flash_loan_guard;
@@ -108,6 +110,12 @@ pub mod upgrades;
 pub mod validation;
 pub use voting_delegation::*;
 pub mod zk;
+pub mod flash_loan_guard;
+pub mod remittance;
+pub mod vaults;
+pub mod veto;
+pub mod voting_delegation;
+pub mod multisig_expiry;
 pub use state_verification::{
     assert_contract_state_sanity, verify_contract_state, verify_storage_ttl_bumps,
     verify_zero_loss_accounting,
@@ -118,6 +126,8 @@ use crate::governance::{
     GovernanceUpgradeProposal, GovernanceUpgradeProposedEvent, StagedUpgrade, VotingBallot,
     GOVERNANCE_UPGRADE_KEY, MIN_LEDGER_DELAY,
 };
+use crate::errors::PROPOSAL_EXPIRY_SECONDS;
+use crate::events::{emit_simple2, EV_UPGRADE_PROPOSED};
 use crate::slashing::{
     apply_escrow_penalty, get_fault_count_in_window, get_penalty_multiplier, record_tracking_fault,
     IngestionPenaltyResult,
@@ -158,124 +168,204 @@ use crate::upgrades::migration::ensure_schema_version;
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum ContractError {
+    /// Recovery steps: Inspect the state for AlreadyInitialized and retry with valid inputs or proper conditions.
     AlreadyInitialized = 1,
+    /// Recovery steps: Inspect the state for NotInitialized and retry with valid inputs or proper conditions.
     NotInitialized = 2,
+    /// Recovery steps: Inspect the state for NotAdmin and retry with valid inputs or proper conditions.
     NotAdmin = 3,
+    /// Recovery steps: Inspect the state for NoPendingUpgrade and retry with valid inputs or proper conditions.
     NoPendingUpgrade = 4,
+    /// Recovery steps: Inspect the state for UpgradeTimelockNotSatisfied and retry with valid inputs or proper conditions.
     UpgradeTimelockNotSatisfied = 5,
+    /// Recovery steps: Inspect the state for InvalidHeartbeatInterval and retry with valid inputs or proper conditions.
     InvalidHeartbeatInterval = 6,
+    /// Recovery steps: Inspect the state for InvalidNonce and retry with valid inputs or proper conditions.
     InvalidNonce = 7,
+    /// Recovery steps: Inspect the state for AlreadyRegistered and retry with valid inputs or proper conditions.
     AlreadyRegistered = 8,
+    /// Recovery steps: Inspect the state for NotRegistered and retry with valid inputs or proper conditions.
     NotRegistered = 9,
+    /// Recovery steps: Inspect the state for InvalidStakeAmount and retry with valid inputs or proper conditions.
     InvalidStakeAmount = 10,
+    /// Recovery steps: Inspect the state for Overflow and retry with valid inputs or proper conditions.
     Overflow = 11,
+    /// Recovery steps: Inspect the state for Unauthorized and retry with valid inputs or proper conditions.
     Unauthorized = 12,
+    /// Recovery steps: Inspect the state for TargetNotAdmin and retry with valid inputs or proper conditions.
     TargetNotAdmin = 13,
+    /// Recovery steps: Inspect the state for ProposalAlreadyActive and retry with valid inputs or proper conditions.
     ProposalAlreadyActive = 14,
+    /// Recovery steps: Inspect the state for NoActiveProposal and retry with valid inputs or proper conditions.
     NoActiveProposal = 15,
+    /// Recovery steps: Inspect the state for AlreadyVoted and retry with valid inputs or proper conditions.
     AlreadyVoted = 16,
+    /// Recovery steps: Inspect the state for ThresholdNotReached and retry with valid inputs or proper conditions.
     ThresholdNotReached = 17,
+    /// Recovery steps: Inspect the state for SignatureExpired and retry with valid inputs or proper conditions.
     SignatureExpired = 18,
+    /// Recovery steps: Inspect the state for InvalidSaltSignature and retry with valid inputs or proper conditions.
     InvalidSaltSignature = 19,
     /// Stake amount is below the tier minimum for the target currency feed.
+    /// Recovery steps: Inspect the state for InsufficientStakeForTier and retry with valid inputs or proper conditions.
     InsufficientStakeForTier = 20,
     /// Staking tier configuration is invalid or non-monotonic.
+    /// Recovery steps: Inspect the state for InvalidTierConfig and retry with valid inputs or proper conditions.
     InvalidTierConfig = 21,
     /// Node is already registered for this currency feed.
+    /// Recovery steps: Inspect the state for FeedAlreadyRegistered and retry with valid inputs or proper conditions.
     FeedAlreadyRegistered = 22,
     /// Validator's active locked stake is below the required bond for the
     /// premium asset pool.
+    /// Recovery steps: Inspect the state for PremiumPoolAccessDenied and retry with valid inputs or proper conditions.
     PremiumPoolAccessDenied = 23,
     /// An ownership transfer proposal is already active.
+    /// Recovery steps: Inspect the state for TransferAlreadyPending and retry with valid inputs or proper conditions.
     TransferAlreadyPending = 24,
     /// No pending owner nominee exists to claim ownership.
+    /// Recovery steps: Inspect the state for NoPendingOwner and retry with valid inputs or proper conditions.
     NoPendingOwner = 25,
+    /// Recovery steps: Inspect the state for FeeCeilingExceeded and retry with valid inputs or proper conditions.
     FeeCeilingExceeded = 26,
+    /// Recovery steps: Inspect the state for DivisionByZero and retry with valid inputs or proper conditions.
     DivisionByZero = 27,
+    /// Recovery steps: Inspect the state for StaleSequence and retry with valid inputs or proper conditions.
     StaleSequence = 28,
+    /// Recovery steps: Inspect the state for InvalidVarianceConfig and retry with valid inputs or proper conditions.
     InvalidVarianceConfig = 29,
+    /// Recovery steps: Inspect the state for StaleTelemetryPayload and retry with valid inputs or proper conditions.
     StaleTelemetryPayload = 30,
+    /// Recovery steps: Inspect the state for InsufficientReserveBalance and retry with valid inputs or proper conditions.
     InsufficientReserveBalance = 31,
+    /// Recovery steps: Inspect the state for InsufficientVolume and retry with valid inputs or proper conditions.
     InsufficientVolume = 32,
+    /// Recovery steps: Inspect the state for InsufficientLiquidityDepth and retry with valid inputs or proper conditions.
     InsufficientLiquidityDepth = 33,
+    /// Recovery steps: Inspect the state for ContractPaused and retry with valid inputs or proper conditions.
     ContractPaused = 34,
+    /// Recovery steps: Inspect the state for RevokedAddress and retry with valid inputs or proper conditions.
     RevokedAddress = 35,
+    /// Recovery steps: Inspect the state for EmergencyRevocationActive and retry with valid inputs or proper conditions.
     EmergencyRevocationActive = 36,
+    /// Recovery steps: Inspect the state for NoActiveEmergencyRevocation and retry with valid inputs or proper conditions.
     NoActiveEmergencyRevocation = 37,
+    /// Recovery steps: Inspect the state for BundleAssetLimitExceeded and retry with valid inputs or proper conditions.
     BundleAssetLimitExceeded = 38,
+    /// Recovery steps: Inspect the state for BundleValidationFailed and retry with valid inputs or proper conditions.
     BundleValidationFailed = 39,
+    /// Recovery steps: Inspect the state for IncompleteQuorum and retry with valid inputs or proper conditions.
     IncompleteQuorum = 40,
+    /// Recovery steps: Inspect the state for EpochClosed and retry with valid inputs or proper conditions.
     EpochClosed = 41,
+    /// Recovery steps: Inspect the state for AdminChangePending and retry with valid inputs or proper conditions.
     AdminChangePending = 42,
+    /// Recovery steps: Inspect the state for NoAdminChangePending and retry with valid inputs or proper conditions.
     NoAdminChangePending = 43,
+    /// Recovery steps: Inspect the state for CosignerCannotBeProposer and retry with valid inputs or proper conditions.
     CosignerCannotBeProposer = 44,
+    /// Recovery steps: Inspect the state for AdminTimelockNotSatisfied and retry with valid inputs or proper conditions.
     AdminTimelockNotSatisfied = 45,
+    /// Recovery steps: Inspect the state for InsufficientBondForPenalty and retry with valid inputs or proper conditions.
     InsufficientBondForPenalty = 46,
+    /// Recovery steps: Inspect the state for SlippageExceeded and retry with valid inputs or proper conditions.
     SlippageExceeded = 47,
+    /// Recovery steps: Inspect the state for AmountTooLow and retry with valid inputs or proper conditions.
     AmountTooLow = 48,
+    /// Recovery steps: Inspect the state for InvalidProof and retry with valid inputs or proper conditions.
     InvalidProof = 49,
     /// Reentrancy guard detected a reentrant call during execution.
-    ReentrancyDetected = 50,
+    /// Recovery steps: Inspect the state for ReentrancyDetected and retry with valid inputs or proper conditions.
+    ReentrancyDetected = 58,
+    /// Recovery steps: Inspect the state for MerkleTreeFull and retry with valid inputs or proper conditions.
     MerkleTreeFull = 59,
+    /// Recovery steps: Inspect the state for NotSecurityCouncil and retry with valid inputs or proper conditions.
     NotSecurityCouncil = 60,
+    /// Recovery steps: Inspect the state for ProposalNotFound and retry with valid inputs or proper conditions.
     ProposalNotFound = 61,
+    /// Recovery steps: Inspect the state for ProposalNotVetoable and retry with valid inputs or proper conditions.
     ProposalNotVetoable = 62,
+    /// Recovery steps: Inspect the state for ProposalAlreadyVetoed and retry with valid inputs or proper conditions.
     ProposalAlreadyVetoed = 63,
     /// Spot price executed by an AMM swap deviates from the TWAP oracle value
     /// by more than the governance-configured safety threshold (Issue #743).
+    /// Recovery steps: Inspect the state for OracleDeviationTooHigh and retry with valid inputs or proper conditions.
     OracleDeviationTooHigh = 64,
     /// An oracle deviation guard configuration violates its structural bounds.
+    /// Recovery steps: Inspect the state for InvalidOracleDeviationConfig and retry with valid inputs or proper conditions.
     InvalidOracleDeviationConfig = 65,
     /// AMM math was called with a structurally invalid input.
+    /// Recovery steps: Inspect the state for InvalidInput and retry with valid inputs or proper conditions.
     InvalidInput = 66,
     /// Circuit breaker configuration violates its structural invariants.
+    /// Recovery steps: Inspect the state for InvalidCircuitBreakerConfig and retry with valid inputs or proper conditions.
     InvalidCircuitBreakerConfig = 67,
     /// Pool trading is currently frozen by the spot-price circuit breaker.
+    /// Recovery steps: Inspect the state for CircuitBreakerTripped and retry with valid inputs or proper conditions.
     CircuitBreakerTripped = 68,
     /// Deadline for an operation has passed.
+    /// Recovery steps: Inspect the state for DeadlineReached and retry with valid inputs or proper conditions.
     DeadlineReached = 69,
     /// Deadline for an operation has not yet been reached.
+    /// Recovery steps: Inspect the state for DeadlineNotReached and retry with valid inputs or proper conditions.
     DeadlineNotReached = 70,
     /// Deadline is too soon (minimum offset not satisfied).
+    /// Recovery steps: Inspect the state for DeadlineTooSoon and retry with valid inputs or proper conditions.
     DeadlineTooSoon = 71,
     /// Deadline is too far in the future (maximum offset exceeded).
+    /// Recovery steps: Inspect the state for DeadlineTooFar and retry with valid inputs or proper conditions.
     DeadlineTooFar = 72,
     /// Invalid argument provided to a function.
+    /// Recovery steps: Inspect the state for InvalidArgument and retry with valid inputs or proper conditions.
     InvalidArgument = 73,
     /// Invalid asset identifier.
+    /// Recovery steps: Inspect the state for InvalidAsset and retry with valid inputs or proper conditions.
     InvalidAsset = 74,
     /// Escrow is in an invalid state for the requested operation.
+    /// Recovery steps: Inspect the state for InvalidEscrowState and retry with valid inputs or proper conditions.
     InvalidEscrowState = 75,
     /// Tick spacing must be a strictly positive integer.
+    /// Recovery steps: Inspect the state for InvalidTickSpacing and retry with valid inputs or proper conditions.
     InvalidTickSpacing = 76,
     /// The tick index for this pool already exists.
+    /// Recovery steps: Inspect the state for TickIndexAlreadyExists and retry with valid inputs or proper conditions.
     TickIndexAlreadyExists = 77,
     /// No tick index exists for this pool.
+    /// Recovery steps: Inspect the state for TickIndexNotFound and retry with valid inputs or proper conditions.
     TickIndexNotFound = 78,
     /// Tick must be aligned to the pool's configured tick spacing.
+    /// Recovery steps: Inspect the state for TickNotAligned and retry with valid inputs or proper conditions.
     TickNotAligned = 79,
     /// Tick index is outside the allowed price range bounds.
+    /// Recovery steps: Inspect the state for TickOutOfBounds and retry with valid inputs or proper conditions.
     TickOutOfBounds = 80,
     /// Too many initialized ticks for a single pool.
+    /// Recovery steps: Inspect the state for TooManyTicks and retry with valid inputs or proper conditions.
     TooManyTicks = 81,
     /// Protected asset (primary pool or vault reserve) cannot be rescued.
+    /// Recovery steps: Inspect the state for ProtectedAssetNotRescueable and retry with valid inputs or proper conditions.
     ProtectedAssetNotRescueable = 82,
     /// Token rescue proposal was not found.
+    /// Recovery steps: Inspect the state for RescueProposalNotFound and retry with valid inputs or proper conditions.
     RescueProposalNotFound = 83,
     /// Token rescue proposal is not pending.
+    /// Recovery steps: Inspect the state for RescueProposalNotPending and retry with valid inputs or proper conditions.
     RescueProposalNotPending = 84,
     /// Mandatory timelock delay has not expired yet.
+    /// Recovery steps: Inspect the state for RescueTimelockNotExpired and retry with valid inputs or proper conditions.
     RescueTimelockNotExpired = 85,
     /// Emergency override mechanism is disabled.
+    /// Recovery steps: Inspect the state for EmergencyOverrideDisabled and retry with valid inputs or proper conditions.
     EmergencyOverrideDisabled = 86,
     /// Caller is not an authorized emergency signer.
+    /// Recovery steps: Inspect the state for NotEmergencySigner and retry with valid inputs or proper conditions.
     NotEmergencySigner = 87,
     /// Emergency override vote threshold not yet reached.
     OverrideThresholdNotReached = 89,
     /// Dynamic remittance fee split configuration is invalid.
     InvalidFeeSplitConfig = 90,
     /// A fee allocation does not add up to the original total.
-    FeeDistributionMismatch = 91,
+    /// Recovery steps: Inspect the state for FeeDistributionMismatch and retry with valid inputs or proper conditions.
+    FeeDistributionMismatch = 83,
     /// Public inputs to zero-knowledge proof do not match contract state parameters.
     InvalidZKPublicInputs = 92,
 }
@@ -342,6 +432,9 @@ impl ContractError {
     pub const HarvestSwapFailed: Self = Self::RouteExecutionFailed;
     pub const HarvestSlippageExceeded: Self = Self::SlippageExceeded;
     pub const HarvestInvalidPath: Self = Self::InconsistentRouteAssets;
+    pub const StrategyInvalidPairToken: Self = Self::InvalidAsset;
+    pub const StrategyInvalidReserves: Self = Self::InsufficientLiquidityDepth;
+    pub const StrategyYieldNotPositive: Self = Self::AmountTooLow;
 
     // ── Auto-compounding yield drawdown guard (Issue #1010) ────────────────
     // Semantic aliases only, matching the `Harvest*` convention above. No new
@@ -479,6 +572,15 @@ const PENDING_UPGRADE_KEY: Symbol = symbol_short!("PENDING");
 /// Storage key for the multi-stage timelock execution queue (Issue #996).
 const MULTI_STAGE_UPGRADE_KEY: Symbol = symbol_short!("MSTAGE");
 pub(crate) const UPGRADE_DELAY_SECONDS: u64 = 48 * 60 * 60;
+pub(crate) const VALIDATOR_STATE_KEY: Symbol = symbol_short!("VSTATE");
+pub(crate) const PROPOSAL_STATE_KEY: Symbol = symbol_short!("PROPSTA");
+pub(crate) const EMERGENCY_REVOCATION_TOPIC: Symbol = symbol_short!("EMGREVOK");
+pub(crate) const ID_NGN: AssetId = 3897123275;
+pub(crate) const ID_GHS: AssetId = 4026531840;
+pub(crate) const ID_CFA: AssetId = 4160749568;
+pub(crate) const ID_KES: AssetId = 2654435761;
+pub(crate) const ID_ZAR: AssetId = 3219226362;
+pub(crate) const ID_UGX: AssetId = 2863311530;
 const STAKE_REGISTRY_KEY: Symbol = symbol_short!("STAKES");
 const TOTAL_STAKED_KEY: Symbol = symbol_short!("TOTAL");
 const HEARTBEAT_KEY: Symbol = symbol_short!("HBEAT");
@@ -585,8 +687,8 @@ pub struct FeedStakeRecord {
 #[contracttype]
 pub enum StakingStorageKey {
     TierConfig,
-    AssetMetrics(Symbol),
-    FeedStake(Address, Symbol),
+        AssetMetrics(Symbol),
+        FeedStake(Address, u32),
 }
 
 // Storage key newtype wrappers are defined in `crate::storage`; the canonical
@@ -670,6 +772,150 @@ pub enum LiquidityPoolFeeKey {
     FeeTierProposal(AssetId),
 }
 
+/// `Option<Address>` newtype usable as a `#[contracttype]` field.
+///
+/// The testutils ScVal conversion generated by `contracttype` requires
+/// `ScVal: TryFrom<&Option<T>>`, whose blanket impl demands `T: Into<ScVal>`.
+/// `Address` only implements `TryFrom<...> for ScVal`, so plain `Option<Address>`
+/// fields fail to compile in test builds; this wrapper provides the conversions.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OptionalAddress(pub Option<Address>);
+
+impl From<Option<Address>> for OptionalAddress {
+    fn from(v: Option<Address>) -> Self {
+        Self(v)
+    }
+}
+
+impl TryFromVal<Env, Val> for OptionalAddress {
+    type Error = ConversionError;
+    fn try_from_val(env: &Env, val: &Val) -> Result<Self, Self::Error> {
+        Option::<Address>::try_from_val(env, val).map(Self)
+    }
+}
+
+impl TryFromVal<Env, OptionalAddress> for Val {
+    type Error = ConversionError;
+    fn try_from_val(env: &Env, v: &OptionalAddress) -> Result<Self, Self::Error> {
+        Val::try_from_val(env, &v.0)
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl TryFrom<&OptionalAddress> for soroban_sdk::xdr::ScVal {
+    type Error = ConversionError;
+    fn try_from(v: &OptionalAddress) -> Result<Self, ConversionError> {
+        match &v.0 {
+            Some(a) => ScVal::try_from(a),
+            None => Ok(ScVal::Void),
+        }
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl TryFrom<OptionalAddress> for soroban_sdk::xdr::ScVal {
+    type Error = ConversionError;
+    fn try_from(v: OptionalAddress) -> Result<Self, ConversionError> {
+        <Self as TryFrom<&OptionalAddress>>::try_from(&v)
+    }
+}
+
+#[cfg(any(test, feature = "testutils"))]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
+pub struct OptionalAddressProto;
+
+#[cfg(any(test, feature = "testutils"))]
+impl<'a> soroban_sdk::testutils::arbitrary::arbitrary::Arbitrary<'a> for OptionalAddressProto {
+    fn arbitrary(
+        _u: &mut soroban_sdk::testutils::arbitrary::arbitrary::Unstructured<'a>,
+    ) -> soroban_sdk::testutils::arbitrary::arbitrary::Result<Self> {
+        Ok(OptionalAddressProto)
+    }
+}
+
+#[cfg(any(test, feature = "testutils"))]
+impl soroban_sdk::testutils::arbitrary::SorobanArbitrary for OptionalAddress {
+    type Prototype = OptionalAddressProto;
+}
+
+#[cfg(any(test, feature = "testutils"))]
+impl TryFromVal<Env, OptionalAddressProto> for OptionalAddress {
+    type Error = ConversionError;
+    fn try_from_val(_env: &Env, _v: &OptionalAddressProto) -> Result<Self, Self::Error> {
+        Ok(OptionalAddress(None))
+    }
+}
+
+/// `Option<BytesN<32>>` newtype usable as a `#[contracttype]` field.
+/// See [`OptionalAddress`] for the rationale.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OptionalBytesN32(pub Option<BytesN<32>>);
+
+impl From<Option<BytesN<32>>> for OptionalBytesN32 {
+    fn from(v: Option<BytesN<32>>) -> Self {
+        Self(v)
+    }
+}
+
+impl TryFromVal<Env, Val> for OptionalBytesN32 {
+    type Error = ConversionError;
+    fn try_from_val(env: &Env, val: &Val) -> Result<Self, Self::Error> {
+        Option::<BytesN<32>>::try_from_val(env, val).map(Self)
+    }
+}
+
+impl TryFromVal<Env, OptionalBytesN32> for Val {
+    type Error = ConversionError;
+    fn try_from_val(env: &Env, v: &OptionalBytesN32) -> Result<Self, Self::Error> {
+        Val::try_from_val(env, &v.0)
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl TryFrom<&OptionalBytesN32> for soroban_sdk::xdr::ScVal {
+    type Error = ConversionError;
+    fn try_from(v: &OptionalBytesN32) -> Result<Self, ConversionError> {
+        match &v.0 {
+            Some(b) => ScVal::try_from(b),
+            None => Ok(ScVal::Void),
+        }
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl TryFrom<OptionalBytesN32> for soroban_sdk::xdr::ScVal {
+    type Error = ConversionError;
+    fn try_from(v: OptionalBytesN32) -> Result<Self, ConversionError> {
+        <Self as TryFrom<&OptionalBytesN32>>::try_from(&v)
+    }
+}
+
+#[cfg(any(test, feature = "testutils"))]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
+pub struct OptionalBytesN32Proto;
+
+#[cfg(any(test, feature = "testutils"))]
+impl<'a> soroban_sdk::testutils::arbitrary::arbitrary::Arbitrary<'a> for OptionalBytesN32Proto {
+    fn arbitrary(
+        _u: &mut soroban_sdk::testutils::arbitrary::arbitrary::Unstructured<'a>,
+    ) -> soroban_sdk::testutils::arbitrary::arbitrary::Result<Self> {
+        Ok(OptionalBytesN32Proto)
+    }
+}
+
+#[cfg(any(test, feature = "testutils"))]
+impl soroban_sdk::testutils::arbitrary::SorobanArbitrary for OptionalBytesN32 {
+    type Prototype = OptionalBytesN32Proto;
+}
+
+#[cfg(any(test, feature = "testutils"))]
+impl TryFromVal<Env, OptionalBytesN32Proto> for OptionalBytesN32 {
+    type Error = ConversionError;
+    fn try_from_val(_env: &Env, _v: &OptionalBytesN32Proto) -> Result<Self, Self::Error> {
+        Ok(OptionalBytesN32(None))
+    }
+}
+
 #[contract]
 pub struct TimeLockedUpgradeContract;
 
@@ -688,7 +934,7 @@ impl TimeLockedUpgradeContract {
     ///
     /// The persistent key is checked and written in this invocation, so a
     /// replay returns before any caller-supplied transfer side effect runs.
-    pub fn consume_priv_transfer_nullifier(
+    pub fn consume_private_xfer_nullifier(
         env: Env,
         caller: Address,
         nullifier: BytesN<32>,
@@ -992,12 +1238,13 @@ impl TimeLockedUpgradeContract {
         };
         env.storage().instance().set(&GOVERNANCE_UPGRADE_KEY, &proposal);
         Self::_store_proposal_state(&env, GOVERNANCE_UPGRADE_KEY, staged_at);
+        // Issue #903: track the payload staging timestamp so the 48-hour
+        // signature threshold expiry guard can invalidate stale payloads.
+        multisig_expiry::stage_payload(&env, &multisig_expiry::upgrade_topic(&env), &proposer, 0)?;
 
         let staged = StagedUpgrade {
-            new_wasm_hash: new_wasm_hash.clone(),
-            proposer: proposer.clone(),
-            staged_at,
-            execute_at: staged_at + UPGRADE_DELAY_SECONDS,
+            wasm_hash: new_wasm_hash.clone(),
+            staged_at: env.ledger().sequence(),
         };
         env.storage().instance().set(&PENDING_UPGRADE_KEY, &staged);
 
@@ -1085,6 +1332,13 @@ impl TimeLockedUpgradeContract {
             let elapsed = current.saturating_sub(pending.staged_at);
             MIN_LEDGER_DELAY.saturating_sub(elapsed)
         })
+    }
+
+    /// Issue #903: staged multi-sig payload status for the 48-hour
+    /// signature threshold expiry guard — `(payload_hash, age_seconds,
+    /// expired)` for the pending governance upgrade, if any.
+    pub fn get_multisig_payload_status(env: Env) -> Option<(BytesN<32>, u64, bool)> {
+        multisig_expiry::get_upgrade_payload_status(&env)
     }
 
     pub fn cancel_upgrade(env: Env, canceller: Address) -> Result<(), ContractError> {
@@ -1632,6 +1886,15 @@ impl TimeLockedUpgradeContract {
         Ok(profile)
     }
 
+    pub fn add_corridor_fees_legacy(env: Env, asset: Symbol, collected: u64, variable_fee: u64) -> Result<CorridorFeePool, ContractError> {
+        let key = CorridorFeeKey::Asset(asset.clone());
+        let mut pool: CorridorFeePool = env.storage().persistent().get(&key).unwrap_or(CorridorFeePool { asset: asset.clone(), collected: 0, variable_pool: 0 });
+        pool.collected = pool.collected.checked_add(collected).ok_or(ContractError::Overflow)?;
+        pool.variable_pool = pool.variable_pool.checked_add(variable_fee).ok_or(ContractError::Overflow)?;
+        env.storage().persistent().set(&key, &pool);
+        Ok(pool)
+    }
+
     // ── Dynamic Staking Tier Assignment (Issue #300) ─────────────────────────
 
     /// Configure the minimum stake required for each collateral tier.
@@ -1639,12 +1902,17 @@ impl TimeLockedUpgradeContract {
         env: Env,
         admin: Address,
         config: StakingTierConfig,
+        signers: Vec<Address>,
     ) -> Result<(), ContractError> {
         let data = Self::get_data(env.clone())?;
         if data.admin != admin {
             return Err(ContractError::NotAdmin);
         }
         admin.require_auth();
+        let collected_weight = calculate_collected_weight(&env, &signers, &data)?;
+        if collected_weight < get_multisig_config(&env).required_weight {
+            return Err(ContractError::ThresholdNotReached);
+        }
         validate_tier_config(&config)?;
         env.storage()
             .instance()
@@ -1700,7 +1968,7 @@ impl TimeLockedUpgradeContract {
     }
 
     fn _resolve_feed_metrics(env: &Env, asset: &Symbol) -> AssetFeedMetrics {
-        let pool = Self::get_corridor_fee_pool(env.clone(), asset.clone());
+        let pool = Self::get_corridor_fee_pool_legacy(env.clone(), asset.clone());
         let stored: AssetFeedMetrics = env
             .storage()
             .persistent()
@@ -1737,7 +2005,7 @@ impl TimeLockedUpgradeContract {
         admin::assert_not_revoked(&env, &node)?;
         node.require_auth();
 
-        let feed_key = StakingStorageKey::FeedStake(node.clone(), asset.clone());
+        let feed_key = StakingStorageKey::FeedStake(node.clone(), symbol_to_asset_id(&asset));
         if env.storage().persistent().has(&feed_key) {
             return Err(ContractError::FeedAlreadyRegistered);
         }
@@ -1785,7 +2053,7 @@ impl TimeLockedUpgradeContract {
     pub fn unstake_from_feed(env: Env, node: Address, asset: Symbol) -> Result<u64, ContractError> {
         node.require_auth();
 
-        let feed_key = StakingStorageKey::FeedStake(node.clone(), asset.clone());
+        let feed_key = StakingStorageKey::FeedStake(node.clone(), symbol_to_asset_id(&asset));
         let amount: u64 = env
             .storage()
             .persistent()
@@ -1824,8 +2092,12 @@ impl TimeLockedUpgradeContract {
     pub fn get_feed_stake(env: Env, node: Address, asset: Symbol) -> u64 {
         env.storage()
             .persistent()
-            .get(&StakingStorageKey::FeedStake(node, asset))
+            .get(&StakingStorageKey::FeedStake(node, symbol_to_asset_id(&asset)))
             .unwrap_or(0)
+    }
+
+    pub fn get_corridor_fee_pool_legacy(env: Env, asset: Symbol) -> CorridorFeePool {
+        env.storage().persistent().get(&CorridorFeeKey::Asset(asset.clone())).unwrap_or(CorridorFeePool { asset, collected: 0, variable_pool: 0 })
     }
 
     pub fn set_platform_capital(env: Env, capital: u64) {
@@ -1853,14 +2125,14 @@ impl TimeLockedUpgradeContract {
 
     // --- Admin Ownership Transfer (Issue #429) ---
 
-    pub fn propose_ownership_transfer(env: Env, current_admin: Address, nominee: Address) -> Result<(), ContractError> {
-        admin::propose_ownership_transfer(&env, current_admin, nominee)?;
+    pub fn propose_ownership_transfer(env: Env, current_admin: Address, nominee: Address, nonce: u64) -> Result<(), ContractError> {
+        admin::propose_ownership_transfer(&env, current_admin, nominee, nonce)?;
         Self::_extend_instance_ttl(&env);
         Ok(())
     }
 
-    pub fn claim_ownership(env: Env, claimer: Address) -> Result<(), ContractError> {
-        admin::claim_ownership(&env, claimer)?;
+    pub fn claim_ownership(env: Env, claimer: Address, nonce: u64) -> Result<(), ContractError> {
+        admin::claim_ownership(&env, claimer, nonce)?;
         Self::_extend_instance_ttl(&env);
         Ok(())
     }
@@ -1871,8 +2143,8 @@ impl TimeLockedUpgradeContract {
     }
 
     // #423: emergency pause controls
-    pub fn set_paused(env: Env, caller: Address, paused: bool) -> Result<(), ContractError> {
-        admin::set_paused(&env, caller, paused)
+    pub fn set_paused(env: Env, caller: Address, paused: bool, nonce: u64) -> Result<(), ContractError> {
+        admin::set_paused(&env, caller, paused, nonce)
     }
 
     pub fn is_paused(env: Env) -> bool {
@@ -2006,10 +2278,11 @@ impl TimeLockedUpgradeContract {
         proposer: Address,
         target: Address,
         replacement: Address,
+        nonce: u64,
     ) -> Result<(), ContractError> {
         // Guard: a revoked coordinator must not be able to open proposals.
         admin::assert_not_revoked(&env, &proposer)?;
-        admin::propose_emergency_revocation(&env, proposer, target, replacement)
+        admin::propose_emergency_revocation(&env, proposer, target, replacement, nonce)
     }
 
     /// Phase 2: any registered signer or the current admin casts a vote on
@@ -2057,10 +2330,10 @@ impl TimeLockedUpgradeContract {
             .unwrap_or_else(|| Map::new(&env));
         let topics: Vec<Symbol> = states.keys();
         for topic_ref in topics.iter() {
-            let topic = *topic_ref;
-            if let Some(state) = states.get(&topic) {
+            let topic = topic_ref;
+            if let Some(state) = states.get(topic.clone()) {
                 if state.status == ProposalStatus::Active
-                    && now.saturating_sub(state.proposed_at) >= PROPOSAL_EXPIRY_SECONDS
+                    && now.saturating_sub(state.proposed_at) >= PROPOSAL_EXPIRY_SECONDS as u64
                 {
                     if topic == REVOCATION_KEY {
                         close_ballot(&env, REVOCATION_KEY);
@@ -2479,7 +2752,7 @@ impl TimeLockedUpgradeContract {
         vaults::autocompound::get_peak_share_value(&env)
     }
 
-    pub fn vault_circuit_breaker_tripped(env: Env) -> bool {
+    pub fn vault_circuit_breaker_triggered(env: Env) -> bool {
         vaults::autocompound::is_circuit_breaker_triggered(&env)
     }
 
@@ -2489,16 +2762,17 @@ impl TimeLockedUpgradeContract {
 
     pub fn init_yield_farming(
         env: Env,
-        voter: Address,
-        sig_expires_at: u64,
+        admin: Address,
+        lp_token: Address,
+        reward_token: Address,
+        emission_per_ledger: i128,
     ) -> Result<(), ContractError> {
-        // Guard: a revoked coordinator must not be allowed to vote.
-        admin::assert_not_revoked(&env, &voter)?;
-        admin::vote_emergency_revocation(&env, voter, sig_expires_at)
+        vaults::lp_farming::initialize(&env, admin, lp_token, reward_token, emission_per_ledger)?;
+        Ok(())
     }
 
     /// Returns the active emergency revocation proposal, if one exists.
-    pub fn get_emerg_revocation_proposal(
+    pub fn pending_yield_rewards(
         env: Env,
         user: Address,
     ) -> Result<i128, ContractError> {
@@ -2722,7 +2996,6 @@ impl TimeLockedUpgradeContract {
     /// Cancel a still-open order and return its unfilled balance to the maker.
     pub fn cancel_limit_order(env: Env, maker: Address, order_id: u64) -> Result<i128, ContractError> {
         let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
-        maker.require_auth();
         orders::limit::cancel_order(&env, maker, order_id)
     }
 
@@ -2757,55 +3030,6 @@ impl TimeLockedUpgradeContract {
     ) -> Result<i128, ContractError> {
         let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
         orders::limit::withdraw_balance(&env, owner, asset, amount)
-    }
-
-    // ── Concentrated-liquidity positions (Issue #986) ────────────────────
-
-    /// Initialize a pool's tick index so it can accept concentrated-liquidity
-    /// positions. Must be called once per `asset` before `amm_open_position`.
-    pub fn amm_initialize_tick_pool(
-        env: Env,
-        asset: AssetId,
-        tick_spacing: i32,
-    ) -> Result<(), ContractError> {
-        amm::ticks::initialize_tick_index(&env, asset, tick_spacing)?;
-        Ok(())
-    }
-
-    /// Open a new concentrated-liquidity range position in `[tick_lower,
-    /// tick_upper)`, minting a fresh position-receipt id to `owner`.
-    pub fn amm_open_position(
-        env: Env,
-        owner: Address,
-        asset: AssetId,
-        tick_lower: i32,
-        tick_upper: i32,
-        liquidity: u64,
-    ) -> Result<amm::positions::Position, ContractError> {
-        let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
-        amm::positions::open_position(&env, owner, asset, tick_lower, tick_upper, liquidity)
-    }
-
-    /// Split an existing position's range at `tick_mid` into
-    /// `[tick_lower, tick_mid]` and `[tick_mid, tick_upper]` sub-ranges,
-    /// without withdrawing the underlying pool liquidity. Burns
-    /// `position_id` and mints two new position-receipt ids.
-    pub fn amm_split_position(
-        env: Env,
-        caller: Address,
-        position_id: u64,
-        tick_mid: i32,
-    ) -> Result<amm::positions::SplitPositionResult, ContractError> {
-        let _guard = security::reentrancy::ReentrancyGuard::new(&env)?;
-        amm::positions::split_position(&env, caller, position_id, tick_mid)
-    }
-
-    /// Load a concentrated-liquidity position by its receipt-token id.
-    pub fn amm_get_position(
-        env: Env,
-        position_id: u64,
-    ) -> Result<amm::positions::Position, ContractError> {
-        amm::positions::get_position(&env, position_id)
     }
 
     /// Tick-volume market matcher (Issue #915): sweep the book by price/time
@@ -3213,6 +3437,187 @@ impl TimeLockedUpgradeContract {
 
     /// Returns `true` if `addr` has been stamped as revoked by the
     /// multi-sig coordinator group.
+    pub fn calculate_utilization(env: Env, cash: i128, borrows: i128) -> u32 {
+        let _ = env;
+        vaults::interest::InterestRateController::calculate_utilization(cash, borrows)
+    }
+
+    pub fn calculate_interest_rate(
+        env: Env,
+        utilization: u32,
+        config: vaults::interest::InterestRateConfig,
+    ) -> u32 {
+        vaults::interest::InterestRateController::calculate_interest_rate(utilization, &config)
+    }
+
+    pub fn accrue_interest(
+        env: Env,
+        pool: vaults::interest::PoolState,
+        config: vaults::interest::InterestRateConfig,
+    ) -> Result<(vaults::interest::PoolState, i128), ContractError> {
+        let mut pool = pool;
+        let accrued =
+            vaults::interest::InterestRateController::accrue_interest(&env, &mut pool, &config);
+        Ok((pool, accrued))
+    }
+
+    pub fn get_price_variance_config(env: Env) -> PriceVarianceConfig {
+        config::get_price_variance_config(&env)
+    }
+
+    pub fn set_price_variance_config(
+        env: Env,
+        admin: Address,
+        cfg: PriceVarianceConfig,
+    ) -> Result<(), ContractError> {
+        config::set_price_variance_config(&env, &admin, cfg)
+    }
+
+    pub fn set_adaptive_fee_config(
+        env: Env,
+        caller: Address,
+        pool: AssetId,
+        cfg: config::AdaptiveFeeConfig,
+    ) -> Result<(), ContractError> {
+        config::set_adaptive_fee_config(&env, &caller, pool, cfg)
+    }
+
+    pub fn get_adaptive_fee(
+        env: Env,
+        pool: AssetId,
+    ) -> Result<amm::adaptive_fee::AdaptiveFeeSnapshot, ContractError> {
+        amm::adaptive_fee::get_adaptive_fee_snapshot(&env, pool)
+    }
+
+    pub fn get_corridor_weight(env: Env, asset: AssetId) -> fees::CorridorWeightProfile {
+        fees::get_corridor_weight(env, asset)
+    }
+
+    pub fn update_prices_bundle(
+        env: Env,
+        node: Address,
+        updates: Vec<validation::AssetPriceUpdate>,
+    ) -> Result<validation::BundleValidationOutcome, ContractError> {
+        validation::process_price_bundle(&env, &node, &updates)
+    }
+
+    pub fn propose_admin_change(
+        env: Env,
+        current_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), ContractError> {
+        admin::propose_admin_change(&env, current_admin, new_admin)
+    }
+
+    pub fn execute_admin_change_by_timelock(
+        env: Env,
+        executor: Address,
+    ) -> Result<(), ContractError> {
+        admin::execute_admin_change_by_timelock(&env, executor)
+    }
+
+    pub fn get_emerg_revocation_proposal(
+        env: Env,
+    ) -> Option<admin::EmergencyRevocationProposal> {
+        admin::get_emergency_revocation_proposal(&env)
+    }
+
+    pub fn fund_yield_rewards(env: Env, funder: Address, amount: i128) -> Result<(), ContractError> {
+        vaults::lp_farming::fund_rewards(&env, funder, amount)
+    }
+
+    pub fn stake_lp(env: Env, user: Address, amount: i128) -> Result<i128, ContractError> {
+        vaults::lp_farming::stake(&env, user, amount)
+    }
+
+    pub fn claim_rewards(env: Env, user: Address) -> Result<i128, ContractError> {
+        vaults::lp_farming::claim_rewards(&env, user)
+    }
+
+    pub fn pause_vault(env: Env, caller: Address) -> Result<(), ContractError> {
+        vaults::pause_guard::pause_vault(&env, &caller)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn enforce_auth_isolation(env: Env, expected: Address) -> Result<(), ContractError> {
+        security::auth_guard::AuthContextGuard::enforce_isolation(&env, &expected)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn execute_isolated_call(
+        env: Env,
+        target_contract: Address,
+        function_name: Symbol,
+        args: Vec<Val>,
+    ) -> Result<Val, ContractError> {
+        security::auth_guard::AuthContextGuard::execute_isolated_call(
+            &env,
+            &target_contract,
+            &function_name,
+            args,
+        )
+    }
+
+    pub fn deposit_commitment(
+        env: Env,
+        commitment: BytesN<32>,
+    ) -> Result<(u32, BytesN<32>), ContractError> {
+        zk::merkle::insert_deposit(&env, commitment)
+    }
+
+    pub fn get_anonymity_set_root(env: Env) -> Option<BytesN<32>> {
+        zk::merkle::get_current_root(&env)
+    }
+
+    pub fn is_merkle_root_valid(env: Env, root: BytesN<32>) -> bool {
+        zk::merkle::is_root_valid(&env, &root)
+    }
+
+    pub fn is_nullifier_spent(env: Env, nullifier: BytesN<32>) -> bool {
+        zk::nullifier::is_nullifier_used(&env, &nullifier)
+    }
+
+    pub fn verify_zk_withdrawal(
+        env: Env,
+        root: BytesN<32>,
+        nullifier: BytesN<32>,
+        leaf: BytesN<32>,
+        path: Vec<BytesN<32>>,
+        leaf_index: u32,
+    ) -> Result<bool, ContractError> {
+        Ok(
+            zk::merkle::verify_withdrawal_and_spend(&env, &root, &nullifier, &leaf, &path, leaf_index)
+                .is_ok(),
+        )
+    }
+
+    pub fn optimize_address(env: Env, address: Address) -> BytesN<32> {
+        let _ = &env;
+        storage::KeyOptimizer::address_to_bytes32(&address)
+    }
+
+    pub fn optimize_string(env: Env, s: soroban_sdk::String) -> BytesN<32> {
+        storage::KeyOptimizer::string_to_bytes32(&env, &s)
+    }
+
+    pub fn set_flash_loan_fee_tiers(
+        env: Env,
+        admin: Address,
+        tiers: Vec<flash_loan_guard::FlashLoanFeeTier>,
+    ) -> Result<(), ContractError> {
+        flash_loan_guard::set_flash_loan_fee_tiers(&env, &admin, &tiers)?;
+        Self::_extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    pub fn quote_flash_loan_fee(
+        env: Env,
+        base_fee: i128,
+        volume: i128,
+    ) -> flash_loan_guard::FlashLoanFeeQuote {
+        flash_loan_guard::quote_flash_loan_fee(&env, base_fee, volume)
+    }
+
     pub fn is_revoked(env: Env, addr: Address) -> bool {
         admin::is_revoked(&env, &addr)
     }
@@ -3337,7 +3742,7 @@ impl TimeLockedUpgradeContract {
             .instance()
             .get(&PROPOSAL_STATE_KEY)
             .unwrap_or_else(|| Map::new(env));
-        if let Some(mut state) = states.get(&topic) {
+        if let Some(mut state) = states.get(topic.clone()) {
             state.status = ProposalStatus::Expired;
             states.set(topic, state);
             env.storage().instance().set(&PROPOSAL_STATE_KEY, &states);
@@ -3409,22 +3814,6 @@ impl TimeLockedUpgradeContract {
         if n == 0 { 1 } else { n / 2 + 1 }
     }
 
-    fn _resolve_feed_metrics(env: &Env, asset: AssetId) -> AssetFeedMetrics {
-        let stored: AssetFeedMetrics = env
-            .storage()
-            .persistent()
-            .get(&StakingStorageKey::AssetMetrics(asset))
-            .unwrap_or(AssetFeedMetrics {
-                volume_score: 10,
-                volatility_bps: 100,
-            });
-        let corridor = fees::get_corridor_fee_pool(env.clone(), asset);
-        AssetFeedMetrics {
-            volume_score: effective_volume_score(stored.volume_score, corridor.collected),
-            volatility_bps: stored.volatility_bps,
-        }
-    }
-
     // ── Issue #592: Batch Purge of Abandoned Zero-Balance Keys ───────────────
 
     /// Batch-evict abandoned zero-balance persistent storage keys to reclaim
@@ -3445,6 +3834,26 @@ impl TimeLockedUpgradeContract {
             signer.require_auth();
         }
         admin::cleanup::cleanup_zero_balances(&env, &signers, &targets)
+    }
+
+    // ── Issue #919: Automated Storage Space Reclamation Helper ─────────────
+
+    /// Purge persistent storage entries for closed (fully executed or cancelled) limit orders,
+    /// reclaiming storage footprint and returning reclaimed storage count directly to caller.
+    pub fn reclaim_closed_orders(
+        env: Env,
+        caller: Address,
+        order_ids: Vec<u64>,
+    ) -> Result<u32, ContractError> {
+        admin::cleanup::reclaim_closed_orders_storage(&env, &caller, &order_ids)
+    }
+
+    /// Purge expired proposals from temporary and persistent storage to reclaim storage footprint.
+    pub fn reclaim_expired_proposals(
+        env: Env,
+        caller: Address,
+    ) -> Result<u32, ContractError> {
+        admin::cleanup::reclaim_expired_proposals_storage(&env, &caller)
     }
 
     // ── Issue #782: Key Pruning Utility for Obsolete Contract Data ──────────
@@ -3614,11 +4023,11 @@ impl TimeLockedUpgradeContract {
             .get(&proposal_key)
             .ok_or(ContractError::NoActiveProposal)?;
         for existing_voter in proposal.votes.iter() {
-            if existing_voter == &voter {
+            if existing_voter == voter {
                 return Err(ContractError::AlreadyVoted);
             }
         }
-        proposal.votes.push(voter);
+        proposal.votes.push_back(voter);
         let threshold = Self::_revocation_threshold(&env);
         if proposal.votes.len() >= threshold {
             let mut config: PoolFeeConfig = env
@@ -3721,7 +4130,6 @@ impl TimeLockedUpgradeContract {
             last_updated: 0,
         })
     }
-}
 
     // ── Groth16 ZK Proof Verification (Issue #725) ────────────────────────
 
@@ -3732,77 +4140,6 @@ impl TimeLockedUpgradeContract {
         schema: zk::proving_key::ProvingKeySchema,
     ) -> Result<(), ContractError> {
         zk::proving_key::validate_proving_key(&key, &schema)
-    }
-
-    /// Register a Groth16 verification key for a circuit on-chain.
-    pub fn register_zk_verification_key(
-        env: Env,
-        caller: Address,
-        vkey: zk::verifier::VerificationKey,
-    ) -> Result<(), ContractError> {
-        let data = TimeLockedUpgradeContract::_load_data(&env)?;
-        if data.admin != caller {
-            return Err(ContractError::NotAdmin);
-        }
-        caller.require_auth();
-        zk::verifier::register_verification_key(&env, &vkey)
-    }
-
-    /// Retrieve a registered Groth16 verification key by circuit ID.
-    pub fn get_zk_verification_key(
-        env: Env,
-        circuit_id: BytesN<32>,
-    ) -> Option<zk::verifier::VerificationKey> {
-        zk::verifier::get_verification_key(&env, &circuit_id)
-    }
-
-    /// Remove a Groth16 verification key from storage.
-    pub fn remove_zk_verification_key(
-        env: Env,
-        caller: Address,
-        circuit_id: BytesN<32>,
-    ) -> Result<(), ContractError> {
-        let data = TimeLockedUpgradeContract::_load_data(&env)?;
-        if data.admin != caller {
-            return Err(ContractError::NotAdmin);
-        }
-        caller.require_auth();
-        zk::verifier::remove_verification_key(&env, &circuit_id)
-    }
-
-    /// Verify a Groth16 proof against the registered verification key.
-    pub fn verify_zk_proof(
-        env: Env,
-        proof: zk::verifier::Groth16Proof,
-        vkey: zk::verifier::VerificationKey,
-        public_inputs: Vec<BytesN<32>>,
-    ) -> Result<zk::verifier::VerificationResult, ContractError> {
-        zk::verifier::verify_proof(&env, &proof, &vkey, &public_inputs)
-    }
-
-    /// Verify a Groth16 proof with an off-chain pairing commitment.
-    pub fn verify_zk_proof_with_commitment(
-        env: Env,
-        proof: zk::verifier::Groth16Proof,
-        vkey: zk::verifier::VerificationKey,
-        public_inputs: Vec<BytesN<32>>,
-        pairing_commitment: zk::verifier::PairingCommitment,
-    ) -> Result<zk::verifier::VerificationResult, ContractError> {
-        zk::verifier::verify_proof_with_commitment(
-            &env, &proof, &vkey, &public_inputs, &pairing_commitment,
-        )
-    }
-
-    /// Batch-verify multiple Groth16 proofs in a single transaction.
-    pub fn batch_verify_zk_proofs(
-        env: Env,
-        proofs: Vec<(
-            zk::verifier::Groth16Proof,
-            zk::verifier::VerificationKey,
-            Vec<BytesN<32>>,
-        )>,
-    ) -> Result<Vec<zk::verifier::VerificationResult>, ContractError> {
-        zk::verifier::batch_verify_proofs(&env, &proofs)
     }
 
     // ── Timelocked ZK Verification Key Rotation (Issue #931) ──────────────
@@ -3836,7 +4173,7 @@ impl TimeLockedUpgradeContract {
     /// Execute a queued ZK verification-key rotation once its governance
     /// timelock has elapsed. Re-validates structural integrity, commits the
     /// key, and emits `ZKVerificationKeysUpdated` with the version identifier.
-    pub fn execute_zk_verification_key_update(
+    pub fn execute_zk_key_update(
         env: Env,
         caller: Address,
         circuit_id: BytesN<32>,
@@ -3850,7 +4187,7 @@ impl TimeLockedUpgradeContract {
     }
 
     /// Cancel a pending (queued but unexecuted) ZK verification-key rotation.
-    pub fn cancel_zk_verification_key_update(
+    pub fn cancel_zk_key_update(
         env: Env,
         caller: Address,
         circuit_id: BytesN<32>,
@@ -3864,7 +4201,7 @@ impl TimeLockedUpgradeContract {
     }
 
     /// Read the pending ZK verification-key rotation for a circuit, if any.
-    pub fn get_pending_zk_verification_key_update(
+    pub fn get_pending_zk_key_update(
         env: Env,
         circuit_id: BytesN<32>,
     ) -> Option<zk::key_update::ZKVerificationKeyUpdate> {
@@ -3875,6 +4212,7 @@ impl TimeLockedUpgradeContract {
     pub fn get_zk_verification_key_version(env: Env, circuit_id: BytesN<32>) -> u32 {
         zk::key_update::get_verification_key_version(&env, &circuit_id)
     }
+}
 
 #[cfg(test)]
 mod query_guardrail_tests {
@@ -3899,9 +4237,9 @@ mod query_guardrail_tests {
             sequence_number: env.ledger().sequence(),
             network_id: Default::default(),
             base_reserve: 10,
-            min_temp_entry_ttl: 0,
-            min_persistent_entry_ttl: 0,
-            max_entry_ttl: u32::MAX,
+            min_temp_entry_ttl: 100,
+            min_persistent_entry_ttl: 100,
+            max_entry_ttl: 6_312_000,
         });
     }
 
@@ -4009,3 +4347,32 @@ mod query_guardrail_tests {
 
 #[cfg(test)]
 mod test;
+
+
+
+
+
+#[cfg(test)]
+mod zz_frame_probe {
+    use soroban_sdk::{testutils::Address as _, Address, Bytes, Env};
+    #[test]
+    fn ops_in_test_frame() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+        let b = Bytes::from_slice(&env, b"xyz");
+        env.as_contract(&cid, || {
+            let _h = env.crypto().sha256(&b);
+        });
+        std::println!("F1: crypto in frame ok");
+        let a = Address::generate(&env);
+        env.as_contract(&cid, || {
+            a.require_auth();
+        });
+        std::println!("F2: require_auth in frame ok");
+        env.as_contract(&cid, || {
+            env.events().publish((soroban_sdk::symbol_short!("t"),), 42_i32);
+        });
+        std::println!("F3: event in frame ok");
+    }
+}

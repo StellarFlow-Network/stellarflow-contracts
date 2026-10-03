@@ -4,6 +4,7 @@ use soroban_sdk::token::TokenClient;
 use soroban_sdk::{contract, contracterror, contractimpl, symbol_short, Address, Env};
 
 pub mod adaptive_fee_engine;
+pub mod tick_bitmap;
 pub mod virtual_reserves;
 
 use adaptive_fee_engine::{
@@ -37,14 +38,21 @@ fn map_virtual(err: VirtualReserveError) -> AmmError {
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
-pub enum AmmError {
+pub enum ContractError {
+    /// Recovery steps: Inspect the state for AlreadyInitialized and retry with valid inputs or proper conditions.
     AlreadyInitialized = 1,
+    /// Recovery steps: Inspect the state for NotInitialized and retry with valid inputs or proper conditions.
     NotInitialized = 2,
+    /// Recovery steps: Inspect the state for InvalidDepositRatio and retry with valid inputs or proper conditions.
     InvalidDepositRatio = 3,
+    /// Recovery steps: Inspect the state for SlippageExceeded and retry with valid inputs or proper conditions.
     SlippageExceeded = 4,
+    /// Recovery steps: Inspect the state for ZeroDeposit and retry with valid inputs or proper conditions.
     ZeroDeposit = 5,
+    /// Recovery steps: Inspect the state for PoolEmpty and retry with valid inputs or proper conditions.
     PoolEmpty = 6,
     /// Constant-product invariant violated: k_new < k_old after a swap.
+    /// Recovery steps: Inspect the state for InvariantViolation and retry with valid inputs or proper conditions.
     InvariantViolation = 7,
     /// The operation would have pushed a real reserve onto or below its core
     /// virtual reserve threshold (issue #906).
@@ -53,6 +61,16 @@ pub enum AmmError {
     NonPositiveAmount = 9,
     /// A reserve, share or product exceeded the representable range.
     ArithmeticOverflow = 10,
+    /// Tick spacing must be in `1..=MAX_TICK_SPACING`.
+    InvalidTickSpacing = 11,
+    /// Tick lies outside `[MIN_TICK, MAX_TICK]`.
+    TickOutOfBounds = 12,
+    /// Tick is not a multiple of the tick spacing.
+    TickNotAligned = 13,
+    /// Price lies outside `[P(MIN_TICK), P(MAX_TICK)]`.
+    PriceOutOfBounds = 14,
+    /// Price does not satisfy `P(tick) <= price < P(tick + 1)`, `P(i) = 1.0001^i`.
+    TickPriceMismatch = 15,
 }
 
 #[contract]
@@ -113,7 +131,7 @@ impl AmmContract {
     ) -> Result<(), AmmError> {
         let key_init = symbol_short!("init");
         if env.storage().instance().has(&key_init) {
-            return Err(AmmError::AlreadyInitialized);
+            return Err(ContractError::AlreadyInitialized);
         }
         virtual_reserves::validate_virtual_reserves(0, 0, virtual_a, virtual_b)
             .map_err(map_virtual)?;
@@ -232,28 +250,28 @@ impl AmmContract {
         amount_a_desired: i128,
         amount_b_desired: i128,
         min_lp_mint: i128,
-    ) -> Result<i128, AmmError> {
+    ) -> Result<i128, ContractError> {
         provider.require_auth();
 
         if amount_a_desired <= 0 || amount_b_desired <= 0 {
-            return Err(AmmError::ZeroDeposit);
+            return Err(ContractError::ZeroDeposit);
         }
 
         let token_a_addr: Address = env
             .storage()
             .instance()
             .get(&symbol_short!("token_a"))
-            .ok_or(AmmError::NotInitialized)?;
+            .ok_or(ContractError::NotInitialized)?;
         let token_b_addr: Address = env
             .storage()
             .instance()
             .get(&symbol_short!("token_b"))
-            .ok_or(AmmError::NotInitialized)?;
+            .ok_or(ContractError::NotInitialized)?;
         let lp_token_addr: Address = env
             .storage()
             .instance()
             .get(&symbol_short!("lp_token"))
-            .ok_or(AmmError::NotInitialized)?;
+            .ok_or(ContractError::NotInitialized)?;
 
         let mut reserve_a: i128 = env
             .storage()
@@ -279,7 +297,7 @@ impl AmmContract {
                 initial_lp_shares(amount_a_desired, amount_b_desired, virtual_a, virtual_b)
                     .map_err(map_virtual)?;
             if initial_shares < min_lp_mint {
-                return Err(AmmError::SlippageExceeded);
+                return Err(ContractError::SlippageExceeded);
             }
             (amount_a_desired, amount_b_desired, initial_shares)
         } else {
@@ -289,7 +307,7 @@ impl AmmContract {
                 .map_err(map_virtual)?;
             let required_b = (amount_a_desired * effective.y_eff) / effective.x_eff;
             if amount_b_desired < required_b {
-                return Err(AmmError::InvalidDepositRatio);
+                return Err(ContractError::InvalidDepositRatio);
             }
             let optimal_a = (amount_b_desired * effective.x_eff) / effective.y_eff;
             let (opt_a, opt_b) = if optimal_a <= amount_a_desired {
@@ -304,7 +322,7 @@ impl AmmContract {
             let shares_b = (opt_b * total_shares) / reserve_b;
             let shares = shares_a.min(shares_b);
             if shares < min_lp_mint {
-                return Err(AmmError::SlippageExceeded);
+                return Err(ContractError::SlippageExceeded);
             }
             (opt_a, opt_b, shares)
         };
@@ -354,23 +372,23 @@ impl AmmContract {
         trader: Address,
         amount_in: i128,
         min_amount_out: i128,
-    ) -> Result<i128, AmmError> {
+    ) -> Result<i128, ContractError> {
         trader.require_auth();
 
         if amount_in <= 0 {
-            return Err(AmmError::ZeroDeposit);
+            return Err(ContractError::ZeroDeposit);
         }
 
         let token_a_addr: Address = env
             .storage()
             .instance()
             .get(&symbol_short!("token_a"))
-            .ok_or(AmmError::NotInitialized)?;
+            .ok_or(ContractError::NotInitialized)?;
         let token_b_addr: Address = env
             .storage()
             .instance()
             .get(&symbol_short!("token_b"))
-            .ok_or(AmmError::NotInitialized)?;
+            .ok_or(ContractError::NotInitialized)?;
 
         let reserve_a: i128 = env
             .storage()
@@ -384,7 +402,7 @@ impl AmmContract {
             .unwrap_or(0);
 
         if reserve_a <= 0 || reserve_b <= 0 {
-            return Err(AmmError::PoolEmpty);
+            return Err(ContractError::PoolEmpty);
         }
 
         let (virtual_a, virtual_b) = load_virtual_reserves(&env);
@@ -444,7 +462,7 @@ impl AmmContract {
             before.swap_a_to_b(effective_amount_in).map_err(map_virtual)?;
 
         if amount_out <= 0 {
-            return Err(AmmError::SlippageExceeded);
+            return Err(ContractError::SlippageExceeded);
         }
         assert_min_amount_out(amount_out, min_amount_out).map_err(map_virtual)?;
         assert_k_eff_not_decreased(&k_before, &after.k_eff()).map_err(map_virtual)?;
@@ -601,12 +619,29 @@ impl AmmContract {
             .get(&symbol_short!("tot_sh"))
             .unwrap_or(0)
     }
+
+    /// Q64.64 price of `tick`: `1.0001^tick`.
+    pub fn tick_price(_env: Env, tick: i32) -> Result<u128, AmmError> {
+        tick_bitmap::tick_to_price_q64(tick)
+    }
+
+    /// Next initialized tick in the swap direction, scanning at most
+    /// `max_words` bitmap words. See [`tick_bitmap::next_initialized_tick`].
+    pub fn next_initialized_tick(
+        env: Env,
+        tick: i32,
+        tick_spacing: i32,
+        lte: bool,
+        max_words: u32,
+    ) -> Result<(i32, bool), AmmError> {
+        tick_bitmap::next_initialized_tick(&env, tick, tick_spacing, lte, max_words)
+    }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::{Address as _, Ledger as _};
     use soroban_sdk::{Address, Env};
 
     /// Verify that the constant-product swap function rejects when k_new < k_old.
@@ -688,6 +723,28 @@ mod test {
         let trader = Address::generate(&env);
         let result = client.try_swap(&trader, &0, &0);
         assert!(result.is_err(), "zero amount_in should be rejected");
+    }
+
+    #[test]
+    fn test_tick_entrypoints() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, AmmContract);
+        let client = AmmContractClient::new(&env, &contract_id);
+
+        assert_eq!(client.tick_price(&0), tick_bitmap::Q64);
+        assert_eq!(
+            client.try_tick_price(&(tick_bitmap::MAX_TICK + 1)),
+            Err(Ok(AmmError::TickOutOfBounds))
+        );
+
+        env.as_contract(&contract_id, || {
+            tick_bitmap::flip_tick(&env, 600, 60).unwrap();
+        });
+        assert_eq!(client.next_initialized_tick(&0, &60, &false, &10), (600, true));
+        assert_eq!(
+            client.try_next_initialized_tick(&0, &0, &false, &10),
+            Err(Ok(AmmError::InvalidTickSpacing))
+        );
     }
 
     /// `initialize` installs the default 1,000-unit virtual core, so a brand

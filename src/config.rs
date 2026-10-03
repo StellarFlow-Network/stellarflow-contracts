@@ -219,6 +219,27 @@ pub fn validate_admin_key_set(keys: &AdminKeySet) -> Result<(), ContractError> {
     Ok(())
 }
 
+/// Return true when the address list contains at least one duplicate entry.
+///
+/// Uses an O(n²) scan so no environment handle (and therefore no `Map`)
+/// is required.
+fn has_duplicate_addresses(signers: &Vec<Address>) -> bool {
+    let len = signers.len();
+    for i in 0..len {
+        let Some(a) = signers.get(i) else {
+            continue;
+        };
+        for j in (i + 1)..len {
+            if let Some(b) = signers.get(j) {
+                if a == b {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Read the current governing admin key set.
 pub fn get_admin_key_set(env: &Env) -> Result<AdminKeySet, ContractError> {
     let stored: Option<AdminKeySet> = env.storage().instance().get(&ADMIN_KEY_SET_KEY);

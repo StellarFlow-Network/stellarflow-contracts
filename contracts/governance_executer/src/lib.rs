@@ -41,7 +41,7 @@ impl GovernanceExecuterContract {
     /// Initialize the contract with an administrator
     pub fn initialize(env: Env, admin: Address) {
         if env.storage().instance().has(&DataKey::Admin) {
-            panic!("already initialized");
+            return Err(ContractError::AlreadyInitialized);
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
@@ -152,12 +152,12 @@ impl GovernanceExecuterContract {
             .expect("proposal not found");
 
         if proposal.executed {
-            panic!("proposal already executed");
+            return Err(ContractError::ProposalAlreadyExecuted);
         }
 
         let current_time = env.ledger().timestamp();
         if current_time < proposal.timelock_until {
-            panic!("timelock period has not expired");
+            return Err(ContractError::TimelockPeriodHasNotExpired);
         }
 
         proposal.executed = true;

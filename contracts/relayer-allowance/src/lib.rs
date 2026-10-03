@@ -5,16 +5,26 @@ use soroban_sdk::{contract, contractimpl, contracttype, contracterror, token, Ad
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
-pub enum AllowanceError {
+pub enum ContractError {
+    /// Recovery steps: Inspect the state for AlreadyInitialized and retry with valid inputs or proper conditions.
     AlreadyInitialized = 1,
+    /// Recovery steps: Inspect the state for NotInitialized and retry with valid inputs or proper conditions.
     NotInitialized = 2,
+    /// Recovery steps: Inspect the state for NotAdmin and retry with valid inputs or proper conditions.
     NotAdmin = 3,
+    /// Recovery steps: Inspect the state for Unauthorized and retry with valid inputs or proper conditions.
     Unauthorized = 4,
+    /// Recovery steps: Inspect the state for AllowanceNotFound and retry with valid inputs or proper conditions.
     AllowanceNotFound = 5,
+    /// Recovery steps: Inspect the state for AllowanceExpired and retry with valid inputs or proper conditions.
     AllowanceExpired = 6,
+    /// Recovery steps: Inspect the state for AllowanceDepleted and retry with valid inputs or proper conditions.
     AllowanceDepleted = 7,
+    /// Recovery steps: Inspect the state for InvalidAmount and retry with valid inputs or proper conditions.
     InvalidAmount = 8,
+    /// Recovery steps: Inspect the state for InvalidExpiry and retry with valid inputs or proper conditions.
     InvalidExpiry = 9,
+    /// Recovery steps: Inspect the state for AllowanceAlreadyExists and retry with valid inputs or proper conditions.
     AllowanceAlreadyExists = 10,
 }
 
@@ -46,9 +56,9 @@ pub struct RelayerAllowanceContract;
 #[contractimpl]
 impl RelayerAllowanceContract {
     /// Initialize the allowance contract with admin and token address.
-    pub fn initialize(env: Env, admin: Address, token: Address) -> Result<(), AllowanceError> {
+    pub fn initialize(env: Env, admin: Address, token: Address) -> Result<(), ContractError> {
         if env.storage().instance().has(&DataKey::Admin) {
-            return Err(AllowanceError::AlreadyInitialized);
+            return Err(ContractError::AlreadyInitialized);
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
@@ -69,20 +79,20 @@ impl RelayerAllowanceContract {
         relayer: Address,
         max_amount: i128,
         expiry_ledger: u32,
-    ) -> Result<(), AllowanceError> {
+    ) -> Result<(), ContractError> {
         owner.require_auth();
 
         if max_amount <= 0 {
-            return Err(AllowanceError::InvalidAmount);
+            return Err(ContractError::InvalidAmount);
         }
         let current_ledger = env.ledger().sequence();
         if expiry_ledger <= current_ledger {
-            return Err(AllowanceError::InvalidExpiry);
+            return Err(ContractError::InvalidExpiry);
         }
 
         let key = AllowanceKey(owner.clone(), relayer.clone());
         if env.storage().persistent().has(&key) {
-            return Err(AllowanceError::AllowanceAlreadyExists);
+            return Err(ContractError::AllowanceAlreadyExists);
         }
 
         let allowance = RelayerAllowance {
@@ -122,11 +132,11 @@ impl RelayerAllowanceContract {
         relayer: Address,
         amount: i128,
         recipient: Address,
-    ) -> Result<(), AllowanceError> {
+    ) -> Result<(), ContractError> {
         relayer.require_auth();
 
         if amount <= 0 {
-            return Err(AllowanceError::InvalidAmount);
+            return Err(ContractError::InvalidAmount);
         }
 
         let key = AllowanceKey(owner.clone(), relayer.clone());
@@ -134,26 +144,26 @@ impl RelayerAllowanceContract {
             .storage()
             .persistent()
             .get(&key)
-            .ok_or(AllowanceError::AllowanceNotFound)?;
+            .ok_or(ContractError::AllowanceNotFound)?;
 
         // Check active status
         if !allowance.active {
-            return Err(AllowanceError::AllowanceDepleted);
+            return Err(ContractError::AllowanceDepleted);
         }
 
         // Check expiry
         let current_ledger = env.ledger().sequence();
         if current_ledger > allowance.expiry_ledger {
-            return Err(AllowanceError::AllowanceExpired);
+            return Err(ContractError::AllowanceExpired);
         }
 
         // Check spending cap
         let new_spent = allowance
             .spent_amount
             .checked_add(amount)
-            .ok_or(AllowanceError::Overflow)?;
+            .ok_or(ContractError::Overflow)?;
         if new_spent > allowance.max_amount {
-            return Err(AllowanceError::AllowanceDepleted);
+            return Err(ContractError::AllowanceDepleted);
         }
 
         // Update spent amount
@@ -161,7 +171,7 @@ impl RelayerAllowanceContract {
         env.storage().persistent().set(&key, &allowance);
 
         // Transfer tokens from owner to recipient
-        let token_addr: Address = env.storage().instance().get(&DataKey::Token).ok_or(AllowanceError::NotInitialized)?;
+        let token_addr: Address = env.storage().instance().get(&DataKey::Token).ok_or(ContractError::NotInitialized)?;
         let token_client = token::Client::new(&env, &token_addr);
         token_client.transfer(&owner, &recipient, &amount);
 
@@ -185,18 +195,18 @@ impl RelayerAllowanceContract {
         owner: Address,
         relayer: Address,
         caller: Address,
-    ) -> Result<(), AllowanceError> {
+    ) -> Result<(), ContractError> {
         caller.require_auth();
 
         let stored_admin: Address = env
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(AllowanceError::NotInitialized)?;
+            .ok_or(ContractError::NotInitialized)?;
 
         // Only owner or admin can revoke
         if caller != owner && caller != stored_admin {
-            return Err(AllowanceError::Unauthorized);
+            return Err(ContractError::Unauthorized);
         }
 
         let key = AllowanceKey(owner.clone(), relayer.clone());
@@ -204,7 +214,7 @@ impl RelayerAllowanceContract {
             .storage()
             .persistent()
             .get(&key)
-            .ok_or(AllowanceError::AllowanceNotFound)?;
+            .ok_or(ContractError::AllowanceNotFound)?;
 
         allowance.active = false;
         env.storage().persistent().set(&key, &allowance);
@@ -383,7 +393,7 @@ mod tests {
 
         client.initialize(&admin, &token);
         let result = client.try_grant_allowance(&owner, &relayer, &0, &500);
-        assert_eq!(result, Err(Ok(AllowanceError::InvalidAmount)));
+        assert_eq!(result, Err(Ok(ContractError::InvalidAmount)));
     }
 
     #[test]
@@ -396,6 +406,6 @@ mod tests {
 
         client.initialize(&admin, &token);
         let result = client.try_grant_allowance(&owner, &relayer, &1000_0000000, &0);
-        assert_eq!(result, Err(Ok(AllowanceError::InvalidExpiry)));
+        assert_eq!(result, Err(Ok(ContractError::InvalidExpiry)));
     }
 }

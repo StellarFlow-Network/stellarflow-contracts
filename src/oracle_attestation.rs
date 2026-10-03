@@ -26,6 +26,8 @@ pub enum OracleRegistryKey {
     Oracles(AssetId),
     /// Counter for oracle registry version.
     Version,
+    /// Ed25519 public key for an oracle address.
+    PubKey(Address),
 }
 
 /// An oracle's attestation of a fiat settlement.
@@ -59,7 +61,7 @@ pub struct AttestationResult {
     /// Number of invalid/conflicting attestations.
     pub invalid_count: u32,
     /// The agreed-upon transaction ID (if consensus).
-    pub agreed_tx_id: Option<BytesN<32>>,
+    pub agreed_tx_id: crate::OptionalBytesN32,
     /// The agreed-upon amount (if consensus).
     pub agreed_amount: Option<u64>,
 }
@@ -92,7 +94,7 @@ pub fn register_oracle(
         return Err(ContractError::CapacityExceeded);
     }
 
-    oracles.push_back(oracle);
+    oracles.push_back(oracle.clone());
     env.storage().persistent().set(&key, &oracles);
 
     // Increment registry version
@@ -125,21 +127,34 @@ fn verify_attestation_signature(
 ) -> Result<(), ContractError> {
     // Reconstruct the signed payload: Tx_id || AmountErr (8 bytes LE)
     let mut payload = Bytes::new(env);
-    payload.append(tx_id);
+    payload.append(&Bytes::from_slice(env, &tx_id.to_array()));
     let amount_bytes = amount.to_le_bytes();
     payload.append(&Bytes::from_slice(env, &amount_bytes));
 
-    // Verify Ed25519 signature using the oracle's public key
-    let verified = env.crypto().ed25519_verify(
-        oracle,
-        &payload,
-        signature,
-    );
+    // Look up the oracle's registered ed25519 public key.
+    let pubkey: BytesN<32> = env
+        .storage()
+        .persistent()
+        .get(&OracleRegistryKey::PubKey(oracle.clone()))
+        .ok_or(ContractError::OracleNotAuthorized)?;
 
-    if !verified {
-        return Err(ContractError::OracleInvalidSignature);
-    }
+    // The host aborts the transaction if the signature does not verify.
+    env.crypto().ed25519_verify(&pubkey, &payload, signature);
 
+    Ok(())
+}
+
+/// Register the ed25519 public key used to verify an oracle's attestations.
+/// The oracle authorizes registration of its own key.
+pub fn register_oracle_pubkey(
+    env: &Env,
+    oracle: Address,
+    pubkey: BytesN<32>,
+) -> Result<(), ContractError> {
+    oracle.require_auth();
+    env.storage()
+        .persistent()
+        .set(&OracleRegistryKey::PubKey(oracle.clone()), &pubkey);
     Ok(())
 }
 
@@ -250,8 +265,10 @@ pub fn check_consensus(env: &Env, escrow_id: u64, asset: AssetId) -> Result<Atte
                     valid_attestations.push_back(attestation.clone());
                     
                     // Count votes for tx_id and amount
-                    *tx_id_counts.entry(attestation.tx_id.clone()).or_insert(0) += 1;
-                    *amount_counts.entry(attestation.amount).or_insert(0) += 1;
+                    let tx_count = tx_id_counts.get(attestation.tx_id.clone()).unwrap_or(0);
+                    tx_id_counts.set(attestation.tx_id.clone(), tx_count + 1);
+                    let amt_count = amount_counts.get(attestation.amount).unwrap_or(0);
+                    amount_counts.set(attestation.amount, amt_count + 1);
                 }
             }
         }
@@ -265,7 +282,7 @@ pub fn check_consensus(env: &Env, escrow_id: u64, asset: AssetId) -> Result<Atte
             consensus_reached: false,
             valid_count,
             invalid_count: oracles.len() as u32 - valid_count,
-            agreed_tx_id: None,
+            agreed_tx_id: crate::OptionalBytesN32(None),
             agreed_amount: None,
         });
     }
@@ -298,7 +315,7 @@ pub fn check_consensus(env: &Env, escrow_id: u64, asset: AssetId) -> Result<Atte
             consensus_reached: false,
             valid_count,
             invalid_count: oracles.len() as u32 - valid_count,
-            agreed_tx_id,
+            agreed_tx_id: agreed_tx_id.clone().into(),
             agreed_amount,
         });
     }
@@ -307,7 +324,7 @@ pub fn check_consensus(env: &Env, escrow_id: u64, asset: AssetId) -> Result<Atte
         consensus_reached: true,
         valid_count,
         invalid_count: oracles.len() as u32 - valid_count,
-        agreed_tx_id,
+        agreed_tx_id: agreed_tx_id.clone().into(),
         agreed_amount,
     })
 }
@@ -326,7 +343,7 @@ pub fn verify_consensus_before_settle(
 
     if !result.consensus_reached {
         // Check for explicit conflict
-        if result.valid_count >= MIN_ATTESTATIONS && (result.agreed_tx_id.is_none() || result.agreed_amount.is_none()) {
+        if result.valid_count >= MIN_ATTESTATIONS && (result.agreed_tx_id.0.is_none() || result.agreed_amount.is_none()) {
             // Attestations exist but disagree on tx_id or amount
             return Err(ContractError::OracleAttestationConflict);
         }
@@ -455,7 +472,7 @@ mod tests {
     const TEST_ASSET: AssetId = 1;
     const TEST_AMOUNT: u64 = 10_000_000;
 
-    fn setup() -> (Env, Address, Address, Address, Address) {
+    fn setup() -> (Env, Address, Address, Address, Address, Address) {
         let env = Env::default();
         env.mock_all_auths();
         env.ledger().set(LedgerInfo {
@@ -466,7 +483,7 @@ mod tests {
             base_reserve: 10,
             min_temp_entry_ttl: 0,
             min_persistent_entry_ttl: 0,
-            max_entry_ttl: u32::MAX,
+            max_entry_ttl: 6_312_000,
         });
 
         // Initialize contract
@@ -481,14 +498,11 @@ mod tests {
         let oracle3 = Address::generate(&env);
 
         // Register oracles
-        register_oracle(&env, admin.clone(), TEST_ASSET, oracle1.clone()).unwrap();
-        register_oracle(&env, admin.clone(), TEST_ASSET, oracle2.clone()).unwrap();
-        register_oracle(&env, admin.clone(), TEST_ASSET, oracle3.clone()).unwrap();
 
-        (env, admin, oracle1, oracle2, oracle3)
+        (env, admin, oracle1, oracle2, oracle3, contract_id)
     }
 
-    fn create_test_escrow(env: &Env, sender: &Address, anchor: &Address) -> u64 {
+    fn create_test_escrow(env: &Env, sender: &Address, anchor: &Address, cid: &Address) -> u64 {
         let escrow_id = 1;
         let escrow = FiatEscrow {
             id: escrow_id,
@@ -502,125 +516,121 @@ mod tests {
             timeout_secs: 86400,
         };
         let key = FiatEscrowKey::Escrow(escrow_id);
-        env.storage().persistent().set(&key, &escrow);
+        env.as_contract(cid, || env.storage().persistent().set(&key, &escrow));
         escrow_id
     }
 
-    fn make_signature(env: &Env, oracle: &Address, tx_id: &BytesN<32>, amount: u64) -> BytesN<64> {
-        // Create payload: tx_id || amount
-        let mut payload = Bytes::new(env);
-        payload.append(tx_id);
-        payload.append(&Bytes::from_slice(env, &amount.to_le_bytes()));
-        
-        // Sign with oracle's key
-        env.crypto().ed25519_sign(oracle, &payload)
+    fn make_signature(env: &Env, _oracle: &Address, tx_id: &BytesN<32>, _amount: u64) -> BytesN<64> {
+        let mut sig = [0u8; 64];
+        sig[..32].copy_from_slice(&tx_id.to_array());
+        BytesN::from_array(env, &sig)
     }
 
     #[test]
     fn register_oracle_success() {
-        let (env, admin, oracle1, _, _) = setup();
-        assert!(register_oracle(&env, admin, TEST_ASSET, oracle1).is_ok());
+        let (env, admin, oracle1, _, _, cid) = setup();
+        assert!(env.as_contract(&cid, || register_oracle(&env, admin, TEST_ASSET, oracle1)).is_ok());
     }
 
     #[test]
     fn register_oracle_max_limit() {
-        let (env, admin, oracle1, oracle2, oracle3) = setup();
+        let (env, admin, oracle1, oracle2, oracle3, cid) = setup();
         let oracle4 = Address::generate(&env);
 
-        register_oracle(&env, admin.clone(), TEST_ASSET, oracle1).unwrap();
-        register_oracle(&env, admin.clone(), TEST_ASSET, oracle2).unwrap();
-        register_oracle(&env, admin.clone(), TEST_ASSET, oracle3).unwrap();
+        env.as_contract(&cid, || register_oracle(&env, admin.clone(), TEST_ASSET, oracle1)).unwrap();
+        env.as_contract(&cid, || register_oracle(&env, admin.clone(), TEST_ASSET, oracle2)).unwrap();
+        env.as_contract(&cid, || register_oracle(&env, admin.clone(), TEST_ASSET, oracle3)).unwrap();
         
         // Fourth oracle should fail
-        let result = register_oracle(&env, admin, TEST_ASSET, oracle4);
+        let result = env.as_contract(&cid, || register_oracle(&env, admin, TEST_ASSET, oracle4));
         assert_eq!(result, Err(ContractError::CapacityExceeded));
     }
 
     #[test]
     fn get_oracles_returns_registered() {
-        let (env, admin, oracle1, oracle2, _) = setup();
-        register_oracle(&env, admin.clone(), TEST_ASSET, oracle1.clone()).unwrap();
-        register_oracle(&env, admin, TEST_ASSET, oracle2.clone()).unwrap();
+        let (env, admin, oracle1, oracle2, _, cid) = setup();
+        env.as_contract(&cid, || register_oracle(&env, admin.clone(), TEST_ASSET, oracle1.clone())).unwrap();
+        env.as_contract(&cid, || register_oracle(&env, admin, TEST_ASSET, oracle2.clone())).unwrap();
 
-        let oracles = get_oracles(&env, TEST_ASSET);
+        let oracles = env.as_contract(&cid, || get_oracles(&env, TEST_ASSET));
         assert_eq!(oracles.len(), 2);
     }
 
     #[test]
     fn submit_attestation_unauthorized_oracle_fails() {
-        let (env, admin, oracle1, oracle2, _) = setup();
-        register_oracle(&env, admin, TEST_ASSET, oracle1).unwrap();
+        let (env, admin, oracle1, oracle2, _, cid) = setup();
+        env.as_contract(&cid, || register_oracle(&env, admin, TEST_ASSET, oracle1)).unwrap();
         
         let sender = Address::generate(&env);
         let anchor = Address::generate(&env);
-        let escrow_id = create_test_escrow(&env, &sender, &anchor);
+        let escrow_id = create_test_escrow(&env, &sender, &anchor, &cid);
         
         let tx_id = BytesN::from_array(&env, &[1u8; 32]);
         let sig = make_signature(&env, &oracle2, &tx_id, TEST_AMOUNT);
 
         // oracle2 not registered
-        let result = submit_attestation(&env, oracle2, escrow_id, tx_id, TEST_AMOUNT, TEST_ASSET, sig);
+        let result = env.as_contract(&cid, || submit_attestation(&env, oracle2, escrow_id, tx_id, TEST_AMOUNT, TEST_ASSET, sig));
         assert_eq!(result, Err(ContractError::OracleNotAuthorized));
     }
 
     #[test]
     fn check_consensus_insufficient_oracles() {
-        let (env, admin, oracle1, _, _) = setup();
-        register_oracle(&env, admin, TEST_ASSET, oracle1).unwrap();
+        let (env, admin, oracle1, _, _, cid) = setup();
+        env.as_contract(&cid, || register_oracle(&env, admin, TEST_ASSET, oracle1)).unwrap();
 
         let sender = Address::generate(&env);
         let anchor = Address::generate(&env);
-        let escrow_id = create_test_escrow(&env, &sender, &anchor);
+        let escrow_id = create_test_escrow(&env, &sender, &anchor, &cid);
 
-        let result = check_consensus(&env, escrow_id, TEST_ASSET);
+        let result = env.as_contract(&cid, || check_consensus(&env, escrow_id, TEST_ASSET));
         // Should fail because only 1 oracle registered (need 2)
         assert!(result.is_err());
     }
 
     #[test]
     fn check_consensus_no_attestations() {
-        let (env, admin, oracle1, oracle2, oracle3) = setup();
-        register_oracle(&env, admin.clone(), TEST_ASSET, oracle1).unwrap();
-        register_oracle(&env, admin.clone(), TEST_ASSET, oracle2).unwrap();
-        register_oracle(&env, admin, TEST_ASSET, oracle3).unwrap();
+        let (env, admin, oracle1, oracle2, oracle3, cid) = setup();
+        env.as_contract(&cid, || register_oracle(&env, admin.clone(), TEST_ASSET, oracle1)).unwrap();
+        env.as_contract(&cid, || register_oracle(&env, admin.clone(), TEST_ASSET, oracle2)).unwrap();
+        env.as_contract(&cid, || register_oracle(&env, admin, TEST_ASSET, oracle3)).unwrap();
 
         let sender = Address::generate(&env);
         let anchor = Address::generate(&env);
-        let escrow_id = create_test_escrow(&env, &sender, &anchor);
+        let escrow_id = create_test_escrow(&env, &sender, &anchor, &cid);
 
-        let result = check_consensus(&env, escrow_id, TEST_ASSET).unwrap();
+        let result = env.as_contract(&cid, || check_consensus(&env, escrow_id, TEST_ASSET)).unwrap();
         assert!(!result.consensus_reached);
         assert_eq!(result.valid_count, 0);
     }
 
     #[test]
     fn verify_consensus_before_settle_requires_consensus() {
-        let (env, admin, oracle1, oracle2, oracle3) = setup();
-        register_oracle(&env, admin.clone(), TEST_ASSET, oracle1).unwrap();
-        register_oracle(&env, admin.clone(), TEST_ASSET, oracle2).unwrap();
-        register_oracle(&env, admin, TEST_ASSET, oracle3).unwrap();
+        let (env, admin, oracle1, oracle2, oracle3, cid) = setup();
+        env.as_contract(&cid, || register_oracle(&env, admin.clone(), TEST_ASSET, oracle1)).unwrap();
+        env.as_contract(&cid, || register_oracle(&env, admin.clone(), TEST_ASSET, oracle2)).unwrap();
+        env.as_contract(&cid, || register_oracle(&env, admin, TEST_ASSET, oracle3)).unwrap();
 
         let sender = Address::generate(&env);
         let anchor = Address::generate(&env);
-        let escrow_id = create_test_escrow(&env, &sender, &anchor);
+        let escrow_id = create_test_escrow(&env, &sender, &anchor, &cid);
 
         // No attestations submitted - should fail
-        let result = verify_consensus_before_settle(&env, escrow_id);
+        let result = env.as_contract(&cid, || verify_consensus_before_settle(&env, escrow_id));
         assert_eq!(result, Err(ContractError::InsufficientOracleAttestations));
     }
 
     #[test]
     fn remove_oracle_success() {
-        let (env, admin, oracle1, oracle2, _) = setup();
-        register_oracle(&env, admin.clone(), TEST_ASSET, oracle1.clone()).unwrap();
-        register_oracle(&env, admin.clone(), TEST_ASSET, oracle2.clone()).unwrap();
+        let (env, admin, oracle1, oracle2, _, cid) = setup();
+        env.as_contract(&cid, || register_oracle(&env, admin.clone(), TEST_ASSET, oracle1.clone())).unwrap();
+        env.as_contract(&cid, || register_oracle(&env, admin.clone(), TEST_ASSET, oracle2.clone())).unwrap();
 
-        let oracles_before = get_oracles(&env, TEST_ASSET);
+        let oracles_before = env.as_contract(&cid, || get_oracles(&env, TEST_ASSET));
         assert_eq!(oracles_before.len(), 2);
 
-        remove_oracle(&env, admin, TEST_ASSET, oracle1).unwrap();
+        env.as_contract(&cid, || remove_oracle(&env, admin, TEST_ASSET, oracle1.clone())).unwrap();
 
-        let oracles_after = get_oracles(&env, TEST_ASSET);
+        let oracles_after = env.as_contract(&cid, || get_oracles(&env, TEST_ASSET));
         assert_eq!(oracles_after.len(), 1);
         assert!(!oracles_after.iter().any(|o| o == oracle1));
     }

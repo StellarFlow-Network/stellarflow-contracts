@@ -439,17 +439,21 @@ mod tests {
     #[test]
     fn test_zero_hash_determinism() {
         let env = Env::default();
+
         let z0 = get_zero_hash(&env, 0);
         let z1 = get_zero_hash(&env, 1);
         let expected_z1 = hash_nodes(&env, &z0, &z0);
         assert_eq!(z1, expected_z1);
-    }
+    
+}
 
     #[test]
     fn test_insert_deposit_and_verify_proof() {
         let env = Env::default();
-        env.ledger().set_timestamp(1_000_000);
-        env.ledger().set_sequence_number(100);
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
+        env.ledger().with_mut(|li| li.timestamp = 1_000_000);
+        env.ledger().with_mut(|li| li.sequence_number = 100);
 
         let commitment_0 = make_leaf(&env, 1);
         let (idx_0, root_0) = insert_deposit(&env, commitment_0.clone()).unwrap();
@@ -492,12 +496,15 @@ mod tests {
             0,
         );
         assert_eq!(res_dup, Err(ContractError::NullifierAlreadyUsed));
-    }
+    });
+}
 
     #[test]
     fn test_multiple_deposits_and_sibling_paths() {
         let env = Env::default();
-        env.ledger().set_timestamp(1_000_000);
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
+        env.ledger().with_mut(|li| li.timestamp = 1_000_000);
 
         let c0 = make_leaf(&env, 10);
         let c1 = make_leaf(&env, 20);
@@ -531,12 +538,15 @@ mod tests {
         let nullifier_1 = make_leaf(&env, 55);
         assert!(verify_withdrawal_and_spend(&env, &root_1, &nullifier_1, &c1, &path_1, 1).is_ok());
         assert!(is_nullifier_used(&env, &nullifier_1));
-    }
+    });
+}
 
     #[test]
     fn test_revert_on_unverified_root() {
         let env = Env::default();
-        env.ledger().set_timestamp(1_000_000);
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
+        env.ledger().with_mut(|li| li.timestamp = 1_000_000);
 
         let unverified_root = make_leaf(&env, 77);
         let leaf = make_leaf(&env, 1);
@@ -549,13 +559,16 @@ mod tests {
 
         let res = verify_withdrawal_and_spend(&env, &unverified_root, &nullifier, &leaf, &path, 0);
         assert_eq!(res, Err(ContractError::InvalidMerkleProof));
-    }
+    });
+}
 
     #[test]
     fn test_revert_on_expired_root() {
         let env = Env::default();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
         let start_time = 1_000_000;
-        env.ledger().set_timestamp(start_time);
+        env.ledger().with_mut(|li| li.timestamp = start_time);
 
         // Configure 1 day validity window
         let one_day = 86400;
@@ -570,22 +583,25 @@ mod tests {
         }
 
         // Within 1 day: root is valid
-        env.ledger().set_timestamp(start_time + 86000);
+        env.ledger().with_mut(|li| li.timestamp = start_time + 86000);
         assert!(is_root_valid(&env, &root));
 
         // Advance past expiration (1 day + 1 second)
-        env.ledger().set_timestamp(start_time + 86401);
+        env.ledger().with_mut(|li| li.timestamp = start_time + 86401);
         assert!(!is_root_valid(&env, &root));
 
         let nullifier = make_leaf(&env, 42);
         let res = verify_withdrawal_and_spend(&env, &root, &nullifier, &commitment, &path, 0);
         assert_eq!(res, Err(ContractError::InvalidMerkleProof));
-    }
+    });
+}
 
     #[test]
     fn test_revert_on_corrupt_proof() {
         let env = Env::default();
-        env.ledger().set_timestamp(1_000_000);
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
+        env.ledger().with_mut(|li| li.timestamp = 1_000_000);
 
         let commitment = make_leaf(&env, 1);
         let (_, root) = insert_deposit(&env, commitment.clone()).unwrap();
@@ -602,12 +618,15 @@ mod tests {
         assert_eq!(res, Err(ContractError::InvalidMerkleProof));
         // Nullifier must not be marked spent on proof failure
         assert!(!is_nullifier_used(&env, &nullifier));
-    }
+    });
+}
 
     #[test]
     fn test_historical_root_ring_buffer_capacity() {
         let env = Env::default();
-        env.ledger().set_timestamp(1_000_000);
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
+        env.ledger().with_mut(|li| li.timestamp = 1_000_000);
 
         let mut roots = Vec::new(&env);
         for i in 0..(ROOT_BUFFER_CAPACITY + 5) {
@@ -627,12 +646,15 @@ mod tests {
             let valid_root = roots.get(i).unwrap();
             assert!(is_root_valid(&env, &valid_root));
         }
-    }
+    });
+}
 
     #[test]
     fn test_shielded_pool_packed_node_storage_and_linear_cost_scaling() {
         let env = Env::default();
-        env.ledger().set(soroban_sdk::ledger::LedgerInfo {
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
+        env.ledger().set(soroban_sdk::testutils::LedgerInfo {
             timestamp: 1_000_000,
             protocol_version: 20,
             sequence_number: 100,
@@ -654,5 +676,6 @@ mod tests {
         assert_eq!(packed_subtree_size, 640);
         let linear_scaling_factor = packed_subtree_size / TREE_DEPTH;
         assert_eq!(linear_scaling_factor, 32);
-    }
+    });
+}
 }

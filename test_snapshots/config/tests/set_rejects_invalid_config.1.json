@@ -101,18 +101,6 @@
                         "val": {
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
                         }
-                      },
-                      {
-                        "key": {
-                          "vec": [
-                            {
-                              "symbol": "SchemaVersion"
-                            }
-                          ]
-                        },
-                        "val": {
-                          "u32": 2
-                        }
                       }
                     ]
                   }
@@ -350,7 +338,7 @@
             ],
             "data": {
               "error": {
-                "contract": 28
+                "contract": 29
               }
             }
           }
@@ -371,7 +359,7 @@
               },
               {
                 "error": {
-                  "contract": 28
+                  "contract": 29
                 }
               }
             ],
@@ -396,7 +384,7 @@
               },
               {
                 "error": {
-                  "contract": 28
+                  "contract": 29
                 }
               }
             ],

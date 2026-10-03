@@ -58,13 +58,13 @@ fn test_interest_rate_controller_accrue() {
     };
 
     let pool = PoolState {
-        cash: 20,
-        borrows: 80,
+        cash: 20_000_000_000,
+        borrows: 80_000_000_000,
         last_accrued_ledger: 0,
         accumulated_interest_index: 1_000_000_000_000_000_000, // 1.0 scaled
     };
 
-    env.ledger().set_sequence(1000);
+    env.ledger().with_mut(|li| li.sequence_number = 1000);
     let (updated_pool, accrued) = client.accrue_interest(&pool, &config);
     assert!(accrued > 0);
     assert_eq!(updated_pool.last_accrued_ledger, 1000);
@@ -100,7 +100,8 @@ fn test_liquidity_depth_lifecycle() {
 
     // Ask order
     let order = client.place_limit_order(&maker, &pair, &10_000_000, &1_000);
-    let is_bid = sell_asset > buy_asset;
+    // A sell limit order rests on the ask book (is_bid = false).
+    let is_bid = false;
     let depth = client.get_liquidity_depth(&pair, &is_bid);
     assert_eq!(depth.len(), 1);
     assert_eq!(depth.get(0).unwrap().volume, 1_000);

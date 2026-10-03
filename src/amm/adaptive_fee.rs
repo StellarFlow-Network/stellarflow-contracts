@@ -499,15 +499,16 @@ mod tests {
             network_id: Default::default(),
             base_reserve: 0,
             min_temp_entry_ttl: 0,
-            min_live_entry_ttl: 0,
-            max_entry_ttl: u32::MAX,
-            ledger_entries: Default::default(),
+            min_persistent_entry_ttl: 0,
+            max_entry_ttl: 6_312_000,
         });
     }
 
     #[test]
     fn record_observations_and_trim_ring() {
         let (env, _client, _admin, pool) = setup();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
         let sym: Symbol = symbol_short!("NGN");
         set_time(&env, 1_000_000);
         let cfg = get_adaptive_fee_config(&env, pool).unwrap();
@@ -523,7 +524,8 @@ mod tests {
         assert!(last > 0);
         let vol = get_pool_volatility_bps(&env, pool).unwrap();
         assert!(vol > 0, "with many observations variance should be non-zero");
-    }
+    });
+}
 
     #[test]
     fn fee_stays_at_base_when_volatility_below_threshold() {
@@ -537,6 +539,8 @@ mod tests {
     #[test]
     fn fee_reaches_max_cap_at_high_volatility() {
         let (env, client, _admin, pool) = setup();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
         let sym: Symbol = symbol_short!("NGN");
         // High dispersion within the window -> climbing fee capped at max.
         let cfg = get_adaptive_fee_config(&env, pool).unwrap();
@@ -548,11 +552,14 @@ mod tests {
         }
         let snap = client.get_adaptive_fee(&pool);
         assert_eq!(snap.fee_bps, 150, "high volatility should hit the max cap of 150bps");
-    }
+    });
+}
 
     #[test]
     fn fee_decays_back_to_base_when_observations_stop() {
         let (env, client, _admin, pool) = setup();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
         let sym: Symbol = symbol_short!("NGN");
         let cfg = get_adaptive_fee_config(&env, pool).unwrap();
         let start = 2_000_000u64;
@@ -576,15 +583,19 @@ mod tests {
         );
         // The decaying tail relaxes toward baseline; it must be strictly below max.
         assert!(snap_later.fee_bps < 150);
-    }
+    });
+}
 
     #[test]
     fn unconfigured_pool_is_rejected() {
         let (env, _client, _admin, _pool) = setup();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
         let unconfigured: AssetId = 999_999_999;
         assert_eq!(
             resolve_adaptive_fee(&env, unconfigured),
             Err(ContractError::NotRegistered)
         );
-    }
+    });
+}
 }

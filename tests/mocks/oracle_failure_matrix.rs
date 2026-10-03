@@ -1,4 +1,8 @@
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env, Symbol};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype,
+    testutils::Ledger,
+    Address, Env, Symbol,
+};
 
 const MAX_ORACLE_AGE: u64 = 300;
 const MAX_REASONABLE_PRICE: i128 = 1_000_000_000_000;
@@ -71,8 +75,9 @@ pub enum ProtocolDataKey {
     Paused,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[contracterror]
+#[repr(u32)]
 pub enum ProtocolError {
     OracleRejected = 1,
     EmergencyPaused = 2,
@@ -130,7 +135,7 @@ impl OracleFailureMatrixProtocol {
         asset: Symbol,
         amount: i128,
     ) -> Result<bool, ProtocolError> {
-        if Self::is_paused(env) {
+        if Self::is_paused(env.clone()) {
             return Err(ProtocolError::EmergencyPaused);
         }
 
@@ -150,7 +155,7 @@ impl OracleFailureMatrixProtocol {
         }
 
         let operation = Symbol::new(env, "operation");
-        let current = Self::processed(env, operation.clone());
+        let current = Self::processed(env.clone(), operation.clone());
         env.storage()
             .persistent()
             .set(&ProtocolDataKey::Processed(operation), &(current + amount));

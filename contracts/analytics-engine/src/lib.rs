@@ -48,10 +48,10 @@ pub struct AnalyticsEngine;
 impl AnalyticsEngine {
     pub fn initialize(env: Env, alpha: i128) {
         if env.storage().instance().has(&DataKey::Alpha) {
-            panic!("already initialized");
+            return Err(ContractError::AlreadyInitialized);
         }
         if alpha <= 0 || alpha > ALPHA_SCALE {
-            panic!("invalid alpha");
+            return Err(ContractError::InvalidAlpha);
         }
         env.storage().instance().set(&DataKey::Alpha, &alpha);
     }
@@ -60,14 +60,14 @@ impl AnalyticsEngine {
     /// Store only the finalized moving average record in persistent data slots to minimize long-term storage rent fees.
     pub fn submit_price(env: Env, asset: AssetId, price: i128) {
         if price <= 0 {
-            panic!("price must be positive");
+            return Err(ContractError::PriceMustBePositive);
         }
 
         let alpha: i128 = env
             .storage()
             .instance()
             .get(&DataKey::Alpha)
-            .unwrap_or_else(|| panic!("not initialized"));
+            .unwrap_or_else(|| return Err(ContractError::NotInitialized));
         let key = DataKey::EmaRecord(asset);
 
         let new_ema = if let Some(record) = env.storage().persistent().get::<_, EmaRecord>(&key) {

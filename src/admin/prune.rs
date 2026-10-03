@@ -18,7 +18,7 @@ use crate::{
     bridge::escrow::{BridgeEscrowStorageKey, TokenLock},
     escrow::timelock::{Escrow, EscrowStorageKey},
     fees::{CorridorFeePool, FeesStorageKey},
-    orders::limit::{LimitOrder, OrderStorageKey},
+    orders::limit::{AssetPair, LimitOrder, OrderStorageKey},
     settlement::htlc::{Htlc, HtlcKey, HtlcState},
     storage::{FeedStakeValue, RENT_THRESHOLD},
     AssetId, ContractData, ContractError, StakingStorageKey, DATA_KEY,
@@ -181,16 +181,24 @@ pub fn prune_expired_keys(
     for target in targets.iter() {
         match target {
             PruneTarget::Order(order_id) => {
-                let key = OrderStorageKey::Order(order_id);
-                if let Some(order) = env.storage().persistent().get::<_, LimitOrder>(&key) {
-                    // Only prune spent / filled or cancelled orders
-                    if !order.active || order.remaining_amount == 0 {
-                        env.storage().persistent().remove(&key);
-                        pruned_count += 1;
-                        env.events().publish(
-                            (symbol_short!("prune"), symbol_short!("order")),
-                            (order_id, order.maker),
-                        );
+                let index_key = OrderStorageKey::OrderIndex(order_id);
+                if let Some((pair, price_tick)) = env
+                    .storage()
+                    .persistent()
+                    .get::<_, (AssetPair, i128)>(&index_key)
+                {
+                    let key = OrderStorageKey::Order(pair, price_tick, order_id);
+                    if let Some(order) = env.storage().persistent().get::<_, LimitOrder>(&key) {
+                        // Only prune spent / filled or cancelled orders
+                        if !order.active || order.remaining_amount == 0 {
+                            env.storage().persistent().remove(&key);
+                            env.storage().persistent().remove(&index_key);
+                            pruned_count += 1;
+                            env.events().publish(
+                                (symbol_short!("prune"), symbol_short!("order")),
+                                (order_id, order.maker),
+                            );
+                        }
                     }
                 }
             }
@@ -365,11 +373,11 @@ mod tests {
             assert!(env
                 .storage()
                 .persistent()
-                .has(&OrderStorageKey::Order(order0.id)));
+                .has(&OrderStorageKey::Order(pair.clone(), PRICE_SCALE, order0.id)));
             assert!(env
                 .storage()
                 .persistent()
-                .has(&OrderStorageKey::Order(order1.id)));
+                .has(&OrderStorageKey::Order(pair.clone(), PRICE_SCALE, order1.id)));
         });
 
         // Prune both spent orders
@@ -385,11 +393,11 @@ mod tests {
             assert!(!env
                 .storage()
                 .persistent()
-                .has(&OrderStorageKey::Order(order0.id)));
+                .has(&OrderStorageKey::Order(pair.clone(), PRICE_SCALE, order0.id)));
             assert!(!env
                 .storage()
                 .persistent()
-                .has(&OrderStorageKey::Order(order1.id)));
+                .has(&OrderStorageKey::Order(pair.clone(), PRICE_SCALE, order1.id)));
         });
     }
 
@@ -425,11 +433,11 @@ mod tests {
             assert!(env
                 .storage()
                 .persistent()
-                .has(&OrderStorageKey::Order(order0.id)));
+                .has(&OrderStorageKey::Order(pair.clone(), PRICE_SCALE, order0.id)));
             assert!(env
                 .storage()
                 .persistent()
-                .has(&OrderStorageKey::Order(order1.id)));
+                .has(&OrderStorageKey::Order(pair.clone(), PRICE_SCALE, order1.id)));
         });
 
         let loaded1 = client.get_limit_order(&order1.id).unwrap();
@@ -551,12 +559,15 @@ mod tests {
                 sender: sender.clone(),
                 receiver: receiver.clone(),
                 depositor: depositor.clone(),
+                anchor: sender.clone(),
                 token: sell_asset.clone(),
                 amount: 1_000,
                 expiry_ledger: 500,
+                payout_deadline: 500,
                 sender_approved: true,
                 receiver_approved: true,
                 released: true,
+                state: crate::escrow::timelock::PaymentState::Settled,
             };
             env.storage()
                 .persistent()
@@ -566,12 +577,15 @@ mod tests {
                 sender: sender.clone(),
                 receiver: receiver.clone(),
                 depositor: depositor.clone(),
+                anchor: sender.clone(),
                 token: sell_asset.clone(),
                 amount: 1_000,
                 expiry_ledger: 500,
+                payout_deadline: 500,
                 sender_approved: false,
                 receiver_approved: false,
                 released: false,
+                state: crate::escrow::timelock::PaymentState::Locked,
             };
             env.storage()
                 .persistent()
@@ -731,12 +745,15 @@ mod tests {
                 sender: maker.clone(),
                 receiver: filler.clone(),
                 depositor: maker.clone(),
+                anchor: filler.clone(),
                 token: sell_asset.clone(),
                 amount: 500,
                 expiry_ledger: 500,
+                payout_deadline: 500,
                 sender_approved: true,
                 receiver_approved: true,
                 released: true,
+                state: crate::escrow::timelock::PaymentState::Settled,
             };
             env.storage()
                 .persistent()
@@ -771,11 +788,11 @@ mod tests {
             assert!(!env
                 .storage()
                 .persistent()
-                .has(&OrderStorageKey::Order(order_spent.id)));
+                .has(&OrderStorageKey::Order(pair.clone(), PRICE_SCALE, order_spent.id)));
             assert!(env
                 .storage()
                 .persistent()
-                .has(&OrderStorageKey::Order(order_active.id)));
+                .has(&OrderStorageKey::Order(pair.clone(), PRICE_SCALE, order_active.id)));
             assert!(!env
                 .storage()
                 .persistent()
@@ -811,7 +828,7 @@ mod tests {
         // Verify all 10 entries exist in persistent storage before pruning
         env.as_contract(&contract_id, || {
             for i in 0..10 {
-                assert!(env.storage().persistent().has(&OrderStorageKey::Order(i)));
+                assert!(env.storage().persistent().has(&OrderStorageKey::Order(pair.clone(), PRICE_SCALE, i)));
             }
         });
 
@@ -833,7 +850,7 @@ mod tests {
         // Verify that 100% of the pruned storage entries are evicted to recover storage deposits
         env.as_contract(&contract_id, || {
             for i in 0..10 {
-                assert!(!env.storage().persistent().has(&OrderStorageKey::Order(i)));
+                assert!(!env.storage().persistent().has(&OrderStorageKey::Order(pair.clone(), PRICE_SCALE, i)));
             }
         });
     }

@@ -45,12 +45,14 @@ enum DataKey {
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
-pub enum NullifierError {
+pub enum ContractError {
     /// The nullifier has already been recorded — this note was already withdrawn.
-    AlreadySpent = 1,
+    NullifierAlreadySpent = 1,
     /// The supplied ZK proof did not verify against the nullifier/public inputs.
+    /// Recovery steps: Inspect the state for InvalidProof and retry with valid inputs or proper conditions.
     InvalidProof = 2,
     /// The supplied sparse Merkle path does not prove the nullifier is unspent.
+    /// Recovery steps: Inspect the state for InvalidMerkleProof and retry with valid inputs or proper conditions.
     InvalidMerkleProof = 3,
 }
 
@@ -130,19 +132,19 @@ mod spent_tree {
         nullifier: &Nullifier,
         path: &Vec<BytesN<32>>,
         current_root: &BytesN<32>,
-    ) -> Result<BytesN<32>, NullifierError> {
+    ) -> Result<BytesN<32>, ContractError> {
         if nullifier == &BytesN::from_array(env, &[0u8; 32]) {
-            return Err(NullifierError::InvalidMerkleProof);
+            return Err(ContractError::InvalidMerkleProof);
         }
 
         if path.len() != SPENT_TREE_DEPTH {
-            return Err(NullifierError::InvalidMerkleProof);
+            return Err(ContractError::InvalidMerkleProof);
         }
 
         let mut empty_root = BytesN::from_array(env, &[0u8; 32]);
         let mut spent_root = nullifier.clone();
         for level in 0..SPENT_TREE_DEPTH {
-            let sibling = path.get(level).ok_or(NullifierError::InvalidMerkleProof)?;
+            let sibling = path.get(level).ok_or(ContractError::InvalidMerkleProof)?;
             if nullifier_bit(nullifier, level) {
                 empty_root = hash_pair(env, &sibling, &empty_root);
                 spent_root = hash_pair(env, &sibling, &spent_root);
@@ -153,10 +155,10 @@ mod spent_tree {
         }
 
         if &spent_root == current_root {
-            return Err(NullifierError::AlreadySpent);
+            return Err(ContractError::NullifierAlreadySpent);
         }
         if &empty_root != current_root {
-            return Err(NullifierError::InvalidMerkleProof);
+            return Err(ContractError::InvalidMerkleProof);
         }
         Ok(spent_root)
     }
@@ -179,9 +181,9 @@ mod verifier {
         proof: &BytesN<256>,
         public_inputs: &BytesN<32>,
         spent_path: &Vec<BytesN<32>>,
-    ) -> Result<BytesN<32>, NullifierError> {
+    ) -> Result<BytesN<32>, ContractError> {
         if storage::is_spent(env, nullifier) {
-            return Err(NullifierError::AlreadySpent);
+            return Err(ContractError::NullifierAlreadySpent);
         }
 
         let updated_spent_root = spent_tree::verify_unspent_and_compute_root(
@@ -192,7 +194,7 @@ mod verifier {
         )?;
 
         if !verify_zk_proof(proof, nullifier, public_inputs) {
-            return Err(NullifierError::InvalidProof);
+            return Err(ContractError::InvalidProof);
         }
 
         Ok(updated_spent_root)
@@ -235,7 +237,7 @@ impl NullifierVerifier {
         spent_path: Vec<BytesN<32>>,
         recipient: Address,
         amount: i128,
-    ) -> Result<(), NullifierError> {
+    ) -> Result<(), ContractError> {
         let updated_spent_root =
             verifier::verify_withdrawal(&env, &nullifier, &proof, &public_inputs, &spent_path)?;
 
@@ -301,7 +303,7 @@ mod tests {
         assert!(storage::is_spent(&env, &nf));
         assert_eq!(
             spent_tree::verify_unspent_and_compute_root(&env, &nf, &path, &updated_root),
-            Err(NullifierError::AlreadySpent)
+            Err(ContractError::NullifierAlreadySpent)
         );
     }
 
@@ -315,14 +317,14 @@ mod tests {
 
         assert_eq!(
             spent_tree::verify_unspent_and_compute_root(&env, &nf, &short_path, &root),
-            Err(NullifierError::InvalidMerkleProof)
+            Err(ContractError::InvalidMerkleProof)
         );
 
         let mut invalid_path = empty_path(&env);
         invalid_path.set(0, nullifier(&env, 44));
         assert_eq!(
             spent_tree::verify_unspent_and_compute_root(&env, &nf, &invalid_path, &root),
-            Err(NullifierError::InvalidMerkleProof)
+            Err(ContractError::InvalidMerkleProof)
         );
     }
 
@@ -337,7 +339,7 @@ mod tests {
                 &empty_path(&env),
                 &spent_tree::empty_root(&env),
             ),
-            Err(NullifierError::InvalidMerkleProof)
+            Err(ContractError::InvalidMerkleProof)
         );
     }
 }

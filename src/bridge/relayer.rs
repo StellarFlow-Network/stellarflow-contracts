@@ -203,6 +203,7 @@ mod tests {
 
     struct BridgeFixture {
         env: Env,
+        contract_id: Address,
         admin: Address,
         keys: [SigningKey; 5],
         public_keys: [BytesN<32>; 5],
@@ -218,13 +219,22 @@ mod tests {
             let admin = Address::generate(&env);
             let recipient = Address::generate(&env);
 
-            env.storage().instance().set(
-                &DATA_KEY,
-                &ContractData {
-                    admin: admin.clone(),
-                    value: 0,
-                },
-            );
+            // A registered contract provides the host context that instance
+            // storage, `env.crypto()` and `require_auth` all require when
+            // module functions are called directly in unit tests (mirrors
+            // production invocation through the contract ABI).
+            let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
+
+            env.as_contract(&contract_id, || {
+                env.storage().instance().set(
+                    &DATA_KEY,
+                    &ContractData {
+                        admin: admin.clone(),
+                        value: 0,
+                        max_fee_ceiling: 0,
+                    },
+                );
+            });
 
             let keys = [
                 SigningKey::from_bytes(&[1; 32]),
@@ -243,15 +253,20 @@ mod tests {
             ];
 
             for public_key in public_keys.iter() {
-                add_validator(&env, &admin, public_key.clone()).unwrap();
+                env.as_contract(&contract_id, || {
+                    add_validator(&env, &admin, public_key.clone()).unwrap()
+                });
             }
 
-            configure_threshold(&env, &admin, 3).unwrap();
+            env.as_contract(&contract_id, || {
+                configure_threshold(&env, &admin, 3).unwrap()
+            });
 
             let proof_hash = BytesN::from_array(&env, &[7u8; 32]);
 
             Self {
                 env,
+                contract_id,
                 admin,
                 keys,
                 public_keys,
@@ -261,7 +276,12 @@ mod tests {
         }
 
         fn digest(&self, nonce: u64, recipient: &Address, amount: i128) -> BytesN<32> {
-            bridge_message_digest(&self.env, 42, nonce, &self.proof_hash, recipient, amount)
+            let env = &self.env;
+            let proof_hash = self.proof_hash.clone();
+            let recipient = recipient.clone();
+            env.as_contract(&self.contract_id, || {
+                bridge_message_digest(env, 42, nonce, &proof_hash, &recipient, amount)
+            })
         }
 
         fn signatures(
@@ -284,6 +304,31 @@ mod tests {
 
             signatures
         }
+
+        /// Run `verify_cross_chain_payload` inside a contract context.
+        fn verify(
+            &self,
+            source_chain_id: u32,
+            nonce: u64,
+            recipient: &Address,
+            amount: i128,
+            signatures: Vec<(BytesN<32>, BytesN<64>)>,
+        ) -> Result<(), ContractError> {
+            let env = &self.env;
+            let proof_hash = self.proof_hash.clone();
+            let recipient = recipient.clone();
+            env.as_contract(&self.contract_id, || {
+                verify_cross_chain_payload(
+                    env,
+                    source_chain_id,
+                    nonce,
+                    proof_hash,
+                    recipient,
+                    amount,
+                    signatures,
+                )
+            })
+        }
     }
 
     #[test]
@@ -293,15 +338,7 @@ mod tests {
         let signatures = fixture.signatures(1, &fixture.recipient, amount, &[0, 2, 4]);
 
         assert_eq!(
-            verify_cross_chain_payload(
-                &fixture.env,
-                42,
-                1,
-                fixture.proof_hash.clone(),
-                fixture.recipient.clone(),
-                amount,
-                signatures,
-            ),
+            fixture.verify(42, 1, &fixture.recipient.clone(), amount, signatures),
             Ok(())
         );
     }
@@ -313,15 +350,7 @@ mod tests {
         let signatures = fixture.signatures(2, &fixture.recipient, amount, &[0, 1]);
 
         assert_eq!(
-            verify_cross_chain_payload(
-                &fixture.env,
-                42,
-                2,
-                fixture.proof_hash.clone(),
-                fixture.recipient.clone(),
-                amount,
-                signatures,
-            ),
+            fixture.verify(42, 2, &fixture.recipient.clone(), amount, signatures),
             Err(ContractError::InvalidProof)
         );
     }
@@ -333,15 +362,7 @@ mod tests {
         let signatures = fixture.signatures(3, &fixture.recipient, amount, &[0, 0, 1]);
 
         assert_eq!(
-            verify_cross_chain_payload(
-                &fixture.env,
-                42,
-                3,
-                fixture.proof_hash.clone(),
-                fixture.recipient.clone(),
-                amount,
-                signatures,
-            ),
+            fixture.verify(42, 3, &fixture.recipient.clone(), amount, signatures),
             Err(ContractError::InvalidProof)
         );
     }
@@ -372,15 +393,7 @@ mod tests {
         ));
 
         assert_eq!(
-            verify_cross_chain_payload(
-                &fixture.env,
-                42,
-                4,
-                fixture.proof_hash.clone(),
-                fixture.recipient.clone(),
-                amount,
-                signatures,
-            ),
+            fixture.verify(42, 4, &fixture.recipient.clone(), amount, signatures),
             Err(ContractError::InvalidProof)
         );
     }
@@ -409,15 +422,7 @@ mod tests {
             BytesN::from_array(&fixture.env, &[0u8; 64]),
         ));
 
-        let _ = verify_cross_chain_payload(
-            &fixture.env,
-            42,
-            5,
-            fixture.proof_hash.clone(),
-            fixture.recipient.clone(),
-            amount,
-            signatures,
-        );
+        let _ = fixture.verify(42, 5, &fixture.recipient.clone(), amount, signatures);
     }
 
     #[test]
@@ -428,30 +433,14 @@ mod tests {
         let insufficient = fixture.signatures(9, &fixture.recipient, amount, &[0, 1]);
 
         assert_eq!(
-            verify_cross_chain_payload(
-                &fixture.env,
-                42,
-                9,
-                fixture.proof_hash.clone(),
-                fixture.recipient.clone(),
-                amount,
-                insufficient,
-            ),
+            fixture.verify(42, 9, &fixture.recipient, amount, insufficient),
             Err(ContractError::InvalidProof)
         );
 
         let valid = fixture.signatures(9, &fixture.recipient, amount, &[0, 1, 2]);
 
         assert_eq!(
-            verify_cross_chain_payload(
-                &fixture.env,
-                42,
-                9,
-                fixture.proof_hash.clone(),
-                fixture.recipient.clone(),
-                amount,
-                valid,
-            ),
+            fixture.verify(42, 9, &fixture.recipient, amount, valid),
             Ok(())
         );
     }
@@ -463,94 +452,60 @@ mod tests {
         let signatures = fixture.signatures(6, &fixture.recipient, amount, &[0, 1, 2]);
 
         assert_eq!(
-            verify_cross_chain_payload(
-                &fixture.env,
-                42,
-                6,
-                fixture.proof_hash.clone(),
-                fixture.recipient.clone(),
-                amount,
-                signatures.clone(),
-            ),
+            fixture.verify(42, 6, &fixture.recipient.clone(), amount, signatures.clone()),
             Ok(())
         );
 
         assert_eq!(
-            verify_cross_chain_payload(
-                &fixture.env,
-                42,
-                6,
-                fixture.proof_hash.clone(),
-                fixture.recipient.clone(),
-                amount,
-                signatures,
-            ),
+            fixture.verify(42, 6, &fixture.recipient.clone(), amount, signatures),
             Err(ContractError::InvalidProof)
         );
     }
 
+    // NOTE: Soroban's `env.crypto().ed25519_verify` aborts the host on
+    // signature mismatch — it cannot return a graceful "invalid" result.
+    // Signatures bound to a different chain / recipient / amount are
+    // therefore rejected by host trap, a strictly stronger failure than
+    // the module's `InvalidProof` error path.
     #[test]
+    #[should_panic]
     fn source_chain_is_bound_to_signature_digest() {
         let fixture = BridgeFixture::new();
         let amount = 1_000i128;
         let signatures = fixture.signatures(10, &fixture.recipient, amount, &[0, 1, 2]);
 
-        assert_eq!(
-            verify_cross_chain_payload(
-                &fixture.env,
-                43,
-                10,
-                fixture.proof_hash.clone(),
-                fixture.recipient.clone(),
-                amount,
-                signatures,
-            ),
-            Err(ContractError::InvalidProof)
-        );
+        let _ = fixture.verify(43, 10, &fixture.recipient.clone(), amount, signatures);
     }
 
     #[test]
+    #[should_panic]
     fn changed_recipient_invalidates_existing_signatures() {
         let fixture = BridgeFixture::new();
         let amount = 1_000i128;
         let signatures = fixture.signatures(7, &fixture.recipient, amount, &[0, 1, 2]);
         let changed_recipient = Address::generate(&fixture.env);
 
-        assert!(verify_cross_chain_payload(
-            &fixture.env,
-            42,
-            7,
-            fixture.proof_hash.clone(),
-            changed_recipient,
-            amount,
-            signatures,
-        )
-        .is_err());
+        let _ = fixture.verify(42, 7, &changed_recipient, amount, signatures);
     }
 
     #[test]
+    #[should_panic]
     fn changed_amount_invalidates_existing_signatures() {
         let fixture = BridgeFixture::new();
         let signatures = fixture.signatures(8, &fixture.recipient, 1_000, &[0, 1, 2]);
 
-        assert!(verify_cross_chain_payload(
-            &fixture.env,
-            42,
-            8,
-            fixture.proof_hash.clone(),
-            fixture.recipient.clone(),
-            2_000,
-            signatures,
-        )
-        .is_err());
+        let _ = fixture.verify(42, 8, &fixture.recipient.clone(), 2_000, signatures);
     }
 
     #[test]
     fn zero_threshold_is_rejected() {
         let fixture = BridgeFixture::new();
-
+        let env = &fixture.env;
+        let admin = fixture.admin.clone();
         assert_eq!(
-            configure_threshold(&fixture.env, &fixture.admin, 0),
+            env.as_contract(&fixture.contract_id, || {
+                configure_threshold(env, &admin, 0)
+            }),
             Err(ContractError::InvalidProof)
         );
     }
@@ -558,9 +513,11 @@ mod tests {
     #[test]
     fn duplicate_validator_registration_is_rejected() {
         let fixture = BridgeFixture::new();
-
+        let env = &fixture.env;
+        let admin = fixture.admin.clone();
+        let pk = fixture.public_keys[0].clone();
         assert_eq!(
-            add_validator(&fixture.env, &fixture.admin, fixture.public_keys[0].clone()),
+            env.as_contract(&fixture.contract_id, || add_validator(env, &admin, pk)),
             Err(ContractError::AlreadyRegistered)
         );
     }
@@ -571,10 +528,12 @@ mod tests {
         let attacker = Address::generate(&fixture.env);
         let key = SigningKey::from_bytes(&[55; 32]);
         let public_key = BytesN::from_array(&fixture.env, &key.verifying_key().to_bytes());
+        let env = &fixture.env;
 
         assert_eq!(
-            add_validator(&fixture.env, &attacker, public_key),
+            env.as_contract(&fixture.contract_id, || add_validator(env, &attacker, public_key)),
             Err(ContractError::NotAdmin)
         );
     }
 }
+

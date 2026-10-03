@@ -309,13 +309,13 @@ pub trait StellarFlowTrait {
         caller: Address,
         target_admin: Address,
         weight: u32,
-    ) -> Result<(), Error>;
+    ) -> Result<(), ContractError>;
 
     /// Get the governance weight for a specific admin (issue #264).
     fn get_admin_weight(env: Env, admin: Address) -> u32;
 
     /// Set the minimum cumulative weight required for a governance proposal to execute (issue #264).
-    fn set_weight_threshold(env: Env, caller: Address, threshold: u32) -> Result<(), Error>;
+    fn set_weight_threshold(env: Env, caller: Address, threshold: u32) -> Result<(), ContractError>;
 
     /// Get the configured weight threshold, or None if not set (issue #264).
     fn get_weight_threshold(env: Env) -> Option<u32>;
@@ -622,7 +622,7 @@ pub trait StellarFlowTrait {
     /// Actual output amount if swap succeeds
     ///
     /// # Errors
-    /// Returns `Error::SlippageToleranceExceeded` if output is below acceptable minimum
+    /// Returns `ContractError::SlippageToleranceExceeded` if output is below acceptable minimum
     fn execute_swap_with_dynamic_slippage(
         env: Env,
         sender: Address,
@@ -699,132 +699,196 @@ const PROVIDER_TTL_EXTENSION_TARGET: u32 = 100_000;
 #[repr(u32)]
 pub enum ContractError {
     /// Asset does not exist in the price oracle.
+    /// Recovery steps: Inspect the state for AssetNotFound and retry with valid inputs or proper conditions.
     AssetNotFound = 1,
     /// Unauthorized caller - not a whitelisted provider or admin.
+    /// Recovery steps: Inspect the state for Unauthorized and retry with valid inputs or proper conditions.
     Unauthorized = 2,
     /// Asset symbol is not in the approved list (NGN, KES, GHS)
+    /// Recovery steps: Inspect the state for InvalidAssetSymbol and retry with valid inputs or proper conditions.
     InvalidAssetSymbol = 3,
     /// Stake withdrawal amount must be greater than zero.
+    /// Recovery steps: Inspect the state for InvalidStakeAmount and retry with valid inputs or proper conditions.
     InvalidStakeAmount = 4,
     /// Validator already has a pending unbonding request.
+    /// Recovery steps: Inspect the state for UnbondingAlreadyQueued and retry with valid inputs or proper conditions.
     UnbondingAlreadyQueued = 5,
     /// Validator does not have an unbonding request.
+    /// Recovery steps: Inspect the state for UnbondingRequestNotFound and retry with valid inputs or proper conditions.
     UnbondingRequestNotFound = 6,
     /// The minimum unbonding delay has not elapsed yet.
+    /// Recovery steps: Inspect the state for UnbondingDelayActive and retry with valid inputs or proper conditions.
     UnbondingDelayActive = 7,
     /// The queued unbonding request was already released.
+    /// Recovery steps: Inspect the state for UnbondingAlreadyReleased and retry with valid inputs or proper conditions.
     UnbondingAlreadyReleased = 8,
     /// The current ledger plus the unbonding delay overflowed.
+    /// Recovery steps: Inspect the state for LedgerSequenceOverflow and retry with valid inputs or proper conditions.
     LedgerSequenceOverflow = 9,
     /// Slippage tolerance exceeded - computed rate deviates too far from expected rate.
+    /// Recovery steps: Inspect the state for SlippageToleranceExceeded and retry with valid inputs or proper conditions.
     SlippageToleranceExceeded = 10,
     /// Invalid slippage tolerance - must be between 0 and 10000 basis points (0-100%).
+    /// Recovery steps: Inspect the state for InvalidSlippageTolerance and retry with valid inputs or proper conditions.
     InvalidSlippageTolerance = 11,
     /// Fewer than three independent node sources contributed to the current consensus pool.
+    /// Recovery steps: Inspect the state for MinimumQuorumNotMet and retry with valid inputs or proper conditions.
     MinimumQuorumNotMet = 12,
     /// The circuit-breaker is active — price reads for high-volatility assets are blocked.
+    /// Recovery steps: Inspect the state for CircuitBreakerActive and retry with valid inputs or proper conditions.
     CircuitBreakerActive = 13,
     /// The circuit-breaker is already active; cannot trip it again until it is reset.
+    /// Recovery steps: Inspect the state for CircuitBreakerAlreadyActive and retry with valid inputs or proper conditions.
     CircuitBreakerAlreadyActive = 14,
     /// The caller is not a registered coordinator node.
+    /// Recovery steps: Inspect the state for NotCoordinator and retry with valid inputs or proper conditions.
     NotCoordinator = 15,
     /// The circuit-breaker is not currently active; nothing to reset.
+    /// Recovery steps: Inspect the state for CircuitBreakerNotActive and retry with valid inputs or proper conditions.
     CircuitBreakerNotActive = 16,
     /// Submitted price value is negative, zero, or otherwise invalid.
+    /// Recovery steps: Inspect the state for InvalidPrice and retry with valid inputs or proper conditions.
     InvalidPrice = 17,
     /// Arithmetic overflow during price math (e.g. weighted-index calculation).
+    /// Recovery steps: Inspect the state for PriceMathOverflow and retry with valid inputs or proper conditions.
     PriceMathOverflow = 18,
     /// Asset weight is zero, which would produce a division-by-zero.
+    /// Recovery steps: Inspect the state for InvalidWeight and retry with valid inputs or proper conditions.
     InvalidWeight = 19,
     /// Batch operation exceeds the maximum allowed asset count.
+    /// Recovery steps: Inspect the state for TooManyAssets and retry with valid inputs or proper conditions.
     TooManyAssets = 20,
     /// Pool liquidity reported by the provider is below the configured threshold.
+    /// Recovery steps: Inspect the state for LiquidityBelowThreshold and retry with valid inputs or proper conditions.
     LiquidityBelowThreshold = 21,
     /// Liquidity value is negative or zero — cannot be used for validation.
+    /// Recovery steps: Inspect the state for InvalidLiquidity and retry with valid inputs or proper conditions.
     InvalidLiquidity = 22,
     /// Contract has been self-destructed and is permanently unusable.
+    /// Recovery steps: Inspect the state for ContractDestroyed and retry with valid inputs or proper conditions.
     ContractDestroyed = 23,
     /// Contract has not been initialized yet.
+    /// Recovery steps: Inspect the state for NotInitialized and retry with valid inputs or proper conditions.
     NotInitialized = 24,
     /// Price data exceeds the maximum allowed age.
+    /// Recovery steps: Inspect the state for StaleRateData and retry with valid inputs or proper conditions.
     StaleRateData = 25,
     /// Reentrancy detected — call stack already inside this contract.
+    /// Recovery steps: Inspect the state for ReentrancyDetected and retry with valid inputs or proper conditions.
     ReentrancyDetected = 26,
     /// Provider submitted another price update too soon (ledger gap too small).
+    /// Recovery steps: Inspect the state for LedgerGapTooSmall and retry with valid inputs or proper conditions.
     LedgerGapTooSmall = 27,
     /// Price is below the configured absolute floor.
+    /// Recovery steps: Inspect the state for PriceOutOfBounds and retry with valid inputs or proper conditions.
     PriceOutOfBounds = 28,
     /// Contract or admin is already initialized.
+    /// Recovery steps: Inspect the state for AlreadyInitialized and retry with valid inputs or proper conditions.
     AlreadyInitialized = 29,
     /// Emergency halt is active — all price reads are blocked.
+    /// Recovery steps: Inspect the state for EmergencyHalted and retry with valid inputs or proper conditions.
     EmergencyHalted = 30,
     /// No admin address has been set in storage.
+    /// Recovery steps: Inspect the state for AdminNotSet and retry with valid inputs or proper conditions.
     AdminNotSet = 31,
     /// No pending admin transfer found.
+    /// Recovery steps: Inspect the state for PendingAdminNotFound and retry with valid inputs or proper conditions.
     PendingAdminNotFound = 32,
     /// Caller is not the pending admin.
+    /// Recovery steps: Inspect the state for NotPendingAdmin and retry with valid inputs or proper conditions.
     NotPendingAdmin = 33,
     /// Pending admin timestamp is missing from storage.
+    /// Recovery steps: Inspect the state for PendingAdminTimestampMissing and retry with valid inputs or proper conditions.
     PendingAdminTimestampMissing = 34,
     /// Admin timelock period has not elapsed yet.
+    /// Recovery steps: Inspect the state for AdminTimelockNotExpired and retry with valid inputs or proper conditions.
     AdminTimelockNotExpired = 35,
     /// Fee token address has not been configured.
+    /// Recovery steps: Inspect the state for FeeTokenNotSet and retry with valid inputs or proper conditions.
     FeeTokenNotSet = 36,
     /// Query fee amount must be non-negative.
+    /// Recovery steps: Inspect the state for InvalidQueryFee and retry with valid inputs or proper conditions.
     InvalidQueryFee = 37,
     /// No reward balance available to claim.
+    /// Recovery steps: Inspect the state for NoRewards and retry with valid inputs or proper conditions.
     NoRewards = 38,
     /// Fee vault does not hold enough balance to cover the withdrawal.
+    /// Recovery steps: Inspect the state for InsufficientVaultBalance and retry with valid inputs or proper conditions.
     InsufficientVaultBalance = 39,
     /// Normalized price is zero or negative after decimal adjustment.
+    /// Recovery steps: Inspect the state for InvalidNormalizedPrice and retry with valid inputs or proper conditions.
     InvalidNormalizedPrice = 40,
     /// Caller is not an authorized admin.
+    /// Recovery steps: Inspect the state for NotAuthorized and retry with valid inputs or proper conditions.
     NotAuthorized = 41,
     /// Caller is not an authorized provider/relayer.
+    /// Recovery steps: Inspect the state for ProviderNotAuthorized and retry with valid inputs or proper conditions.
     ProviderNotAuthorized = 42,
     /// Caller is not the Community Council.
+    /// Recovery steps: Inspect the state for CouncilRequired and retry with valid inputs or proper conditions.
     CouncilRequired = 43,
     /// Contract is in emergency freeze state.
+    /// Recovery steps: Inspect the state for ContractFrozen and retry with valid inputs or proper conditions.
     ContractFrozen = 44,
     /// Price deviation exceeds the configured maximum (flash crash protection).
+    /// Recovery steps: Inspect the state for FlashCrashDetected and retry with valid inputs or proper conditions.
     FlashCrashDetected = 45,
     /// Price floor value is invalid (zero, negative, or above max bound).
+    /// Recovery steps: Inspect the state for InvalidPriceFloor and retry with valid inputs or proper conditions.
     InvalidPriceFloor = 46,
     /// No previous configuration snapshot to roll back to.
+    /// Recovery steps: Inspect the state for NoPreviousConfig and retry with valid inputs or proper conditions.
     NoPreviousConfig = 47,
     /// Price bounds are invalid (min >= max, zero, or negative).
+    /// Recovery steps: Inspect the state for InvalidPriceBounds and retry with valid inputs or proper conditions.
     InvalidPriceBounds = 48,
     /// Max deviation percentage is outside the valid governance range.
+    /// Recovery steps: Inspect the state for InvalidMaxDeviation and retry with valid inputs or proper conditions.
     InvalidMaxDeviation = 49,
     /// Multi-signature validation failed (duplicate admins, insufficient count, etc.).
+    /// Recovery steps: Inspect the state for MultiSigValidationFailed and retry with valid inputs or proper conditions.
     MultiSigValidationFailed = 50,
     /// Action type code is unrecognized or not supported in the current context.
+    /// Recovery steps: Inspect the state for InvalidActionType and retry with valid inputs or proper conditions.
     InvalidActionType = 51,
     /// The referenced proposed action does not exist.
+    /// Recovery steps: Inspect the state for ActionNotFound and retry with valid inputs or proper conditions.
     ActionNotFound = 52,
     /// The proposed action has already been executed.
+    /// Recovery steps: Inspect the state for ActionAlreadyExecuted and retry with valid inputs or proper conditions.
     ActionAlreadyExecuted = 53,
     /// The proposed action has been cancelled.
+    /// Recovery steps: Inspect the state for ActionCancelled and retry with valid inputs or proper conditions.
     ActionCancelled = 54,
     /// Governance vote quorum was not reached.
+    /// Recovery steps: Inspect the state for QuorumNotReached and retry with valid inputs or proper conditions.
     QuorumNotReached = 55,
     /// Delegate address must differ from the owner address.
+    /// Recovery steps: Inspect the state for InvalidDelegate and retry with valid inputs or proper conditions.
     InvalidDelegate = 56,
     /// Liquidity threshold is outside the valid range.
+    /// Recovery steps: Inspect the state for InvalidLiquidityThreshold and retry with valid inputs or proper conditions.
     InvalidLiquidityThreshold = 57,
     /// Slash or stake amount is zero or negative.
+    /// Recovery steps: Inspect the state for InvalidSlashAmount and retry with valid inputs or proper conditions.
     InvalidSlashAmount = 58,
     /// Slash token contract address has not been configured.
+    /// Recovery steps: Inspect the state for SlashTokenNotSet and retry with valid inputs or proper conditions.
     SlashTokenNotSet = 59,
     /// Provider's staked balance is insufficient for the requested operation.
+    /// Recovery steps: Inspect the state for InsufficientStake and retry with valid inputs or proper conditions.
     InsufficientStake = 60,
     /// Admin weight value is outside the allowed range (1–100).
+    /// Recovery steps: Inspect the state for InvalidAdminWeight and retry with valid inputs or proper conditions.
     InvalidAdminWeight = 61,
     /// Weight threshold value is invalid (below minimum or above maximum).
+    /// Recovery steps: Inspect the state for InvalidWeightThreshold and retry with valid inputs or proper conditions.
     InvalidWeightThreshold = 62,
     /// Cannot calculate deviation with zero expected/consensus rate.
+    /// Recovery steps: Inspect the state for DeviationConsensusZero and retry with valid inputs or proper conditions.
     DeviationConsensusZero = 63,
     /// Division by zero prevented - denominator must be non-zero.
+    /// Recovery steps: Inspect the state for InvalidDenominator and retry with valid inputs or proper conditions.
     InvalidDenominator = 64,
     /// Instant price deviated from the 5-ledger moving average by more than the
     /// single-ledger price-impact guard threshold (5%).
@@ -1105,11 +1169,11 @@ fn has_provider_submitted(buffer: &PriceBuffer, provider: &Address) -> bool {
 }
 
 /// Ensure the current ledger sequence has advanced since the last price write.
-fn require_ledger_sequence_advanced(env: &Env, previous: Option<&PriceData>) -> Result<u32, Error> {
+fn require_ledger_sequence_advanced(env: &Env, previous: Option<&PriceData>) -> Result<u32, ContractError> {
     let current_ledger: u32 = env.ledger().sequence().into();
     if let Some(prev) = previous {
         if current_ledger <= prev.ledger_sequence {
-            return Err(Error::LedgerGapTooSmall);
+            return Err(ContractError::LedgerGapTooSmall);
         }
     }
     Ok(current_ledger)
@@ -2660,7 +2724,7 @@ impl PriceOracle {
         ];
         let accepted = validation::filter_feeds_by_deviation(twap_price_opt, candidate, &env);
         if accepted.is_empty() {
-            return Err(Error::FlashCrashDetected);
+            return Err(ContractError::FlashCrashDetected);
         }
         let _entry = accepted.get(0).unwrap();
         // ── Liquidity validation: flash loan manipulation prevention ────────────
@@ -3178,8 +3242,8 @@ impl PriceOracle {
     /// - `base_slash_amount`: Base penalty before liquidity multiplier
     ///
     /// # Errors
-    /// - `Err(Error::InvalidLiquidityThreshold)`: No threshold configured for asset
-    /// - `Err(Error::InsufficientStake)`: Provider doesn't have enough stake
+    /// - `Err(ContractError::InvalidLiquidityThreshold)`: No threshold configured for asset
+    /// - `Err(ContractError::InsufficientStake)`: Provider doesn't have enough stake
     ///
     /// # Penalty Tiers
     /// - **≥ 100% of threshold**: No penalty (1× multiplier)
@@ -3509,7 +3573,7 @@ impl PriceOracle {
         caller: Address,
         target_admin: Address,
         weight: u32,
-    ) -> Result<(), Error> {
+    ) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
         if crate::auth::_is_frozen(&env) {
@@ -3521,12 +3585,12 @@ impl PriceOracle {
         }
 
         if weight == 0 || weight > 100 {
-            return Err(Error::InvalidAdminWeight);
+            return Err(ContractError::InvalidAdminWeight);
         }
 
         // The target must be a registered admin.
         if !crate::auth::_is_authorized(&env, &target_admin) {
-            return Err(Error::NotAuthorized);
+            return Err(ContractError::NotAuthorized);
         }
 
         crate::auth::_set_admin_weight(&env, &target_admin, weight);
@@ -3552,7 +3616,7 @@ impl PriceOracle {
     /// `threshold` must be ≥ 1.  Only an authorized admin may call this.
     /// Once set, `execute_proposed_action` will sum voter weights and compare
     /// against this value instead of using the simple vote-count threshold.
-    pub fn set_weight_threshold(env: Env, caller: Address, threshold: u32) -> Result<(), Error> {
+    pub fn set_weight_threshold(env: Env, caller: Address, threshold: u32) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
         if crate::auth::_is_frozen(&env) {
@@ -3564,7 +3628,7 @@ impl PriceOracle {
         }
 
         if threshold == 0 {
-            return Err(Error::MultiSigValidationFailed);
+            return Err(ContractError::MultiSigValidationFailed);
         }
 
         crate::auth::_set_weight_threshold(&env, threshold);
@@ -4994,7 +5058,7 @@ impl PriceOracle {
         admin: Address,
         relayer: Address,
         missed_blocks: u32,
-    ) -> Result<i128, Error> {
+    ) -> Result<i128, ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
         if crate::auth::_is_frozen(&env) {
@@ -5016,7 +5080,7 @@ impl PriceOracle {
         env: Env,
         admin: Address,
         relayer: Address,
-    ) -> Result<bool, Error> {
+    ) -> Result<bool, ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
         if crate::auth::_is_frozen(&env) {
@@ -5037,7 +5101,7 @@ impl PriceOracle {
 
     /// Get the current multiplier that will scale future slash amounts for the
     /// relayer's consecutive missed blocks.
-    pub fn get_slashing_multiplier(env: Env, relayer: Address) -> Result<i128, Error> {
+    pub fn get_slashing_multiplier(env: Env, relayer: Address) -> Result<i128, ContractError> {
         crate::slashing::get_slash_multiplier(&env, &relayer)
     }
 
@@ -5101,12 +5165,12 @@ impl PriceOracle {
         env: Env,
         validator: Address,
         amount: i128,
-    ) -> Result<slashing::UnbondingRequest, Error> {
+    ) -> Result<slashing::UnbondingRequest, ContractError> {
         slashing::request_unbonding(&env, &validator, amount)
     }
 
     /// Release a queued validator stake withdrawal after the delay expires.
-    pub fn release_unbonded_stake(env: Env, validator: Address) -> Result<i128, Error> {
+    pub fn release_unbonded_stake(env: Env, validator: Address) -> Result<i128, ContractError> {
         slashing::release_unbonded_stake(&env, &validator)
     }
 

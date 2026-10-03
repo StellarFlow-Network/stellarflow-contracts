@@ -40,7 +40,7 @@ fn test_initialize_twice_fails() {
     client.initialize(&token_a, &token_b);
     let result = client.try_initialize(&token_a, &token_b);
     match result {
-        Err(Ok(e)) => assert_eq!(e, Error::AlreadyInitialized),
+        Err(Ok(e)) => assert_eq!(e, ContractError::AlreadyInitialized),
         other => panic!("expected AlreadyInitialized, got {:?}", other),
     }
 }
@@ -107,7 +107,7 @@ fn test_swap_preserves_invariant_and_respects_slippage() {
     // A stricter min_amount_out than what the pool can deliver must fail.
     let result = client.try_swap(&user, &token_a, &100_000, &999_999);
     match result {
-        Err(Ok(e)) => assert_eq!(e, Error::SlippageExceeded),
+        Err(Ok(e)) => assert_eq!(e, ContractError::SlippageExceeded),
         other => panic!("expected SlippageExceeded, got {:?}", other),
     }
 }
@@ -125,7 +125,7 @@ fn test_swap_with_invalid_token_fails() {
 
     let result = client.try_swap(&user, &stranger_token, &1_000, &0);
     match result {
-        Err(Ok(e)) => assert_eq!(e, Error::InvalidToken),
+        Err(Ok(e)) => assert_eq!(e, ContractError::InvalidToken),
         other => panic!("expected InvalidToken, got {:?}", other),
     }
 }
@@ -162,7 +162,7 @@ fn test_withdraw_more_than_owned_fails() {
 
     let result = client.try_withdraw(&user, &2_000_000);
     match result {
-        Err(Ok(e)) => assert_eq!(e, Error::InsufficientShares),
+        Err(Ok(e)) => assert_eq!(e, ContractError::InsufficientShares),
         other => panic!("expected InsufficientShares, got {:?}", other),
     }
 }
@@ -178,14 +178,14 @@ fn test_zero_amount_deposit_and_swap_fail() {
 
     let deposit_result = client.try_deposit(&user, &0, &1_000);
     match deposit_result {
-        Err(Ok(e)) => assert_eq!(e, Error::ZeroAmount),
+        Err(Ok(e)) => assert_eq!(e, ContractError::ZeroAmount),
         other => panic!("expected ZeroAmount, got {:?}", other),
     }
 
     client.deposit(&user, &1_000_000, &1_000_000);
     let swap_result = client.try_swap(&user, &token_a, &0, &0);
     match swap_result {
-        Err(Ok(e)) => assert_eq!(e, Error::ZeroAmount),
+        Err(Ok(e)) => assert_eq!(e, ContractError::ZeroAmount),
         other => panic!("expected ZeroAmount, got {:?}", other),
     }
 }
@@ -197,7 +197,7 @@ fn test_deposit_before_initialize_fails() {
 
     let result = client.try_deposit(&user, &1_000, &1_000);
     match result {
-        Err(Ok(e)) => assert_eq!(e, Error::NotInitialized),
+        Err(Ok(e)) => assert_eq!(e, ContractError::NotInitialized),
         other => panic!("expected NotInitialized, got {:?}", other),
     }
 }

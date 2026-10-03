@@ -181,39 +181,47 @@ mod tests {
         _client.initialize(&admin, &treasury);
 
         let node = Address::generate(&env);
-        env.storage().persistent().set(
-            &NodeProfileKey::ProfileByNode(node.clone()),
-            &crate::NodeProfile { node, rate: 100, confidence: 90, updated_at: 1 },
-        );
+        env.as_contract(&contract_id, || {
+            env.storage().persistent().set(
+                &NodeProfileKey::ProfileByNode(node.clone()),
+                &crate::NodeProfile { node, rate: 100, confidence: 90, updated_at: 1 },
+            );
+        });
 
-        assert!(verify_storage_ttl_bumps(&env).is_ok());
+        assert!(env.as_contract(&contract_id, || verify_storage_ttl_bumps(&env)).is_ok());
     }
 
     #[test]
     fn verifies_zero_loss_accounting_for_stake_registry() {
         let env = Env::default();
+        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
         let node_a = Address::generate(&env);
         let node_b = Address::generate(&env);
         let mut stakes = Map::new(&env);
         stakes.set(node_a.clone(), 100u64);
         stakes.set(node_b, 250u64);
 
-        env.storage().instance().set(&crate::STAKE_REGISTRY_KEY, &stakes);
-        env.storage().instance().set(&crate::TOTAL_STAKED_KEY, &350u64);
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&crate::STAKE_REGISTRY_KEY, &stakes);
+            env.storage().instance().set(&crate::TOTAL_STAKED_KEY, &350u64);
+        });
 
-        assert!(verify_zero_loss_accounting(&env).is_ok());
+        assert!(env.as_contract(&contract_id, || verify_zero_loss_accounting(&env)).is_ok());
     }
 
     #[test]
     fn verifies_contract_state_suite_aliases() {
         let env = Env::default();
+        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
         let node = Address::generate(&env);
         let mut stakes = Map::new(&env);
         stakes.set(node, 42u64);
-        env.storage().instance().set(&crate::STAKE_REGISTRY_KEY, &stakes);
-        env.storage().instance().set(&crate::TOTAL_STAKED_KEY, &42u64);
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&crate::STAKE_REGISTRY_KEY, &stakes);
+            env.storage().instance().set(&crate::TOTAL_STAKED_KEY, &42u64);
+        });
 
-        assert!(verify_contract_state(&env).is_ok());
-        assert!(assert_contract_state_sanity(&env).is_ok());
+        assert!(env.as_contract(&contract_id, || verify_contract_state(&env)).is_ok());
+        assert!(env.as_contract(&contract_id, || assert_contract_state_sanity(&env)).is_ok());
     }
 }

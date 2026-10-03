@@ -20,7 +20,7 @@ fn test_initialize() {
 }
 
 #[test]
-#[should_panic(expected = "Error(AlreadyInitialized)")]
+#[should_panic(expected = "ContractError(AlreadyInitialized)")]
 fn test_initialize_twice() {
     let env = Env::default();
     let contract_id = env.register_contract(None, RewardSplitter);
@@ -55,7 +55,7 @@ fn test_add_recipient() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Unauthorized)")]
+#[should_panic(expected = "ContractError(Unauthorized)")]
 fn test_add_recipient_unauthorized() {
     let env = Env::default();
     let contract_id = env.register_contract(None, RewardSplitter);
@@ -72,7 +72,7 @@ fn test_add_recipient_unauthorized() {
 }
 
 #[test]
-#[should_panic(expected = "Error(InvalidShare)")]
+#[should_panic(expected = "ContractError(InvalidShare)")]
 fn test_add_recipient_invalid_share_zero() {
     let env = Env::default();
     let contract_id = env.register_contract(None, RewardSplitter);
@@ -88,7 +88,7 @@ fn test_add_recipient_invalid_share_zero() {
 }
 
 #[test]
-#[should_panic(expected = "Error(InvalidShare)")]
+#[should_panic(expected = "ContractError(InvalidShare)")]
 fn test_add_recipient_invalid_share_exceeds_100() {
     let env = Env::default();
     let contract_id = env.register_contract(None, RewardSplitter);
@@ -104,7 +104,7 @@ fn test_add_recipient_invalid_share_exceeds_100() {
 }
 
 #[test]
-#[should_panic(expected = "Error(TotalSharesExceeded)")]
+#[should_panic(expected = "ContractError(TotalSharesExceeded)")]
 fn test_add_recipient_total_exceeded() {
     let env = Env::default();
     let contract_id = env.register_contract(None, RewardSplitter);
@@ -166,7 +166,7 @@ fn test_update_recipient_share() {
 }
 
 #[test]
-#[should_panic(expected = "Error(TotalSharesExceeded)")]
+#[should_panic(expected = "ContractError(TotalSharesExceeded)")]
 fn test_update_recipient_share_exceeds_total() {
     let env = Env::default();
     let contract_id = env.register_contract(None, RewardSplitter);
@@ -254,7 +254,7 @@ fn test_distribute() {
 }
 
 #[test]
-#[should_panic(expected = "Error(ZeroAmount)")]
+#[should_panic(expected = "ContractError(ZeroAmount)")]
 fn test_distribute_zero_amount() {
     let env = Env::default();
     let contract_id = env.register_contract(None, RewardSplitter);
@@ -271,7 +271,7 @@ fn test_distribute_zero_amount() {
 }
 
 #[test]
-#[should_panic(expected = "Error(NoRecipients)")]
+#[should_panic(expected = "ContractError(NoRecipients)")]
 fn test_distribute_no_recipients() {
     let env = Env::default();
     let contract_id = env.register_contract(None, RewardSplitter);
@@ -335,7 +335,7 @@ fn test_reset_parameters() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Unauthorized)")]
+#[should_panic(expected = "ContractError(Unauthorized)")]
 fn test_reset_parameters_unauthorized() {
     let env = Env::default();
     let contract_id = env.register_contract(None, RewardSplitter);
@@ -374,7 +374,7 @@ fn test_propose_action() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Unauthorized)")]
+#[should_panic(expected = "ContractError(Unauthorized)")]
 fn test_propose_action_unauthorized() {
     let env = Env::default();
     let contract_id = env.register_contract(None, RewardSplitter);
@@ -420,7 +420,7 @@ fn test_advance_action() {
 }
 
 #[test]
-#[should_panic(expected = "Error(CooldownNotExpired)")]
+#[should_panic(expected = "ContractError(CooldownNotExpired)")]
 fn test_advance_action_too_soon() {
     let env = Env::default();
     let contract_id = env.register_contract(None, RewardSplitter);
@@ -539,7 +539,7 @@ fn test_configure_cooldown_stage() {
 }
 
 #[test]
-#[should_panic(expected = "Error(InvalidStage)")]
+#[should_panic(expected = "ContractError(InvalidStage)")]
 fn test_configure_cooldown_stage_invalid() {
     let env = Env::default();
     let contract_id = env.register_contract(None, RewardSplitter);

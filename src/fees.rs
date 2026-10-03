@@ -272,7 +272,7 @@ pub fn trigger_treasury_diversification(
             env,
             crate::events::EV_TREASURY_DIVERSIFICATION_TRIGGERED,
             &[&asset_symbol],
-            &plan,
+            plan.clone(),
         )
         .ok();
     }
@@ -1156,6 +1156,7 @@ mod tests {
 
     #[test]
     fn corridor_weight_profile_is_isolated_from_fee_pool() {
+
         let (_, client, admin, _) = setup();
         let asset = 3897123275;
 
@@ -1175,7 +1176,8 @@ mod tests {
         let stored_profile = client.get_corridor_weight(&asset);
         assert_eq!(stored_profile.base_weight, 70);
         assert_eq!(stored_profile.dynamic_weight, 30);
-    }
+    
+}
 
     #[test]
     fn non_admin_cannot_edit_corridor_weight_profile() {

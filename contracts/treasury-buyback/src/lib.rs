@@ -5,16 +5,26 @@ use soroban_sdk::{contract, contractimpl, contracttype, contracterror, token, Ad
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
-pub enum BuybackError {
+pub enum ContractError {
+    /// Recovery steps: Inspect the state for AlreadyInitialized and retry with valid inputs or proper conditions.
     AlreadyInitialized = 1,
+    /// Recovery steps: Inspect the state for NotInitialized and retry with valid inputs or proper conditions.
     NotInitialized = 2,
+    /// Recovery steps: Inspect the state for NotAdmin and retry with valid inputs or proper conditions.
     NotAdmin = 3,
+    /// Recovery steps: Inspect the state for InsufficientFees and retry with valid inputs or proper conditions.
     InsufficientFees = 4,
+    /// Recovery steps: Inspect the state for InvalidAmount and retry with valid inputs or proper conditions.
     InvalidAmount = 5,
+    /// Recovery steps: Inspect the state for Overflow and retry with valid inputs or proper conditions.
     Overflow = 6,
+    /// Recovery steps: Inspect the state for PoolAlreadyRegistered and retry with valid inputs or proper conditions.
     PoolAlreadyRegistered = 7,
+    /// Recovery steps: Inspect the state for PoolNotFound and retry with valid inputs or proper conditions.
     PoolNotFound = 8,
+    /// Recovery steps: Inspect the state for InvalidRatio and retry with valid inputs or proper conditions.
     InvalidRatio = 9,
+    /// Recovery steps: Inspect the state for NotAuthorized and retry with valid inputs or proper conditions.
     NotAuthorized = 10,
 }
 
@@ -65,9 +75,9 @@ impl TreasuryBuybackContract {
     /// # Parameters
     /// - `admin`: Admin address with management privileges
     /// - `treasury`: Protocol treasury address that holds LP shares
-    pub fn initialize(env: Env, admin: Address, treasury: Address) -> Result<(), BuybackError> {
+    pub fn initialize(env: Env, admin: Address, treasury: Address) -> Result<(), ContractError> {
         if env.storage().instance().has(&DataKey::Admin) {
-            return Err(BuybackError::AlreadyInitialized);
+            return Err(ContractError::AlreadyInitialized);
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
@@ -82,14 +92,14 @@ impl TreasuryBuybackContract {
         env: Env,
         admin: Address,
         keeper: Address,
-    ) -> Result<(), BuybackError> {
+    ) -> Result<(), ContractError> {
         let stored_admin: Address = env
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(BuybackError::NotInitialized)?;
+            .ok_or(ContractError::NotInitialized)?;
         if admin != stored_admin {
-            return Err(BuybackError::NotAdmin);
+            return Err(ContractError::NotAdmin);
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Keeper, &keeper);
@@ -115,19 +125,19 @@ impl TreasuryBuybackContract {
         admin: Address,
         token: Address,
         amount: i128,
-    ) -> Result<FeeBalance, BuybackError> {
+    ) -> Result<FeeBalance, ContractError> {
         let stored_admin: Address = env
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(BuybackError::NotInitialized)?;
+            .ok_or(ContractError::NotInitialized)?;
         if admin != stored_admin {
-            return Err(BuybackError::NotAdmin);
+            return Err(ContractError::NotAdmin);
         }
         admin.require_auth();
 
         if amount <= 0 {
-            return Err(BuybackError::InvalidAmount);
+            return Err(ContractError::InvalidAmount);
         }
 
         let current_ledger = env.ledger().sequence();
@@ -152,7 +162,7 @@ impl TreasuryBuybackContract {
         let new_amount = existing
             .amount
             .checked_add(amount)
-            .ok_or(BuybackError::Overflow)?;
+            .ok_or(ContractError::Overflow)?;
 
         let updated = FeeBalance {
             token: token.clone(),
@@ -179,17 +189,17 @@ impl TreasuryBuybackContract {
         caller: Address,
         token: Address,
         sources: Vec<Address>,
-    ) -> Result<i128, BuybackError> {
+    ) -> Result<i128, ContractError> {
         let stored_admin: Address = env
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(BuybackError::NotInitialized)?;
+            .ok_or(ContractError::NotInitialized)?;
         let keeper: Option<Address> = env.storage().instance().get(&DataKey::Keeper);
         let is_authorized = caller == stored_admin
             || keeper.map(|k| caller == k).unwrap_or(false);
         if !is_authorized {
-            return Err(BuybackError::NotAuthorized);
+            return Err(ContractError::NotAuthorized);
         }
         caller.require_auth();
 
@@ -197,7 +207,7 @@ impl TreasuryBuybackContract {
             .storage()
             .instance()
             .get(&DataKey::Treasury)
-            .ok_or(BuybackError::NotInitialized)?;
+            .ok_or(ContractError::NotInitialized)?;
 
         let token_client = token::Client::new(&env, &token);
         let spender = env.current_contract_address();
@@ -209,7 +219,7 @@ impl TreasuryBuybackContract {
                 let _ = token_client.transfer_from(&spender, &source, &treasury, &balance);
                 total_swept = total_swept
                     .checked_add(balance)
-                    .ok_or(BuybackError::Overflow)?;
+                    .ok_or(ContractError::Overflow)?;
             }
         }
 
@@ -229,7 +239,7 @@ impl TreasuryBuybackContract {
         caller: Address,
         token: Address,
         sources: Vec<Address>,
-    ) -> Result<i128, BuybackError> {
+    ) -> Result<i128, ContractError> {
         Self::sweep_assets(env, caller, token, sources)
     }
 
@@ -260,19 +270,19 @@ impl TreasuryBuybackContract {
         pool_id: soroban_sdk::BytesN<32>,
         fee_token: Address,
         swap_amount: i128,
-    ) -> Result<BuybackRecord, BuybackError> {
+    ) -> Result<BuybackRecord, ContractError> {
         let stored_admin: Address = env
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(BuybackError::NotInitialized)?;
+            .ok_or(ContractError::NotInitialized)?;
         if admin != stored_admin {
-            return Err(BuybackError::NotAdmin);
+            return Err(ContractError::NotAdmin);
         }
         admin.require_auth();
 
         if swap_amount <= 0 {
-            return Err(BuybackError::InvalidAmount);
+            return Err(ContractError::InvalidAmount);
         }
 
         // Verify fee balance is sufficient
@@ -281,10 +291,10 @@ impl TreasuryBuybackContract {
             .storage()
             .persistent()
             .get(&fee_key)
-            .ok_or(BuybackError::InsufficientFees)?;
+            .ok_or(ContractError::InsufficientFees)?;
 
         if fee_balance.amount < swap_amount {
-            return Err(BuybackError::InsufficientFees);
+            return Err(ContractError::InsufficientFees);
         }
 
         // Get pool configuration
@@ -293,7 +303,7 @@ impl TreasuryBuybackContract {
             .storage()
             .persistent()
             .get(&pool_key)
-            .ok_or(BuybackError::PoolNotFound)?;
+            .ok_or(ContractError::PoolNotFound)?;
 
         // Calculate optimal swap to balance token pair ratio
         let current_ledger = env.ledger().sequence();
@@ -303,7 +313,7 @@ impl TreasuryBuybackContract {
         let is_token_b = fee_token == pool.token_b;
 
         if !is_token_a && !is_token_b {
-            return Err(BuybackError::InvalidAmount);
+            return Err(ContractError::InvalidAmount);
         }
 
         // Calculate optimal swap amounts based on pool ratio
@@ -315,7 +325,7 @@ impl TreasuryBuybackContract {
             let amount_b = if pool.ratio_a_bps > 0 {
                 (swap_amount * (10000 - pool.ratio_a_bps as i128)) / (pool.ratio_a_bps as i128)
             } else {
-                return Err(BuybackError::InvalidRatio);
+                return Err(ContractError::InvalidRatio);
             };
             (amount_a, amount_b)
         } else {
@@ -324,7 +334,7 @@ impl TreasuryBuybackContract {
             let amount_a = if pool.ratio_a_bps < 10000 {
                 (swap_amount * (pool.ratio_a_bps as i128)) / (10000 - pool.ratio_a_bps as i128)
             } else {
-                return Err(BuybackError::InvalidRatio);
+                return Err(ContractError::InvalidRatio);
             };
             (amount_a, amount_b)
         };
@@ -341,7 +351,7 @@ impl TreasuryBuybackContract {
             .storage()
             .instance()
             .get(&DataKey::Treasury)
-            .ok_or(BuybackError::NotInitialized)?;
+            .ok_or(ContractError::NotInitialized)?;
 
         let lp_token_client = token::Client::new(&env, &pool.lp_token);
         // In production, this would transfer LP tokens from the pool contract
@@ -354,7 +364,7 @@ impl TreasuryBuybackContract {
             .unwrap_or(0);
         let new_treasury_lp = current_treasury_lp
             .checked_add(lp_shares)
-            .ok_or(BuybackError::Overflow)?;
+            .ok_or(ContractError::Overflow)?;
         env.storage().persistent().set(&treasury_lp_key, &new_treasury_lp);
 
         let record = BuybackRecord {
@@ -397,24 +407,24 @@ impl TreasuryBuybackContract {
         token_b: Address,
         lp_token: Address,
         ratio_a_bps: u32,
-    ) -> Result<LiquidityPool, BuybackError> {
+    ) -> Result<LiquidityPool, ContractError> {
         let stored_admin: Address = env
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(BuybackError::NotInitialized)?;
+            .ok_or(ContractError::NotInitialized)?;
         if admin != stored_admin {
-            return Err(BuybackError::NotAdmin);
+            return Err(ContractError::NotAdmin);
         }
         admin.require_auth();
 
         if ratio_a_bps == 0 || ratio_a_bps >= 10000 {
-            return Err(BuybackError::InvalidRatio);
+            return Err(ContractError::InvalidRatio);
         }
 
         let pool_key = PoolKey(pool_id.clone());
         if env.storage().persistent().has(&pool_key) {
-            return Err(BuybackError::PoolAlreadyRegistered);
+            return Err(ContractError::PoolAlreadyRegistered);
         }
 
         let pool = LiquidityPool {
@@ -596,7 +606,7 @@ mod tests {
 
         client.initialize(&admin, &treasury);
         let result = client.try_collect_fees(&admin, &token, &0);
-        assert_eq!(result, Err(Ok(BuybackError::InvalidAmount)));
+        assert_eq!(result, Err(Ok(ContractError::InvalidAmount)));
     }
 
     #[test]
@@ -612,7 +622,7 @@ mod tests {
 
         let pool_id = soroban_sdk::BytesN::<32>::from_array(&env, &[1u8; 32]);
         let result = client.try_register_pool(&admin, &pool_id, &token_a, &token_b, &lp_token, &0);
-        assert_eq!(result, Err(Ok(BuybackError::InvalidRatio)));
+        assert_eq!(result, Err(Ok(ContractError::InvalidRatio)));
     }
 
     #[test]

@@ -88,16 +88,6 @@ pub struct EmergencyOverrideConfig {
     pub enabled: bool,
 }
 
-impl Default for EmergencyOverrideConfig {
-    fn default() -> Self {
-        Self {
-            emergency_signers: Vec::new(env),
-            threshold_bps: DEFAULT_EMERGENCY_OVERRIDE_THRESHOLD_BPS,
-            enabled: true,
-        }
-    }
-}
-
 /// Vote record for emergency timelock override.
 #[contracttype]
 #[derive(Clone, Debug)]

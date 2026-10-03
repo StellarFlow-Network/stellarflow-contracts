@@ -1,4 +1,4 @@
-use crate::median::{calculate_median, MedianError};
+use crate::median::{calculate_median, ContractError};
 use soroban_sdk::{contracttype, Address, Env, String, Vec};
 
 use crate::{ContractError, Error};
@@ -77,7 +77,7 @@ pub fn calculate_slashing_bps(deviation_bps: u128) -> u32 {
 pub fn analyze_deviation_against_finalized_median(
     submitted_price: i128,
     consensus_prices: Vec<i128>,
-) -> Result<DeviationAnalysis, MedianError> {
+) -> Result<DeviationAnalysis, ContractError> {
     let finalized_median_price = calculate_median(consensus_prices)?;
     let deviation_bps =
         calculate_price_deviation_bps(submitted_price, finalized_median_price).unwrap_or(0);
@@ -130,23 +130,23 @@ pub fn request_unbonding(
     env: &Env,
     validator: &Address,
     amount: i128,
-) -> Result<UnbondingRequest, Error> {
+) -> Result<UnbondingRequest, ContractError> {
     if amount <= 0 {
-        return Err(Error::InvalidStakeAmount);
+        return Err(ContractError::InvalidStakeAmount);
     }
 
     validator.require_auth();
 
     if let Some(existing) = get_unbonding_request(env, validator) {
         if !existing.released {
-            return Err(Error::UnbondingAlreadyQueued);
+            return Err(ContractError::UnbondingAlreadyQueued);
         }
     }
 
     let requested_ledger = env.ledger().sequence();
     let release_ledger = requested_ledger
         .checked_add(MIN_UNBONDING_DELAY_LEDGERS)
-        .ok_or(Error::LedgerSequenceOverflow)?;
+        .ok_or(ContractError::LedgerSequenceOverflow)?;
     let request = UnbondingRequest {
         validator: validator.clone(),
         amount,
@@ -170,7 +170,7 @@ pub fn request_unbonding(
     Ok(request)
 }
 
-pub fn release_unbonded_stake(env: &Env, validator: &Address) -> Result<i128, Error> {
+pub fn release_unbonded_stake(env: &Env, validator: &Address) -> Result<i128, ContractError> {
     validator.require_auth();
 
     let key = DataKey::Unbonding(validator.clone());
@@ -178,15 +178,15 @@ pub fn release_unbonded_stake(env: &Env, validator: &Address) -> Result<i128, Er
         .storage()
         .persistent()
         .get::<DataKey, UnbondingRequest>(&key)
-        .ok_or(Error::UnbondingRequestNotFound)?;
+        .ok_or(ContractError::UnbondingRequestNotFound)?;
 
     if request.released {
-        return Err(Error::UnbondingAlreadyReleased);
+        return Err(ContractError::UnbondingAlreadyReleased);
     }
 
     let current_ledger = env.ledger().sequence();
     if current_ledger < request.release_ledger {
-        return Err(Error::UnbondingDelayActive);
+        return Err(ContractError::UnbondingDelayActive);
     }
 
     request.released = true;
@@ -212,7 +212,7 @@ pub fn report_missed_blocks(
     env: &Env,
     relayer: &Address,
     missed_blocks: u32,
-) -> Result<i128, Error> {
+) -> Result<i128, ContractError> {
     let current = env
         .storage()
         .persistent()
@@ -228,7 +228,7 @@ pub fn report_missed_blocks(
     Ok(get_slash_multiplier(env, relayer)?)
 }
 
-pub fn report_successful_uptime(env: &Env, relayer: &Address) -> Result<bool, Error> {
+pub fn report_successful_uptime(env: &Env, relayer: &Address) -> Result<bool, ContractError> {
     env.storage()
         .persistent()
         .remove(&crate::types::DataKey::ProviderConsecutiveMissedBlocks(
@@ -250,7 +250,7 @@ pub fn get_consecutive_missed_blocks(env: &Env, relayer: &Address) -> u32 {
         .unwrap_or(0)
 }
 
-pub fn get_slash_multiplier(env: &Env, relayer: &Address) -> Result<i128, Error> {
+pub fn get_slash_multiplier(env: &Env, relayer: &Address) -> Result<i128, ContractError> {
     let missed = get_consecutive_missed_blocks(env, relayer);
     let multiplier = 1_i128 + (missed / 3) as i128;
     Ok(multiplier.min(8))
@@ -434,7 +434,7 @@ mod tests {
 
             assert_eq!(
                 release_unbonded_stake(&env, &validator),
-                Err(Error::UnbondingDelayActive)
+                Err(ContractError::UnbondingDelayActive)
             );
         });
     }
@@ -464,7 +464,7 @@ mod tests {
 
             assert_eq!(
                 request_unbonding(&env, &validator, 700),
-                Err(Error::UnbondingAlreadyQueued)
+                Err(ContractError::UnbondingAlreadyQueued)
             );
         });
     }

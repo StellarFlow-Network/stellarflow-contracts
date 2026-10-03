@@ -172,7 +172,7 @@ pub fn set_slippage_config(
     env: &Env,
     _admin: Address, // TODO: Add admin authorization check
     config: SlippageConfig,
-) -> Result<(), Error> {
+) -> Result<(), ContractError> {
     // Validate tolerance bounds
     validate_slippage_tolerance(config.base_tolerance_bps)?;
     validate_slippage_tolerance(config.min_tolerance_bps)?;
@@ -180,30 +180,30 @@ pub fn set_slippage_config(
 
     // Ensure logical ordering
     if config.base_tolerance_bps < config.min_tolerance_bps {
-        return Err(Error::InvalidSlippageTolerance);
+        return Err(ContractError::InvalidSlippageTolerance);
     }
 
     if config.base_tolerance_bps > config.max_tolerance_bps {
-        return Err(Error::InvalidSlippageTolerance);
+        return Err(ContractError::InvalidSlippageTolerance);
     }
 
     if config.min_tolerance_bps > config.max_tolerance_bps {
-        return Err(Error::InvalidSlippageTolerance);
+        return Err(ContractError::InvalidSlippageTolerance);
     }
 
     // Validate volatility multiplier
     if config.volatility_multiplier > MAX_VOLATILITY_MULTIPLIER {
-        return Err(Error::InvalidSlippageTolerance);
+        return Err(ContractError::InvalidSlippageTolerance);
     }
 
     // Validate EMA alpha
     if config.ema_alpha_bps < MIN_EMA_ALPHA_BPS || config.ema_alpha_bps > MAX_EMA_ALPHA_BPS {
-        return Err(Error::InvalidSlippageTolerance);
+        return Err(ContractError::InvalidSlippageTolerance);
     }
 
     // Validate liquidity threshold
     if config.liquidity_threshold < 0 {
-        return Err(Error::InvalidLiquidityThreshold);
+        return Err(ContractError::InvalidLiquidityThreshold);
     }
 
     // Store configuration
@@ -260,9 +260,9 @@ fn default_slippage_config() -> SlippageConfig {
 /// Returns an error if:
 /// - `new_price` is zero or negative
 /// - Arithmetic overflow occurs during calculation
-pub fn update_volatility_metrics(env: &Env, asset: Symbol, new_price: i128) -> Result<(), Error> {
+pub fn update_volatility_metrics(env: &Env, asset: Symbol, new_price: i128) -> Result<(), ContractError> {
     if new_price <= 0 {
-        return Err(Error::InvalidPrice);
+        return Err(ContractError::InvalidPrice);
     }
 
     let config = get_slippage_config(env);
@@ -283,12 +283,12 @@ pub fn update_volatility_metrics(env: &Env, asset: Symbol, new_price: i128) -> R
             let new_ema = if existing.price_update_count > 0 {
                 let weighted_new = price_change_bps
                     .checked_mul(alpha)
-                    .ok_or(Error::PriceMathOverflow)?;
+                    .ok_or(ContractError::PriceMathOverflow)?;
 
                 let weighted_old = existing
                     .ema_volatility_bps
                     .checked_mul(BPS_SCALE - alpha)
-                    .ok_or(Error::PriceMathOverflow)?;
+                    .ok_or(ContractError::PriceMathOverflow)?;
 
                 (weighted_new + weighted_old) / BPS_SCALE
             } else {
@@ -376,7 +376,7 @@ pub fn calculate_dynamic_slippage(
     from_asset: Symbol,
     to_asset: Symbol,
     liquidity: i128,
-) -> Result<u32, Error> {
+) -> Result<u32, ContractError> {
     let config = get_slippage_config(env);
 
     // Get volatility for both assets
@@ -390,14 +390,14 @@ pub fn calculate_dynamic_slippage(
     // Formula: base * (10_000 + volatility * multiplier) / 10_000
     let volatility_factor = max_volatility
         .checked_mul(config.volatility_multiplier)
-        .ok_or(Error::PriceMathOverflow)?;
+        .ok_or(ContractError::PriceMathOverflow)?;
 
     let adjusted_tolerance = config
         .base_tolerance_bps
         .checked_mul(BPS_SCALE + volatility_factor)
-        .ok_or(Error::PriceMathOverflow)?
+        .ok_or(ContractError::PriceMathOverflow)?
         .checked_div(BPS_SCALE)
-        .ok_or(Error::PriceMathOverflow)?;
+        .ok_or(ContractError::PriceMathOverflow)?;
 
     // Apply liquidity penalty if below threshold
     let total_tolerance =
@@ -405,22 +405,22 @@ pub fn calculate_dynamic_slippage(
             // Calculate liquidity as percentage of threshold
             let liquidity_ratio = (liquidity
                 .checked_mul(BPS_SCALE as i128)
-                .ok_or(Error::PriceMathOverflow)?)
+                .ok_or(ContractError::PriceMathOverflow)?)
             .checked_div(config.liquidity_threshold)
-            .ok_or(Error::PriceMathOverflow)? as u32;
+            .ok_or(ContractError::PriceMathOverflow)? as u32;
 
             // Penalty increases as liquidity decreases
             // 20 bps per 10% below threshold
             let deficit_pct = BPS_SCALE.saturating_sub(liquidity_ratio);
             let liquidity_penalty = deficit_pct
                 .checked_mul(LIQUIDITY_PENALTY_PER_10PCT)
-                .ok_or(Error::PriceMathOverflow)?
+                .ok_or(ContractError::PriceMathOverflow)?
                 .checked_div(1000) // Convert from per-10% to actual
-                .ok_or(Error::PriceMathOverflow)?;
+                .ok_or(ContractError::PriceMathOverflow)?;
 
             adjusted_tolerance
                 .checked_add(liquidity_penalty)
-                .ok_or(Error::PriceMathOverflow)?
+                .ok_or(ContractError::PriceMathOverflow)?
         } else {
             adjusted_tolerance
         };
@@ -452,23 +452,23 @@ pub fn calculate_min_output_with_slippage(
     amount_in: i128,
     rate: i128,
     slippage_bps: u32,
-) -> Result<i128, Error> {
+) -> Result<i128, ContractError> {
     validate_slippage_tolerance(slippage_bps)?;
 
     // Calculate expected output
     let expected_output = amount_in
         .checked_mul(rate)
-        .ok_or(Error::PriceMathOverflow)?
+        .ok_or(ContractError::PriceMathOverflow)?
         .checked_div(SCALE_FACTOR)
-        .ok_or(Error::PriceMathOverflow)?;
+        .ok_or(ContractError::PriceMathOverflow)?;
 
     // Apply slippage tolerance
     let slippage_factor = (BPS_SCALE - slippage_bps) as i128;
     let min_output = expected_output
         .checked_mul(slippage_factor)
-        .ok_or(Error::PriceMathOverflow)?
+        .ok_or(ContractError::PriceMathOverflow)?
         .checked_div(BPS_SCALE as i128)
-        .ok_or(Error::PriceMathOverflow)?;
+        .ok_or(ContractError::PriceMathOverflow)?;
 
     Ok(min_output)
 }
@@ -481,9 +481,9 @@ pub fn calculate_min_output_with_slippage(
 ///
 /// # Returns
 /// Slippage in basis points
-fn calculate_actual_slippage_bps(expected_output: i128, actual_output: i128) -> Result<u32, Error> {
+fn calculate_actual_slippage_bps(expected_output: i128, actual_output: i128) -> Result<u32, ContractError> {
     if expected_output <= 0 {
-        return Err(Error::InvalidPrice);
+        return Err(ContractError::InvalidPrice);
     }
 
     calculate_rate_deviation_bps(expected_output, actual_output)
@@ -518,7 +518,7 @@ fn calculate_actual_slippage_bps(expected_output: i128, actual_output: i128) -> 
 /// Actual output amount if swap succeeds
 ///
 /// # Errors
-/// Returns `Error::SlippageToleranceExceeded` if output is below acceptable minimum
+/// Returns `ContractError::SlippageToleranceExceeded` if output is below acceptable minimum
 pub fn execute_swap_with_dynamic_slippage(
     env: &Env,
     sender: Address,
@@ -529,29 +529,29 @@ pub fn execute_swap_with_dynamic_slippage(
     liquidity: i128,
     from_price: i128,
     to_price: i128,
-) -> Result<i128, Error> {
+) -> Result<i128, ContractError> {
     // Validate inputs
     if amount_in <= 0 {
-        return Err(Error::InvalidPrice);
+        return Err(ContractError::InvalidPrice);
     }
 
     if from_price <= 0 || to_price <= 0 {
-        return Err(Error::InvalidPrice);
+        return Err(ContractError::InvalidPrice);
     }
 
     // Calculate exchange rate
     let rate = from_price
         .checked_mul(SCALE_FACTOR)
-        .ok_or(Error::PriceMathOverflow)?
+        .ok_or(ContractError::PriceMathOverflow)?
         .checked_div(to_price)
-        .ok_or(Error::PriceMathOverflow)?;
+        .ok_or(ContractError::PriceMathOverflow)?;
 
     // Calculate expected output
     let expected_output = amount_in
         .checked_mul(rate)
-        .ok_or(Error::PriceMathOverflow)?
+        .ok_or(ContractError::PriceMathOverflow)?
         .checked_div(SCALE_FACTOR)
-        .ok_or(Error::PriceMathOverflow)?;
+        .ok_or(ContractError::PriceMathOverflow)?;
 
     // Calculate dynamic slippage tolerance
     let dynamic_slippage_bps =
@@ -573,9 +573,9 @@ pub fn execute_swap_with_dynamic_slippage(
         // Manual was stricter - back-calculate what slippage that represents
         let manual_factor = manual_min_out
             .checked_mul(BPS_SCALE as i128)
-            .ok_or(Error::PriceMathOverflow)?
+            .ok_or(ContractError::PriceMathOverflow)?
             .checked_div(expected_output)
-            .ok_or(Error::PriceMathOverflow)? as u32;
+            .ok_or(ContractError::PriceMathOverflow)? as u32;
         BPS_SCALE.saturating_sub(manual_factor)
     } else {
         dynamic_slippage_bps
@@ -600,7 +600,7 @@ pub fn execute_swap_with_dynamic_slippage(
             0, // No fee charged on rejected swaps
         );
 
-        return Err(Error::SlippageToleranceExceeded);
+        return Err(ContractError::SlippageToleranceExceeded);
     }
 
     // Update volatility metrics for both assets
@@ -641,7 +641,7 @@ pub fn execute_swap_with_dynamic_slippage(
 /// Actual output amount if swap succeeds
 ///
 /// # Errors
-/// Returns `Error::SlippageToleranceExceeded` if output is below acceptable minimum
+/// Returns `ContractError::SlippageToleranceExceeded` if output is below acceptable minimum
 pub fn execute_swap_with_manual_slippage(
     env: &Env,
     sender: Address,
@@ -651,32 +651,32 @@ pub fn execute_swap_with_manual_slippage(
     manual_slippage_bps: u32,
     from_price: i128,
     to_price: i128,
-) -> Result<i128, Error> {
+) -> Result<i128, ContractError> {
     // Validate slippage tolerance
     validate_slippage_tolerance(manual_slippage_bps)?;
 
     // Validate inputs
     if amount_in <= 0 {
-        return Err(Error::InvalidPrice);
+        return Err(ContractError::InvalidPrice);
     }
 
     if from_price <= 0 || to_price <= 0 {
-        return Err(Error::InvalidPrice);
+        return Err(ContractError::InvalidPrice);
     }
 
     // Calculate exchange rate
     let rate = from_price
         .checked_mul(SCALE_FACTOR)
-        .ok_or(Error::PriceMathOverflow)?
+        .ok_or(ContractError::PriceMathOverflow)?
         .checked_div(to_price)
-        .ok_or(Error::PriceMathOverflow)?;
+        .ok_or(ContractError::PriceMathOverflow)?;
 
     // Calculate expected and minimum output
     let expected_output = amount_in
         .checked_mul(rate)
-        .ok_or(Error::PriceMathOverflow)?
+        .ok_or(ContractError::PriceMathOverflow)?
         .checked_div(SCALE_FACTOR)
-        .ok_or(Error::PriceMathOverflow)?;
+        .ok_or(ContractError::PriceMathOverflow)?;
 
     let min_output = calculate_min_output_with_slippage(amount_in, rate, manual_slippage_bps)?;
 
@@ -697,7 +697,7 @@ pub fn execute_swap_with_manual_slippage(
             0, // No fee charged on rejected swaps
         );
 
-        return Err(Error::SlippageToleranceExceeded);
+        return Err(ContractError::SlippageToleranceExceeded);
     }
 
     // Update volatility metrics

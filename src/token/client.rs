@@ -102,7 +102,7 @@ impl SAClient {
 
     /// Approve `spender` to spend up to `amount` from `owner`'s balance.
     pub fn approve(&self, owner: &Address, spender: &Address, amount: &i128) {
-        self.client.approve(owner, spender, amount);
+        self.client.approve(owner, spender, amount, &0);
     }
 
     /// Return the allowance granted by `owner` to `spender`.
@@ -181,7 +181,7 @@ impl SAClient {
         reference_decimals: u32,
     ) {
         let native_amount = normalize_amount(amount, reference_decimals, self.decimals());
-        self.client.approve(owner, spender, &native_amount);
+        self.client.approve(owner, spender, &native_amount, &0);
     }
 }
 

@@ -13,7 +13,7 @@
 //!
 //! 1. **Mandatory 72-hour cooldown.** Two consecutive weight modifications must
 //!    be at least [`WEIGHT_ROTATION_COOLDOWN_SECONDS`] (72h) apart. A rotation
-//!    requested too early is rejected with [`GuardError::CooldownNotElapsed`].
+//!    requested too early is rejected with [`ContractError::CooldownNotElapsed`].
 //! 2. **The old weights stay valid until the new configuration goes live.**
 //!    A rotation is *staged*, not applied immediately. It carries an
 //!    `effective_at` timestamp (request time + 72h). Until that timestamp is
@@ -58,32 +58,45 @@ pub const SIGNER_WEIGHTS_UPDATED: &str = "SignerWeightsUpdated";
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
-pub enum GuardError {
+pub enum ContractError {
     /// `initialize` has already been called.
+    /// Recovery steps: Inspect the state for AlreadyInitialized and retry with valid inputs or proper conditions.
     AlreadyInitialized = 1,
     /// The contract has not been initialised yet.
+    /// Recovery steps: Inspect the state for NotInitialized and retry with valid inputs or proper conditions.
     NotInitialized = 2,
     /// The caller is not the registered admin.
+    /// Recovery steps: Inspect the state for NotAdmin and retry with valid inputs or proper conditions.
     NotAdmin = 3,
     /// A modification was requested before the 72h cooldown elapsed.
+    /// Recovery steps: Inspect the state for CooldownNotElapsed and retry with valid inputs or proper conditions.
     CooldownNotElapsed = 4,
     /// A rotation is already staged and must be applied first.
+    /// Recovery steps: Inspect the state for RotationAlreadyPending and retry with valid inputs or proper conditions.
     RotationAlreadyPending = 5,
     /// No rotation is currently staged.
+    /// Recovery steps: Inspect the state for NoPendingConfiguration and retry with valid inputs or proper conditions.
     NoPendingConfiguration = 6,
     /// `apply_pending_weights` was called before `effective_at`.
+    /// Recovery steps: Inspect the state for ActivationNotReached and retry with valid inputs or proper conditions.
     ActivationNotReached = 7,
     /// The submitted configuration contains no signers.
+    /// Recovery steps: Inspect the state for EmptyWeightSet and retry with valid inputs or proper conditions.
     EmptyWeightSet = 8,
     /// A signer was given a zero weight.
+    /// Recovery steps: Inspect the state for ZeroWeight and retry with valid inputs or proper conditions.
     ZeroWeight = 9,
     /// The same public key appears twice in the submitted configuration.
+    /// Recovery steps: Inspect the state for DuplicateSigner and retry with valid inputs or proper conditions.
     DuplicateSigner = 10,
     /// `threshold` is zero or exceeds the total configured weight.
+    /// Recovery steps: Inspect the state for InvalidThreshold and retry with valid inputs or proper conditions.
     InvalidThreshold = 11,
     /// The approvals did not reach the configured threshold.
+    /// Recovery steps: Inspect the state for ThresholdNotMet and retry with valid inputs or proper conditions.
     ThresholdNotMet = 12,
     /// Summing the configured weights overflowed `u32`.
+    /// Recovery steps: Inspect the state for Overflow and retry with valid inputs or proper conditions.
     Overflow = 13,
 }
 
@@ -147,18 +160,18 @@ pub enum DataKey {
 #[contract]
 pub struct MultisigWeightGuard;
 
-fn load_admin(env: &Env) -> Result<Address, GuardError> {
+fn load_admin(env: &Env) -> Result<Address, ContractError> {
     env.storage()
         .instance()
         .get(&DataKey::Admin)
-        .ok_or(GuardError::NotInitialized)
+        .ok_or(ContractError::NotInitialized)
 }
 
-fn load_active(env: &Env) -> Result<WeightConfiguration, GuardError> {
+fn load_active(env: &Env) -> Result<WeightConfiguration, ContractError> {
     env.storage()
         .instance()
         .get(&DataKey::Active)
-        .ok_or(GuardError::NotInitialized)
+        .ok_or(ContractError::NotInitialized)
 }
 
 fn load_pending(env: &Env) -> Option<WeightConfiguration> {
@@ -185,26 +198,26 @@ fn build_configuration(
     env: &Env,
     signers: &Vec<SignerWeight>,
     threshold: u32,
-) -> Result<Map<BytesN<32>, u32>, GuardError> {
+) -> Result<Map<BytesN<32>, u32>, ContractError> {
     if signers.is_empty() {
-        return Err(GuardError::EmptyWeightSet);
+        return Err(ContractError::EmptyWeightSet);
     }
 
     let mut weights: Map<BytesN<32>, u32> = Map::new(env);
     let mut total: u32 = 0;
     for signer in signers.iter() {
         if signer.weight == 0 {
-            return Err(GuardError::ZeroWeight);
+            return Err(ContractError::ZeroWeight);
         }
         if weights.contains_key(signer.public_key.clone()) {
-            return Err(GuardError::DuplicateSigner);
+            return Err(ContractError::DuplicateSigner);
         }
-        total = total.checked_add(signer.weight).ok_or(GuardError::Overflow)?;
+        total = total.checked_add(signer.weight).ok_or(ContractError::Overflow)?;
         weights.set(signer.public_key.clone(), signer.weight);
     }
 
     if threshold == 0 || threshold > total {
-        return Err(GuardError::InvalidThreshold);
+        return Err(ContractError::InvalidThreshold);
     }
 
     Ok(weights)
@@ -223,9 +236,9 @@ impl MultisigWeightGuard {
         admin: Address,
         signers: Vec<SignerWeight>,
         threshold: u32,
-    ) -> Result<(), GuardError> {
+    ) -> Result<(), ContractError> {
         if env.storage().instance().has(&DataKey::Admin) {
-            return Err(GuardError::AlreadyInitialized);
+            return Err(ContractError::AlreadyInitialized);
         }
         admin.require_auth();
 
@@ -265,10 +278,10 @@ impl MultisigWeightGuard {
     ///
     /// Returns the timestamp at which the new configuration becomes effective.
     ///
-    /// Fails with [`GuardError::RotationAlreadyPending`] when an unapplied
+    /// Fails with [`ContractError::RotationAlreadyPending`] when an unapplied
     /// rotation is still waiting to be finalised (apply it first with
     /// [`Self::apply_pending_weights`]) and with
-    /// [`GuardError::CooldownNotElapsed`] when the previous rotation only took
+    /// [`ContractError::CooldownNotElapsed`] when the previous rotation only took
     /// effect less than 72h ago. Because the cooldown is anchored to the moment
     /// a rotation *becomes effective*, the two rules are independent: one
     /// stops overlapping rotations, the other stops rapid-fire ones.
@@ -277,28 +290,28 @@ impl MultisigWeightGuard {
         caller: Address,
         signers: Vec<SignerWeight>,
         threshold: u32,
-    ) -> Result<u64, GuardError> {
+    ) -> Result<u64, ContractError> {
         let admin = load_admin(&env)?;
         if caller != admin {
-            return Err(GuardError::NotAdmin);
+            return Err(ContractError::NotAdmin);
         }
         caller.require_auth();
 
         if load_pending(&env).is_some() {
-            return Err(GuardError::RotationAlreadyPending);
+            return Err(ContractError::RotationAlreadyPending);
         }
 
         let now = env.ledger().timestamp();
         let last = load_last_rotation(&env);
         if last != 0 && now.saturating_sub(last) < WEIGHT_ROTATION_COOLDOWN_SECONDS {
-            return Err(GuardError::CooldownNotElapsed);
+            return Err(ContractError::CooldownNotElapsed);
         }
 
         let weights = build_configuration(&env, &signers, threshold)?;
         let active = load_active(&env)?;
         let effective_at = now
             .checked_add(WEIGHT_ROTATION_COOLDOWN_SECONDS)
-            .ok_or(GuardError::Overflow)?;
+            .ok_or(ContractError::Overflow)?;
 
         let pending = WeightConfiguration {
             weights,
@@ -324,13 +337,13 @@ impl MultisigWeightGuard {
     ///
     /// This is intentionally permissionless: it only materialises a decision
     /// the admin already authorised, and refuses to run early with
-    /// [`GuardError::ActivationNotReached`]. Returns the newly activated
+    /// [`ContractError::ActivationNotReached`]. Returns the newly activated
     /// configuration.
-    pub fn apply_pending_weights(env: Env) -> Result<WeightConfiguration, GuardError> {
-        let pending = load_pending(&env).ok_or(GuardError::NoPendingConfiguration)?;
+    pub fn apply_pending_weights(env: Env) -> Result<WeightConfiguration, ContractError> {
+        let pending = load_pending(&env).ok_or(ContractError::NoPendingConfiguration)?;
         let now = env.ledger().timestamp();
         if now < pending.effective_at {
-            return Err(GuardError::ActivationNotReached);
+            return Err(ContractError::ActivationNotReached);
         }
 
         env.storage().instance().set(&DataKey::Active, &pending);
@@ -352,7 +365,7 @@ impl MultisigWeightGuard {
     /// otherwise the last applied configuration is returned, which is exactly
     /// the "old weights remain valid until the configuration timestamp"
     /// guarantee.
-    pub fn effective_configuration(env: Env) -> Result<WeightConfiguration, GuardError> {
+    pub fn effective_configuration(env: Env) -> Result<WeightConfiguration, ContractError> {
         let active = load_active(&env)?;
         match load_pending(&env) {
             Some(pending) if env.ledger().timestamp() >= pending.effective_at => Ok(pending),
@@ -366,7 +379,7 @@ impl MultisigWeightGuard {
     }
 
     /// The last finalised configuration (ignoring any pending rotation).
-    pub fn active_configuration(env: Env) -> Result<WeightConfiguration, GuardError> {
+    pub fn active_configuration(env: Env) -> Result<WeightConfiguration, ContractError> {
         load_active(&env)
     }
 
@@ -385,13 +398,13 @@ impl MultisigWeightGuard {
 
     /// Weight granted to `public_key` by the configuration in force, or `0` for
     /// unknown keys.
-    pub fn effective_signer_weight(env: Env, public_key: BytesN<32>) -> Result<u32, GuardError> {
+    pub fn effective_signer_weight(env: Env, public_key: BytesN<32>) -> Result<u32, ContractError> {
         let config = Self::effective_configuration(env)?;
         Ok(config.weights.get(public_key).unwrap_or(0))
     }
 
     /// Weight threshold enforced by the configuration in force.
-    pub fn effective_threshold(env: Env) -> Result<u32, GuardError> {
+    pub fn effective_threshold(env: Env) -> Result<u32, ContractError> {
         Ok(Self::effective_configuration(env)?.threshold)
     }
 
@@ -401,7 +414,7 @@ impl MultisigWeightGuard {
     /// Unknown keys are ignored rather than rejected so that a key removed by a
     /// rotation cannot keep a stale approval alive, and duplicate approvals are
     /// only counted once. Returns the collected weight.
-    pub fn verify_quorum(env: Env, approvals: Vec<BytesN<32>>) -> Result<u32, GuardError> {
+    pub fn verify_quorum(env: Env, approvals: Vec<BytesN<32>>) -> Result<u32, ContractError> {
         let config = Self::effective_configuration(env.clone())?;
 
         let mut seen: Map<BytesN<32>, ()> = Map::new(&env);
@@ -412,12 +425,12 @@ impl MultisigWeightGuard {
             }
             seen.set(key.clone(), ());
             if let Some(weight) = config.weights.get(key.clone()) {
-                collected = collected.checked_add(weight).ok_or(GuardError::Overflow)?;
+                collected = collected.checked_add(weight).ok_or(ContractError::Overflow)?;
             }
         }
 
         if collected < config.threshold {
-            return Err(GuardError::ThresholdNotMet);
+            return Err(ContractError::ThresholdNotMet);
         }
 
         Ok(collected)
@@ -446,7 +459,7 @@ impl MultisigWeightGuard {
 #[cfg(test)]
 mod test {
     use super::{
-        GuardError, MultisigWeightGuard, MultisigWeightGuardClient, SignerWeight,
+        ContractError, MultisigWeightGuard, MultisigWeightGuardClient, SignerWeight,
         SignerWeightsUpdatedEvent, WEIGHT_ROTATION_COOLDOWN_SECONDS,
     };
     use soroban_sdk::{
@@ -521,7 +534,7 @@ mod test {
         let (env, client, admin) = setup();
         client.initialize(&admin, &initial_set(&env), &4);
         let res = client.try_initialize(&admin, &initial_set(&env), &4);
-        assert_eq!(res, Err(Ok(GuardError::AlreadyInitialized)));
+        assert_eq!(res, Err(Ok(ContractError::AlreadyInitialized)));
     }
 
     #[test]
@@ -569,7 +582,7 @@ mod test {
 
         advance(&env, WEIGHT_ROTATION_COOLDOWN_SECONDS - 1);
         let res = client.try_apply_pending_weights();
-        assert_eq!(res, Err(Ok(GuardError::ActivationNotReached)));
+        assert_eq!(res, Err(Ok(ContractError::ActivationNotReached)));
     }
 
     #[test]
@@ -597,7 +610,7 @@ mod test {
         let (env, client, admin) = setup();
         client.initialize(&admin, &initial_set(&env), &4);
         let res = client.try_apply_pending_weights();
-        assert_eq!(res, Err(Ok(GuardError::NoPendingConfiguration)));
+        assert_eq!(res, Err(Ok(ContractError::NoPendingConfiguration)));
     }
 
     #[test]
@@ -620,7 +633,7 @@ mod test {
             &signers(&env, &[(key(&env, 8), 3)]),
             &3,
         );
-        assert_eq!(res, Err(Ok(GuardError::CooldownNotElapsed)));
+        assert_eq!(res, Err(Ok(ContractError::CooldownNotElapsed)));
 
         // Once the cooldown elapses the next rotation is accepted and is itself
         // staged a further 72h out.
@@ -646,7 +659,7 @@ mod test {
             &signers(&env, &[(key(&env, 8), 3)]),
             &3,
         );
-        assert_eq!(res, Err(Ok(GuardError::RotationAlreadyPending)));
+        assert_eq!(res, Err(Ok(ContractError::RotationAlreadyPending)));
 
         advance(&env, WEIGHT_ROTATION_COOLDOWN_SECONDS);
         client.apply_pending_weights();
@@ -682,7 +695,7 @@ mod test {
             &signers(&env, &[(key(&env, 7), 3)]),
             &3,
         );
-        assert_eq!(res, Err(Ok(GuardError::NotAdmin)));
+        assert_eq!(res, Err(Ok(ContractError::NotAdmin)));
     }
 
     #[test]
@@ -699,13 +712,13 @@ mod test {
 
         // The new key is not yet counted.
         let res = client.try_verify_quorum(&vec![&env, key(&env, 7)]);
-        assert_eq!(res, Err(Ok(GuardError::ThresholdNotMet)));
+        assert_eq!(res, Err(Ok(ContractError::ThresholdNotMet)));
 
         // After activation only the new key counts and the old ones are gone.
         advance(&env, WEIGHT_ROTATION_COOLDOWN_SECONDS);
         assert_eq!(client.verify_quorum(&vec![&env, key(&env, 7)]), 5);
         let res = client.try_verify_quorum(&vec![&env, key(&env, 4), key(&env, 5)]);
-        assert_eq!(res, Err(Ok(GuardError::ThresholdNotMet)));
+        assert_eq!(res, Err(Ok(ContractError::ThresholdNotMet)));
     }
 
     #[test]
@@ -716,7 +729,7 @@ mod test {
         // key #4 counted twice must still only contribute weight 2 -> fails,
         // and an unknown key is ignored entirely.
         let res = client.try_verify_quorum(&vec![&env, key(&env, 4), key(&env, 4), key(&env, 9)]);
-        assert_eq!(res, Err(Ok(GuardError::ThresholdNotMet)));
+        assert_eq!(res, Err(Ok(ContractError::ThresholdNotMet)));
 
         let collected = client.verify_quorum(&vec![&env, key(&env, 4), key(&env, 4), key(&env, 1), key(&env, 2)]);
         assert_eq!(collected, 4);
@@ -729,12 +742,12 @@ mod test {
 
         // Empty set.
         let res = client.try_propose_weight_rotation(&admin, &Vec::new(&env), &1);
-        assert_eq!(res, Err(Ok(GuardError::EmptyWeightSet)));
+        assert_eq!(res, Err(Ok(ContractError::EmptyWeightSet)));
 
         // Zero weight.
         let res =
             client.try_propose_weight_rotation(&admin, &signers(&env, &[(key(&env, 7), 0)]), &1);
-        assert_eq!(res, Err(Ok(GuardError::ZeroWeight)));
+        assert_eq!(res, Err(Ok(ContractError::ZeroWeight)));
 
         // Duplicate signer.
         let res = client.try_propose_weight_rotation(
@@ -742,24 +755,24 @@ mod test {
             &signers(&env, &[(key(&env, 7), 1), (key(&env, 7), 1)]),
             &1,
         );
-        assert_eq!(res, Err(Ok(GuardError::DuplicateSigner)));
+        assert_eq!(res, Err(Ok(ContractError::DuplicateSigner)));
 
         // Threshold zero.
         let res =
             client.try_propose_weight_rotation(&admin, &signers(&env, &[(key(&env, 7), 1)]), &0);
-        assert_eq!(res, Err(Ok(GuardError::InvalidThreshold)));
+        assert_eq!(res, Err(Ok(ContractError::InvalidThreshold)));
 
         // Threshold larger than the total weight.
         let res =
             client.try_propose_weight_rotation(&admin, &signers(&env, &[(key(&env, 7), 1)]), &2);
-        assert_eq!(res, Err(Ok(GuardError::InvalidThreshold)));
+        assert_eq!(res, Err(Ok(ContractError::InvalidThreshold)));
     }
 
     #[test]
     fn initialize_rejects_invalid_configuration() {
         let (env, client, admin) = setup();
         let res = client.try_initialize(&admin, &signers(&env, &[(key(&env, 1), 1)]), &0);
-        assert_eq!(res, Err(Ok(GuardError::InvalidThreshold)));
+        assert_eq!(res, Err(Ok(ContractError::InvalidThreshold)));
     }
 
     #[test]

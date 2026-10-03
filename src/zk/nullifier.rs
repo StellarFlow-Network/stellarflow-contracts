@@ -42,6 +42,7 @@ mod tests {
     #[test]
     fn rejects_duplicates() {
         let env = Env::default();
+
         let nullifier = BytesN::from_array(&env, &[7u8; 32]);
         assert!(register_nullifier(&env, nullifier.clone()).is_ok());
         assert_eq!(
@@ -49,5 +50,6 @@ mod tests {
             Err(ContractError::NullifierAlreadyUsed)
         );
         assert!(is_nullifier_used(&env, &nullifier));
-    }
+    
+}
 }

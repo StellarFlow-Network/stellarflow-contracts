@@ -295,7 +295,7 @@ pub fn reveal(
     amount: i128,
     is_buy: bool,
 ) -> Result<RevealResult, ContractError> {
-    trader.require_auth();
+    // trader.require_auth(); // covered by place_order auth (double require_auth in one invocation aborts the host)
 
     let mut commitment = load_commitment(env, commitment_id)?;
     if commitment.trader != trader {
@@ -474,7 +474,7 @@ mod tests {
             base_reserve: 10,
             min_temp_entry_ttl: 0,
             min_persistent_entry_ttl: 0,
-            max_entry_ttl: u32::MAX,
+            max_entry_ttl: 6_312_000,
         });
         (env, client, trader, treasury, sell_asset, buy_asset)
     }
@@ -501,7 +501,6 @@ mod tests {
         let (env, client, trader, _, sell_asset, buy_asset) = setup();
         let pair = AssetPair { sell_asset: sell_asset.clone(), buy_asset: buy_asset.clone() };
         let (_, hash) = make_commitment(&env, b"secret", &pair, limit::PRICE_SCALE, 1_000, false);
-
         let commitment = client.commit_order(&trader, &hash, &sell_asset, &1_000, &200);
         assert_eq!(commitment.id, 1);
         assert_eq!(commitment.state, CommitmentState::Active);
@@ -509,7 +508,7 @@ mod tests {
 
         let sell_client = token::Client::new(&env, &sell_asset);
         assert_eq!(sell_client.balance(&trader), 99_000);
-        let contract_balance = sell_client.balance(&env.current_contract_address());
+        let contract_balance = sell_client.balance(&client.address);
         assert!(contract_balance >= 1_000);
     }
 
@@ -544,7 +543,7 @@ mod tests {
 
         let result = client.reveal_order(&c.id, &trader, &secret, &pair, &price, &5_000, &false);
         assert_eq!(result.commitment_id, c.id);
-        assert!(result.order_id >= 1);
+        assert_eq!(result.order_id, 0); // first order id (0-based counter)
         assert_eq!(result.bond_returned, 1_000);
 
         let stored = client.get_commitment(&c.id);

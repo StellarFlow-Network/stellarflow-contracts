@@ -8,7 +8,7 @@
 //! comparing ledger sequences at read time. The admin may also strip a grant
 //! early via `revoke_role`, e.g. in response to a compromised delegate key.
 
-use soroban_sdk::{contracttype, Address, BytesN, Env, Symbol, Vec};
+use soroban_sdk::{contracttype, Address, Bytes, BytesN, Env, Symbol, Vec};
 
 use crate::{ContractData, ContractError, DATA_KEY};
 
@@ -70,14 +70,14 @@ pub fn role_hash(env: &Env, role: Role) -> BytesN<32> {
         Role::ROLE_ADMIN => "ROLE_ADMIN",
     };
     let bytes = name.as_bytes();
-    env.crypto().sha256(bytes)
+    env.crypto().sha256(&Bytes::from_slice(env, bytes))
 }
 
 fn append_role_audit_event(env: &Env, event_name: Symbol, grant: &RoleGrant, actor: &Address) {
     let event = RoleAuditEvent {
         event_name: event_name.clone(),
         role: grant.role,
-        role_hash: grant.role_hash,
+        role_hash: grant.role_hash.clone(),
         actor: actor.clone(),
         grantee: grant.grantee.clone(),
         ledger: env.ledger().sequence(),
@@ -133,7 +133,7 @@ pub fn grant_role(
     let role_id = role_hash(env, role);
     let grant = RoleGrant {
         role,
-        role_hash: role_id,
+        role_hash: role_id.clone(),
         grantee: grantee.clone(),
         granted_by: admin.clone(),
         granted_at_ledger: current_ledger,
@@ -183,7 +183,7 @@ pub fn revoke_role(
         .instance()
         .remove(&RoleStorageKey::ActiveRoleHash(
             grantee.clone(),
-            grant.role_hash,
+            grant.role_hash.clone(),
         ));
 
     env.events().publish(
@@ -293,7 +293,7 @@ pub fn update_bridge_validators(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::{Address as _, Ledger, LedgerInfo};
+    use soroban_sdk::testutils::{Address as _, Events, Ledger, LedgerInfo};
 
     fn setup() -> (
         Env,
@@ -319,7 +319,7 @@ mod tests {
             base_reserve: 10,
             min_temp_entry_ttl: 0,
             min_persistent_entry_ttl: 0,
-            max_entry_ttl: u32::MAX,
+            max_entry_ttl: 6_312_000,
         });
     }
 
@@ -411,8 +411,9 @@ mod tests {
         assert!(!client.has_role(&pauser, &Role::ROLE_PAUSER));
 
         let events = env.events().all();
-        let event_debug = format!("{:?}", events);
-        assert!(event_debug.contains("RoleGranted"));
-        assert!(event_debug.contains("RoleRevoked"));
+        let event_debug = std::format!("{:?}", events);
+        std::println!("EVENTS: {}", event_debug);
+        assert!(event_debug.contains("RoleGranted"), "missing RoleGranted in {}", event_debug);
+        assert!(event_debug.contains("RoleRevoked"), "missing RoleRevoked in {}", event_debug);
     }
 }

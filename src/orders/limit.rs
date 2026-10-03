@@ -812,6 +812,47 @@ pub fn get_order(env: &Env, order_id: u64) -> Option<LimitOrder> {
     load_order(env, order_id).ok()
 }
 
+/// Purge storage entries for a list of closed (fully executed or cancelled) limit orders.
+/// Clears the `Order(pair, price_tick, order_id)`, `OrderIndex(order_id)`, and legacy `Order(order_id)` keys.
+/// Returns the number of order records successfully purged.
+pub fn purge_closed_orders(env: &Env, order_ids: &Vec<u64>) -> u32 {
+    let mut purged = 0u32;
+    for order_id in order_ids.iter() {
+        let mut was_purged = false;
+        if let Some(index) = env
+            .storage()
+            .persistent()
+            .get::<_, (AssetPair, i128)>(&OrderStorageKey::OrderIndex(order_id))
+        {
+            let key = OrderStorageKey::Order(index.0.clone(), index.1, order_id);
+            if let Some(order) = env.storage().persistent().get::<_, LimitOrder>(&key) {
+                if !order.active || order.remaining_amount == 0 {
+                    bucket_remove(env, &index.0, index.1, order_id);
+                    env.storage().persistent().remove(&key);
+                    env.storage().persistent().remove(&OrderStorageKey::OrderIndex(order_id));
+                    was_purged = true;
+                }
+            } else {
+                env.storage().persistent().remove(&OrderStorageKey::OrderIndex(order_id));
+                was_purged = true;
+            }
+        }
+
+        let legacy_key = OrderStorageKey::Order(order_id);
+        if let Some(order) = env.storage().persistent().get::<_, LimitOrder>(&legacy_key) {
+            if !order.active || order.remaining_amount == 0 {
+                env.storage().persistent().remove(&legacy_key);
+                was_purged = true;
+            }
+        }
+
+        if was_purged {
+            purged += 1;
+        }
+    }
+    purged
+}
+
 /// List the ids of every order currently resting at `(pair, price_tick)`.
 pub fn get_orders_at_tick(env: &Env, pair: AssetPair, price_tick: i128) -> Vec<u64> {
     env.storage()
@@ -1283,7 +1324,8 @@ pub fn enforce_fallback_pricing(env: &Env, pair: &AssetPair, base_price: i128) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::{Address as _, Events};
+    use soroban_sdk::TryFromVal;
 
     fn setup() -> (Env, crate::TimeLockedUpgradeContractClient<'static>, Address, Address, Address) {
         let env = Env::default();
@@ -1559,10 +1601,10 @@ mod tests {
         assert_eq!(best_bid, Some(PRICE_SCALE));
         assert_eq!(best_ask, Some((PRICE_SCALE * 101) / 100));
 
-        let ratio = client.calculate_spread_ratio(&pair).unwrap();
+        let ratio = client.calculate_spread_ratio(&pair);
         assert_eq!(ratio, PRICE_SCALE / 100);
 
-        let spread = client.check_spread_imbalance(&pair).unwrap();
+        let spread = client.check_spread_imbalance(&pair);
         assert!(spread.has_liquidity);
         assert_eq!(spread.best_bid, PRICE_SCALE);
         assert_eq!(spread.best_ask, (PRICE_SCALE * 101) / 100);
@@ -1582,7 +1624,7 @@ mod tests {
         client.place_limit_order(&seller, &pair, &((PRICE_SCALE * 110) / 100), &1_000);
         client.place_buy_limit_order(&buyer, &pair, &PRICE_SCALE, &1_000);
 
-        let spread = client.check_spread_imbalance(&pair).unwrap();
+        let spread = client.check_spread_imbalance(&pair);
         assert!(spread.spread_ratio > SPREAD_ALERT_THRESHOLD);
 
         let mut alert_seen = false;
@@ -1591,7 +1633,8 @@ mod tests {
             let (_, topics, _) = events.get(i).unwrap();
             if topics
                 .get(1)
-                == Some(soroban_sdk::Symbol::new(&env, "liquidity_provider_alert").into_val(&env))
+                .and_then(|v| soroban_sdk::Symbol::try_from_val(&env, &v).ok())
+                == Some(soroban_sdk::Symbol::new(&env, "liquidity_provider_alert"))
             {
                 alert_seen = true;
             }
@@ -1612,7 +1655,7 @@ mod tests {
         client.place_limit_order(&seller, &pair, &((PRICE_SCALE * 102) / 100), &1_000);
         client.place_buy_limit_order(&buyer, &pair, &PRICE_SCALE, &1_000);
 
-        let spread = client.check_spread_imbalance(&pair).unwrap();
+        let spread = client.check_spread_imbalance(&pair);
         assert!(spread.spread_ratio <= SPREAD_ALERT_THRESHOLD);
 
         let events = env.events().all();
@@ -1621,7 +1664,8 @@ mod tests {
             let (_, topics, _) = events.get(i).unwrap();
             if topics
                 .get(1)
-                == Some(soroban_sdk::Symbol::new(&env, "liquidity_provider_alert").into_val(&env))
+                .and_then(|v| soroban_sdk::Symbol::try_from_val(&env, &v).ok())
+                == Some(soroban_sdk::Symbol::new(&env, "liquidity_provider_alert"))
             {
                 alert_seen = true;
             }
@@ -1641,7 +1685,7 @@ mod tests {
         assert!(client.is_liquidity_thin(&pair));
 
         let base = 10 * PRICE_SCALE;
-        let fallback = client.enforce_fallback_pricing(&pair, &base).unwrap();
+        let fallback = client.enforce_fallback_pricing(&pair, &base);
         assert!(fallback > base);
 
         // Adding both sides with real depth un-thins the book.
@@ -1649,7 +1693,7 @@ mod tests {
         mint(&env, &pair.buy_asset, &buyer, 200_000);
         client.place_buy_limit_order(&buyer, &pair, &PRICE_SCALE, &2_000);
         assert!(!client.is_liquidity_thin(&pair));
-        assert_eq!(client.enforce_fallback_pricing(&pair, &base).unwrap(), base);
+        assert_eq!(client.enforce_fallback_pricing(&pair, &base), base);
     }
 
     #[test]
@@ -1660,7 +1704,7 @@ mod tests {
         let pair = AssetPair { sell_asset, buy_asset };
         client.place_limit_order(&seller, &pair, &PRICE_SCALE, &1_000);
 
-        let spread = client.check_spread_imbalance(&pair).unwrap();
+        let spread = client.check_spread_imbalance(&pair);
         assert!(!spread.has_liquidity);
         assert_eq!(spread.spread_ratio, 0);
     }

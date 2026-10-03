@@ -9,11 +9,14 @@ pub const MAX_VALIDATORS: usize = 15;
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
-pub enum MedianError {
+pub enum ContractError {
+    /// Recovery steps: Inspect the state for EmptyInput and retry with valid inputs or proper conditions.
     EmptyInput = 10,
     /// Arithmetic operation overflow detected.
+    /// Recovery steps: Inspect the state for ArithmeticOverflow and retry with valid inputs or proper conditions.
     ArithmeticOverflow = 11,
     /// Input length exceeds the static stack-buffer capacity (MAX_VALIDATORS).
+    /// Recovery steps: Inspect the state for InputTooLarge and retry with valid inputs or proper conditions.
     InputTooLarge = 12,
 }
 
@@ -65,17 +68,17 @@ fn sort_stack_pairs(buf: &mut [(i128, u32)], len: usize) {
 /// object calls are made after the copy step.
 ///
 /// # Errors
-/// - [`MedianError::EmptyInput`]     — slice is empty.
-/// - [`MedianError::InputTooLarge`]  — more than `MAX_VALIDATORS` entries.
-/// - [`MedianError::ArithmeticOverflow`] — even-count average overflows `i128`.
+/// - [`ContractError::EmptyInput`]     — slice is empty.
+/// - [`ContractError::InputTooLarge`]  — more than `MAX_VALIDATORS` entries.
+/// - [`ContractError::ArithmeticOverflow`] — even-count average overflows `i128`.
 #[allow(dead_code)]
-pub fn calculate_median(prices: Vec<i128>) -> Result<i128, MedianError> {
+pub fn calculate_median(prices: Vec<i128>) -> Result<i128, ContractError> {
     let len = prices.len() as usize;
     if len == 0 {
-        return Err(MedianError::EmptyInput);
+        return Err(ContractError::EmptyInput);
     }
     if len > MAX_VALIDATORS {
-        return Err(MedianError::InputTooLarge);
+        return Err(ContractError::InputTooLarge);
     }
 
     // Copy host-side Vec into a stack-allocated primitive array in one pass.
@@ -93,8 +96,8 @@ pub fn calculate_median(prices: Vec<i128>) -> Result<i128, MedianError> {
     } else {
         let sum = buf[mid - 1]
             .checked_add(buf[mid])
-            .ok_or(MedianError::ArithmeticOverflow)?;
-        sum.checked_div(2).ok_or(MedianError::ArithmeticOverflow)
+            .ok_or(ContractError::ArithmeticOverflow)?;
+        sum.checked_div(2).ok_or(ContractError::ArithmeticOverflow)
     }
 }
 
@@ -128,17 +131,17 @@ fn value_at_stack(buf: &[(i128, u32)], len: usize, target: u64) -> i128 {
 /// sorting, cumulative-count traversal, and index arithmetic run on the stack.
 ///
 /// # Errors
-/// - [`MedianError::EmptyInput`]     — zero pairs or all counts are zero.
-/// - [`MedianError::InputTooLarge`]  — more than `MAX_VALIDATORS` distinct values.
-/// - [`MedianError::ArithmeticOverflow`] — count sum or average overflows.
+/// - [`ContractError::EmptyInput`]     — zero pairs or all counts are zero.
+/// - [`ContractError::InputTooLarge`]  — more than `MAX_VALIDATORS` distinct values.
+/// - [`ContractError::ArithmeticOverflow`] — count sum or average overflows.
 #[allow(dead_code)]
-pub fn calculate_median_compacted(pairs: Vec<(i128, u32)>) -> Result<i128, MedianError> {
+pub fn calculate_median_compacted(pairs: Vec<(i128, u32)>) -> Result<i128, ContractError> {
     let len = pairs.len() as usize;
     if len == 0 {
-        return Err(MedianError::EmptyInput);
+        return Err(ContractError::EmptyInput);
     }
     if len > MAX_VALIDATORS {
-        return Err(MedianError::InputTooLarge);
+        return Err(ContractError::InputTooLarge);
     }
 
     // Copy host-side Vec into a stack-allocated primitive array in one pass,
@@ -150,10 +153,10 @@ pub fn calculate_median_compacted(pairs: Vec<(i128, u32)>) -> Result<i128, Media
         buf[i] = (v, c);
         total = total
             .checked_add(c as u64)
-            .ok_or(MedianError::ArithmeticOverflow)?;
+            .ok_or(ContractError::ArithmeticOverflow)?;
     }
     if total == 0 {
-        return Err(MedianError::EmptyInput);
+        return Err(ContractError::EmptyInput);
     }
 
     // Sort distinct values entirely on the stack — zero host allocations.
@@ -164,14 +167,14 @@ pub fn calculate_median_compacted(pairs: Vec<(i128, u32)>) -> Result<i128, Media
     } else {
         let lo = value_at_stack(&buf, len, total / 2 - 1);
         let hi = value_at_stack(&buf, len, total / 2);
-        let sum = lo.checked_add(hi).ok_or(MedianError::ArithmeticOverflow)?;
-        sum.checked_div(2).ok_or(MedianError::ArithmeticOverflow)
+        let sum = lo.checked_add(hi).ok_or(ContractError::ArithmeticOverflow)?;
+        sum.checked_div(2).ok_or(ContractError::ArithmeticOverflow)
     }
 }
 
 #[cfg(test)]
 mod median_tests {
-    use crate::median::{calculate_median, MedianError};
+    use crate::median::{calculate_median, ContractError};
     use soroban_sdk::{vec, Env};
 
     #[test]
@@ -199,7 +202,7 @@ mod median_tests {
     fn test_empty_input_returns_error() {
         let env = Env::default();
         let prices = soroban_sdk::Vec::<i128>::new(&env);
-        assert_eq!(calculate_median(prices), Err(MedianError::EmptyInput));
+        assert_eq!(calculate_median(prices), Err(ContractError::EmptyInput));
     }
 
     #[test]
@@ -209,7 +212,7 @@ mod median_tests {
         let prices = vec![
             &env, 1_i128, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
         ];
-        assert_eq!(calculate_median(prices), Err(MedianError::InputTooLarge));
+        assert_eq!(calculate_median(prices), Err(ContractError::InputTooLarge));
     }
 
     #[test]
@@ -260,7 +263,7 @@ mod median_tests {
         let pairs = soroban_sdk::Vec::<(i128, u32)>::new(&env);
         assert_eq!(
             crate::median::calculate_median_compacted(pairs),
-            Err(MedianError::EmptyInput)
+            Err(ContractError::EmptyInput)
         );
     }
 
@@ -275,7 +278,7 @@ mod median_tests {
         }
         assert_eq!(
             crate::median::calculate_median_compacted(pairs),
-            Err(MedianError::InputTooLarge)
+            Err(ContractError::InputTooLarge)
         );
     }
 }

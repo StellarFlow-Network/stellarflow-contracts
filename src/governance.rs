@@ -17,72 +17,6 @@ pub(crate) const BRIDGE_VALIDATORS_UPDATED_EVENT: Symbol = symbol_short!("BRVAL"
 
 use crate::{ContractData, ContractError, DATA_KEY, SIGNERS_KEY};
 
-#[contracttype]
-#[derive(Clone)]
-pub enum BallotKey {
-    Proposal(Symbol),
-}
-
-#[contracttype]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MultiSigConfig {
-    pub signers: Vec<Address>,
-    pub threshold: u32,
-    pub max_signer_weight: u32,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct GovernanceConfig {
-    pub delay: u32,
-}
-
-pub(crate) const GOVERNANCE_UPGRADE_KEY: Symbol = symbol_short!("GOVUPG");
-
-pub fn get_ballot(env: &Env, proposal_id: Symbol) -> Option<VotingBallot> {
-    let key = BallotKey::Proposal(proposal_id);
-    env.storage().temporary().get(&key)
-}
-
-pub fn verify_upgrade_quorum(env: &Env, signers: &Vec<Address>) -> Result<(), ContractError> {
-    let config = get_multisig_config(env);
-    if (signers.len() as u32) < config.threshold {
-        return Err(ContractError::ThresholdNotReached);
-    }
-    Ok(())
-}
-
-pub fn get_multisig_config(env: &Env) -> MultiSigConfig {
-    env.storage()
-        .instance()
-        .get(&crate::SIGNERS_KEY)
-        .unwrap_or(MultiSigConfig {
-            signers: Vec::new(env),
-            threshold: 1,
-            max_signer_weight: 1,
-        })
-}
-
-pub fn set_multisig_config(env: &Env, config: &MultiSigConfig) {
-    env.storage().instance().set(&crate::SIGNERS_KEY, config);
-}
-
-pub fn set_governance_config(env: &Env, config: &GovernanceConfig) {
-    env.storage().instance().set(&GOVERNANCE_PROPOSAL_KEY, config);
-}
-
-pub fn _load_proposal(env: &Env) -> Result<GovernanceUpgradeProposal, ContractError> {
-    env.storage()
-        .instance()
-        .get(&GOVERNANCE_UPGRADE_KEY)
-        .ok_or(ContractError::NoActiveProposal)
-}
-
-pub fn _cancellation_threshold_for_signers(env: &Env, _key: &Symbol) -> u32 {
-    let config = get_multisig_config(env);
-    cancellation_threshold(config.signers.len() as u32)
-}
-
 // ── Constants ───────────────────────────────────────────────────────────────
 
 /// Minimum number of ledger sequences that must elapse between proposal
@@ -147,29 +81,6 @@ pub struct GovernanceProposal {
 ///
 /// Only one governance proposal may be active at a time. Returns the
 /// assigned proposal ID.
-pub fn submit_governance_proposal(
-    env: &Env,
-    proposer: Address,
-    wasm_hash: BytesN<32>,
-) -> Result<u64, ContractError> {
-    // Only one active proposal at a time.
-    if env.storage().instance().has(&GOVERNANCE_PROPOSAL_KEY) {
-        let existing: GovernanceProposal = env
-            .storage()
-            .instance()
-            .get(&GOVERNANCE_PROPOSAL_KEY)
-            .unwrap();
-        if existing.status == ProposalStatus::Pending
-            || existing.status == ProposalStatus::Executable
-        {
-            return Err(ContractError::ProposalAlreadyActive);
-        }
-    }
-
-    if crate::veto::is_hash_vetoed(env, &wasm_hash) {
-        return Err(ContractError::ProposalAlreadyVetoed);
-    }
-
 /// Proposal state enumeration for governance lifecycle management.
 ///
 /// Proposals transition through states as they move through voting, approval,
@@ -193,6 +104,45 @@ pub enum ProposalState {
     Expired,
 }
 
+#[contracttype]
+#[derive(Clone)]
+pub struct GovernanceConfig {
+    pub quorum_threshold: u32,
+}
+
+impl Default for GovernanceConfig {
+    fn default() -> Self {
+        Self { quorum_threshold: 2 }
+    }
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct MultiSigConfig {
+    /// Total weight required for quorum (N in N-of-M)
+    pub required_weight: u32,
+    /// Maximum weight any single signer can hold
+    pub max_signer_weight: u32,
+}
+
+impl Default for MultiSigConfig {
+    fn default() -> Self {
+        Self {
+            required_weight: 1,
+            max_signer_weight: 1,
+        }
+    }
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct GovernanceUpgradeProposal {
+    pub new_wasm_hash: BytesN<32>,
+    pub proposer: Address,
+    pub staged_at: u64,
+    pub signers: Vec<Address>,
+}
+
 /// Get multi-signature weight configuration for WASM upgrade governance
 pub fn get_multisig_config(env: &Env) -> MultiSigConfig {
     env.storage()
@@ -200,6 +150,196 @@ pub fn get_multisig_config(env: &Env) -> MultiSigConfig {
         .get(&QUORUM_WEIGHT_THRESHOLD_KEY)
         .unwrap_or_default()
 }
+
+/// Set multi-signature weight configuration for WASM upgrade governance
+pub fn set_multisig_config(env: &Env, config: &MultiSigConfig) {
+    env.storage()
+        .instance()
+        .set(&QUORUM_WEIGHT_THRESHOLD_KEY, config);
+}
+
+/// Get the weight for a specific signer (returns 0 if signer not registered)
+pub fn get_signer_weight(env: &Env, signer: &Address) -> u32 {
+    let weights: Map<Address, u32> = env
+        .storage()
+        .instance()
+        .get(&SIGNER_WEIGHTS_KEY)
+        .unwrap_or_else(|| Map::new(env));
+    weights.get(signer.clone()).unwrap_or(0u32)
+}
+
+/// Register or update a signer's weight in multi-sig governance
+pub fn set_signer_weight(env: &Env, signer: &Address, weight: u32) {
+    let mut weights: Map<Address, u32> = env
+        .storage()
+        .instance()
+        .get(&SIGNER_WEIGHTS_KEY)
+        .unwrap_or_else(|| Map::new(env));
+    if weight == 0 {
+        weights.remove(signer.clone());
+    } else {
+        weights.set(signer.clone(), weight);
+    }
+    env.storage()
+        .instance()
+        .set(&SIGNER_WEIGHTS_KEY, &weights);
+}
+
+pub fn get_governance_config(env: &Env) -> GovernanceConfig {
+    env.storage()
+        .instance()
+        .get(&GOVERNANCE_CONFIG_KEY)
+        .unwrap_or_default()
+}
+
+pub fn set_governance_config(env: &Env, config: &GovernanceConfig) {
+    env.storage().instance().set(&GOVERNANCE_CONFIG_KEY, config);
+}
+
+pub fn verify_upgrade_quorum(env: &Env, signers: &Vec<Address>) -> Result<(), ContractError> {
+    let data: ContractData = env
+        .storage()
+        .instance()
+        .get(&DATA_KEY)
+        .ok_or(ContractError::NotInitialized)?;
+
+    let authorized_signers: Map<Address, ()> = env
+        .storage()
+        .instance()
+        .get(&SIGNERS_KEY)
+        .unwrap_or_else(|| Map::new(env));
+
+    let config = get_governance_config(env);
+    let multisig_config = get_multisig_config(env);
+
+    // Legacy count-based check
+    let mut valid_count: u32 = 0;
+    let mut collected_weight: u32 = 0;
+    let mut seen_signers: Map<Address, ()> = Map::new(env);
+
+    for signer in signers.iter() {
+        // Skip duplicate signers
+        if seen_signers.contains_key(signer.clone()) {
+            continue;
+        }
+        seen_signers.set(signer.clone(), ());
+
+        // Check if signer is authorized (admin or in authorized_signers)
+        let is_authorized = signer == data.admin || authorized_signers.contains_key(signer.clone());
+        if !is_authorized {
+            continue;
+        }
+
+        valid_count += 1;
+
+        // Get weight for this signer (admin gets weight 1 if not explicitly set)
+        let weight = if signer == data.admin {
+            get_signer_weight(env, &data.admin).max(1u32)
+        } else {
+            get_signer_weight(env, &signer)
+        };
+
+        collected_weight = collected_weight
+            .checked_add(weight)
+            .ok_or(ContractError::Overflow)?;
+    }
+
+    // Fail if count-based quorum not met
+    if valid_count < config.quorum_threshold {
+        return Err(ContractError::ThresholdNotReached);
+    }
+
+    // Fail if weight-based quorum not met
+    if collected_weight < multisig_config.required_weight {
+        return Err(ContractError::ThresholdNotReached);
+    }
+
+    Ok(())
+}
+
+/// Accumulate the voting weight of the given signers, skipping duplicates
+/// and unauthorized addresses.
+pub fn calculate_collected_weight(
+    env: &Env,
+    signers: &Vec<Address>,
+    data: &ContractData,
+) -> Result<u32, ContractError> {
+    let authorized_signers: Map<Address, ()> = env
+        .storage()
+        .instance()
+        .get(&SIGNERS_KEY)
+        .unwrap_or_else(|| Map::new(env));
+
+    let mut collected_weight: u32 = 0;
+    let mut seen_signers: Map<Address, ()> = Map::new(env);
+
+    for signer in signers.iter() {
+        // Skip duplicate signers
+        if seen_signers.contains_key(signer.clone()) {
+            continue;
+        }
+        seen_signers.set(signer.clone(), ());
+
+        // Check if signer is authorized
+        let is_authorized = signer == data.admin || authorized_signers.contains_key(signer.clone());
+        if !is_authorized {
+            continue;
+        }
+
+        // Get weight for this signer (admin gets weight 1 if not explicitly set)
+        let weight = if signer == data.admin {
+            get_signer_weight(env, &data.admin).max(1u32)
+        } else {
+            get_signer_weight(env, &signer)
+        };
+
+        collected_weight = collected_weight
+            .checked_add(weight)
+            .ok_or(ContractError::Overflow)?;
+    }
+
+    Ok(collected_weight)
+}
+
+/// Submit a governance proposal. The proposal enters a timelock period
+/// (`MIN_LEDGER_DELAY` ledger sequences) before it can be executed.
+///
+/// Only one governance proposal may be active at a time. Returns the
+/// assigned proposal ID.
+pub fn submit_governance_proposal(
+    env: &Env,
+    proposer: Address,
+    wasm_hash: BytesN<32>,
+) -> Result<u64, ContractError> {
+    // Only one active proposal at a time.
+    if env.storage().instance().has(&GOVERNANCE_PROPOSAL_KEY) {
+        let existing: GovernanceProposal = env
+            .storage()
+            .instance()
+            .get(&GOVERNANCE_PROPOSAL_KEY)
+            .unwrap();
+        if existing.status == ProposalStatus::Pending
+            || existing.status == ProposalStatus::Executable
+        {
+            return Err(ContractError::ProposalAlreadyActive);
+        }
+    }
+
+    if crate::veto::is_hash_vetoed(env, &wasm_hash) {
+        return Err(ContractError::ProposalAlreadyVetoed);
+    }
+
+    proposer.require_auth();
+
+    let proposal_id = _next_proposal_id(env);
+    let proposal = GovernanceProposal {
+        proposal_id,
+        wasm_hash,
+        proposer: proposer.clone(),
+        staged_at: env.ledger().sequence(),
+        status: ProposalStatus::Pending,
+        cancellation_votes: Map::new(env),
+    };
 
     env.storage()
         .instance()
@@ -498,13 +638,11 @@ pub fn is_proposal_executable(env: &Env, proposal_id: u64) -> bool {
     {
         Some(proposal) if proposal.proposal_id == proposal_id => {
             proposal.status == ProposalStatus::Executable
-                && (proposal.status == ProposalStatus::Pending
-                    && verify_staged_ledger_delay(proposal.staged_at, env.ledger().sequence()))
+                || (proposal.status == ProposalStatus::Pending
+                    && verify_staged_delay(proposal.staged_at, env.ledger().sequence()))
         }
         _ => false,
     }
-    
-    Ok(collected_weight)
 }
 pub fn get_validator_set(env: &Env) -> Map<BytesN<32>, ()> {
     env.storage()
@@ -539,7 +677,7 @@ pub fn rotate_validators(
     env.storage().instance().set(&VALIDATORS_KEY, &validator_set);
     env.storage().instance().set(&VALIDATOR_SEQUENCE_KEY, &sequence);
     env.events().publish(
-        (BRIDGE_VALIDATORS_UPDATED_EVENT, sequence),
+        (Symbol::new(env, "BridgeValidatorsUpdated"), sequence),
         new_validators,
     );
 
@@ -560,8 +698,28 @@ pub struct GovernanceUpgradeProposedEvent {
 
 /// Verify that at least `MIN_LEDGER_DELAY` ledger sequences have elapsed
 /// since `staged_at`.
-pub fn verify_staged_ledger_delay(staged_at: u32, current_ledger: u32) -> bool {
+pub fn verify_staged_delay(staged_at: u32, current_ledger: u32) -> bool {
     current_ledger.saturating_sub(staged_at) >= MIN_LEDGER_DELAY
+}
+
+#[contracttype]
+pub enum BallotKey {
+    Proposal(Symbol),
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct VotingBallot {
+    pub target: Address,
+    pub replacement: Address,
+    pub proposer: Address,
+    pub proposed_at: u64,
+    pub ipfs_cid: Bytes,
+    pub votes: Map<Address, ()>,
+}
+
+pub fn get_ballot(env: &Env, proposal_id: Symbol) -> Option<VotingBallot> {
+    env.storage().temporary().get(&BallotKey::Proposal(proposal_id))
 }
 
 pub fn open_ballot(
@@ -605,6 +763,25 @@ fn _next_proposal_id(env: &Env) -> u64 {
         .instance()
         .set(&GOV_PROPOSAL_COUNTER_KEY, &next);
     next
+}
+
+/// Query the current governance proposal, if one exists.
+pub fn get_governance_proposal(
+    env: &Env,
+    proposal_id: u64,
+) -> Result<GovernanceProposal, ContractError> {
+    let proposal = _load_proposal(env)?;
+    if proposal.proposal_id != proposal_id {
+        return Err(ContractError::NoActiveProposal);
+    }
+    Ok(proposal)
+}
+
+fn _load_proposal(env: &Env) -> Result<GovernanceProposal, ContractError> {
+    env.storage()
+        .instance()
+        .get(&GOVERNANCE_PROPOSAL_KEY)
+        .ok_or(ContractError::NoActiveProposal)
 }
 
 /// The cancellation quorum is the number of distinct signer votes required
@@ -1087,11 +1264,11 @@ mod tests {
 
     #[test]
     fn test_staged_delay_verification() {
-        assert!(verify_staged_ledger_delay(0, MIN_LEDGER_DELAY));
-        assert!(verify_staged_ledger_delay(0, MIN_LEDGER_DELAY + 1));
-        assert!(!verify_staged_ledger_delay(0, MIN_LEDGER_DELAY - 1));
-        assert!(verify_staged_ledger_delay(100, 100 + MIN_LEDGER_DELAY));
-        assert!(!verify_staged_ledger_delay(100, 100 + MIN_LEDGER_DELAY - 1));
+        assert!(verify_staged_delay(0, MIN_LEDGER_DELAY));
+        assert!(verify_staged_delay(0, MIN_LEDGER_DELAY + 1));
+        assert!(!verify_staged_delay(0, MIN_LEDGER_DELAY - 1));
+        assert!(verify_staged_delay(100, 100 + MIN_LEDGER_DELAY));
+        assert!(!verify_staged_delay(100, 100 + MIN_LEDGER_DELAY - 1));
     }
 
     #[test]
