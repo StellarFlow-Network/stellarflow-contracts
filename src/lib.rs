@@ -364,10 +364,52 @@ pub enum ContractError {
     /// Dynamic remittance fee split configuration is invalid.
     InvalidFeeSplitConfig = 90,
     /// A fee allocation does not add up to the original total.
-    /// Recovery steps: Inspect the state for FeeDistributionMismatch and retry with valid inputs or proper conditions.
-    FeeDistributionMismatch = 83,
+    FeeDistributionMismatch = 91,
     /// Public inputs to zero-knowledge proof do not match contract state parameters.
-    InvalidZKPublicInputs = 84,
+    InvalidZKPublicInputs = 92,
+
+    // ── Variants restored from the pre-merge tree ────────────────────────────
+    // These discriminants are referenced by name throughout the module tree.
+    // Note: DeadlineReached/NotReached/TooSoon/TooFar and InvalidArgument are
+    // already declared at codes 69-73 above; they are not repeated here.
+    BridgeRateLimitExceeded = 100,
+    CapacityExceeded = 101,
+    CommitmentExpired = 102,
+    CommitmentHashMismatch = 103,
+    CommitmentNotActive = 104,
+    CommitmentNotExpired = 105,
+    CommitmentNotFound = 106,
+    CommitmentNotRevealWindow = 107,
+    CommitmentWindowTooLong = 108,
+    CommitmentWindowTooShort = 109,
+    EmergencyRevocationAlreadyActive = 114,
+    EventTopicLimitExceeded = 115,
+    HtlcNotActive = 116,
+    HtlcNotFound = 117,
+    InvalidBridgeRateLimit = 119,
+    InvalidDelegate = 120,
+    InvalidMerkleProof = 121,
+    InvalidPreImage = 122,
+    InvalidPublicInputs = 123,
+    InvalidThreshold = 124,
+    InvariantViolation = 125,
+    NoActiveDelegation = 126,
+    NoPreviousUpgrade = 127,
+    NoVotingWeight = 128,
+    NotEmergencyAdmin = 129,
+    NotRecoveryKey = 130,
+    PayloadHashMismatch = 131,
+    PoolNotFound = 132,
+    ProposalAlreadyCancelledOrExecuted = 133,
+    RecoveryKeyNotConfigured = 134,
+    RecoveryNotAvailableYet = 135,
+    RollbackWindowExpired = 136,
+    RouteExecutionFailed = 137,
+    TimelockNotExpired = 138,
+    TooManyActiveCommitments = 139,
+    TooManyActiveHtlcs = 140,
+    UpgradeHealthCheckFailed = 141,
+    ZeroSwapAmount = 142,
 }
 
 impl ContractError {
