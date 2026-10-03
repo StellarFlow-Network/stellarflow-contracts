@@ -81,29 +81,6 @@ pub struct GovernanceProposal {
 ///
 /// Only one governance proposal may be active at a time. Returns the
 /// assigned proposal ID.
-pub fn submit_governance_proposal(
-    env: &Env,
-    proposer: Address,
-    wasm_hash: BytesN<32>,
-) -> Result<u64, ContractError> {
-    // Only one active proposal at a time.
-    if env.storage().instance().has(&GOVERNANCE_PROPOSAL_KEY) {
-        let existing: GovernanceProposal = env
-            .storage()
-            .instance()
-            .get(&GOVERNANCE_PROPOSAL_KEY)
-            .unwrap();
-        if existing.status == ProposalStatus::Pending
-            || existing.status == ProposalStatus::Executable
-        {
-            return Err(ContractError::ProposalAlreadyActive);
-        }
-    }
-
-    if crate::veto::is_hash_vetoed(env, &wasm_hash) {
-        return Err(ContractError::ProposalAlreadyVetoed);
-    }
-
 /// Proposal state enumeration for governance lifecycle management.
 ///
 /// Proposals transition through states as they move through voting, approval,
@@ -346,6 +323,10 @@ pub fn submit_governance_proposal(
         {
             return Err(ContractError::ProposalAlreadyActive);
         }
+    }
+
+    if crate::veto::is_hash_vetoed(env, &wasm_hash) {
+        return Err(ContractError::ProposalAlreadyVetoed);
     }
 
     proposer.require_auth();

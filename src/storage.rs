@@ -7,6 +7,8 @@
 use crate::NodeProfile;
 use soroban_sdk::{contracttype, symbol_short, Address, Env, Map, Symbol};
 
+pub mod ephemeral;
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {
@@ -103,6 +105,8 @@ pub struct FeedStakeValue {
 const THRESHOLD: u32 = 10_000;
 /// TTL target applied on bump (~100k ledgers).
 const BUMP_AMOUNT: u32 = 100_000;
+/// Persistent-entry TTL threshold, shared by callers that bump persistent keys.
+pub const PERSISTENT_TTL_THRESHOLD: u32 = THRESHOLD;
 
 /// Extends TTL for Persistent storage using strict 10k/100k rule.
 pub fn extend_persistent_ttl<K: soroban_sdk::IntoVal<Env, soroban_sdk::Val>>(env: &Env, key: &K) {

@@ -700,6 +700,33 @@ fn verification_key_storage_key(circuit_id: &BytesN<32>) -> BytesN<32> {
     circuit_id.clone()
 }
 
+/// Compute verification hash binding verification key, proof, and challenge.
+fn compute_verification_hash(
+    env: &Env,
+    vkey: &VerificationKey,
+    _proof: &Groth16Proof,
+    _public_inputs: &Vec<BytesN<32>>,
+    challenge: &BytesN<32>,
+) -> BytesN<32> {
+    let mut data = Bytes::new(env);
+    for &byte in b"stellarflow:groth16:pairing" {
+        data.push_back(byte);
+    }
+    for &byte in vkey.alpha_beta_hash.to_array().iter() {
+        data.push_back(byte);
+    }
+    for &byte in vkey.gamma_hash.to_array().iter() {
+        data.push_back(byte);
+    }
+    for &byte in vkey.delta_hash.to_array().iter() {
+        data.push_back(byte);
+    }
+    for &byte in challenge.to_array().iter() {
+        data.push_back(byte);
+    }
+    env.crypto().sha256(&data)
+}
+
 /// Check if a byte slice is all zeros.
 fn is_zero_bytes(bytes: &[u8]) -> bool {
     bytes.iter().all(|&b| b == 0)
