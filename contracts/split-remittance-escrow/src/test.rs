@@ -76,7 +76,7 @@ fn test_initialize_sets_admin_and_token() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #2)")]
+#[should_panic(expected = "ContractError(Contract, #2)")]
 fn test_initialize_twice_fails() {
     let s = setup();
     let c = client(&s);
@@ -107,7 +107,7 @@ fn test_create_split_order_locks_and_allocates_partials() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #9)")]
+#[should_panic(expected = "ContractError(Contract, #9)")]
 fn test_create_invalid_proportions_fails() {
     let s = setup();
     let c = client(&s);
@@ -118,7 +118,7 @@ fn test_create_invalid_proportions_fails() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #4)")]
+#[should_panic(expected = "ContractError(Contract, #4)")]
 fn test_create_zero_amount_fails() {
     let s = setup();
     let c = client(&s);
@@ -161,7 +161,7 @@ fn test_all_legs_settled_completes_order() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #12)")]
+#[should_panic(expected = "ContractError(Contract, #12)")]
 fn test_double_settle_fails() {
     let s = setup();
     let c = client(&s);
@@ -171,7 +171,7 @@ fn test_double_settle_fails() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #7)")]
+#[should_panic(expected = "ContractError(Contract, #7)")]
 fn test_refund_before_12h_fails() {
     let s = setup();
     let c = client(&s);
@@ -226,7 +226,7 @@ fn test_three_way_split_partial_formula() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #6)")]
+#[should_panic(expected = "ContractError(Contract, #6)")]
 fn test_refund_after_completed_fails() {
     let s = setup();
     let c = client(&s);

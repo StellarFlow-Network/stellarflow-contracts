@@ -9,6 +9,7 @@ use soroban_sdk::{contracterror, contracttype, env, Error};
 #[into_val]
 pub enum ContractError {
     // Technical Requirement: Return a clear, custom exception error code early
+    /// Recovery steps: Inspect the state for InvalidDivisionFactor and retry with valid inputs or proper conditions.
     InvalidDivisionFactor = 536,
 }
 

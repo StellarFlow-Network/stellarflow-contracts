@@ -350,6 +350,25 @@ fn fee_for_volatility(vol_bps: u64, cfg: &AdaptiveFeeConfig) -> u32 {
     ((base + ratio) as u32).clamp(cfg.base_fee_bps, cfg.max_fee_bps)
 }
 
+/// Compute dynamic fee fswap = fbase + (Vsigma * fscalar) constrained to fswap <= 0.01 (100 BPS) (Issue #930).
+pub fn compute_oracle_volatility_fee(
+    f_base: u32,
+    v_sigma: u32,
+    f_scalar: u32,
+) -> Result<u32, ContractError> {
+    const MAX_FEE_BPS: u32 = 100;
+    if f_base > MAX_FEE_BPS {
+        return Err(ContractError::Overflow);
+    }
+    let dynamic_term = (v_sigma as u64)
+        .checked_mul(f_scalar as u64)
+        .ok_or(ContractError::Overflow)?;
+    let total = (f_base as u64)
+        .checked_add(dynamic_term)
+        .ok_or(ContractError::Overflow)?;
+    Ok(total.min(MAX_FEE_BPS as u64) as u32)
+}
+
 /// Exponential-style decay toward baseline using a half-life model that is
 /// integer-safe: `prev * half_life / (half_life + elapsed)`.
 fn decayed_volatility(prev_vol: u64, half_life_secs: u64, elapsed_secs: u64) -> u64 {
@@ -480,15 +499,16 @@ mod tests {
             network_id: Default::default(),
             base_reserve: 0,
             min_temp_entry_ttl: 0,
-            min_live_entry_ttl: 0,
-            max_entry_ttl: u32::MAX,
-            ledger_entries: Default::default(),
+            min_persistent_entry_ttl: 0,
+            max_entry_ttl: 6_312_000,
         });
     }
 
     #[test]
     fn record_observations_and_trim_ring() {
         let (env, _client, _admin, pool) = setup();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
         let sym: Symbol = symbol_short!("NGN");
         set_time(&env, 1_000_000);
         let cfg = get_adaptive_fee_config(&env, pool).unwrap();
@@ -504,7 +524,8 @@ mod tests {
         assert!(last > 0);
         let vol = get_pool_volatility_bps(&env, pool).unwrap();
         assert!(vol > 0, "with many observations variance should be non-zero");
-    }
+    });
+}
 
     #[test]
     fn fee_stays_at_base_when_volatility_below_threshold() {
@@ -518,6 +539,8 @@ mod tests {
     #[test]
     fn fee_reaches_max_cap_at_high_volatility() {
         let (env, client, _admin, pool) = setup();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
         let sym: Symbol = symbol_short!("NGN");
         // High dispersion within the window -> climbing fee capped at max.
         let cfg = get_adaptive_fee_config(&env, pool).unwrap();
@@ -529,11 +552,14 @@ mod tests {
         }
         let snap = client.get_adaptive_fee(&pool);
         assert_eq!(snap.fee_bps, 150, "high volatility should hit the max cap of 150bps");
-    }
+    });
+}
 
     #[test]
     fn fee_decays_back_to_base_when_observations_stop() {
         let (env, client, _admin, pool) = setup();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
         let sym: Symbol = symbol_short!("NGN");
         let cfg = get_adaptive_fee_config(&env, pool).unwrap();
         let start = 2_000_000u64;
@@ -557,15 +583,19 @@ mod tests {
         );
         // The decaying tail relaxes toward baseline; it must be strictly below max.
         assert!(snap_later.fee_bps < 150);
-    }
+    });
+}
 
     #[test]
     fn unconfigured_pool_is_rejected() {
         let (env, _client, _admin, _pool) = setup();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
         let unconfigured: AssetId = 999_999_999;
         assert_eq!(
             resolve_adaptive_fee(&env, unconfigured),
             Err(ContractError::NotRegistered)
         );
-    }
+    });
+}
 }

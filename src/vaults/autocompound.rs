@@ -18,6 +18,15 @@ use crate::ContractError;
 /// Denominator for basis-point fee math (10_000 bps == 100%).
 pub const BPS_DENOMINATOR: i128 = 10_000;
 
+/// First event topic for this contract's events, per the protocol-wide
+/// `(protocol_event, action)` convention: a stable area symbol that indexers
+/// can filter on, followed by the action.
+pub const EVENT_PROTOCOL_TOPIC: soroban_sdk::Symbol = soroban_sdk::symbol_short!("vault");
+/// Action emitted when a harvest compounds yield back into shares.
+pub const EVENT_ACTION_HARVEST: soroban_sdk::Symbol = soroban_sdk::symbol_short!("harvest");
+/// Action emitted when the drawdown circuit breaker trips.
+pub const EVENT_ACTION_BREAKER: soroban_sdk::Symbol = soroban_sdk::symbol_short!("breaker");
+
 /// Protocol default performance fee: 2%.
 pub const DEFAULT_PERFORMANCE_FEE_BPS: u32 = 200;
 
@@ -66,6 +75,25 @@ pub struct HarvestResult {
 /// The borrower must implement `on_flash_loan(asset, amount, fee)` and return
 /// at least the principal plus the protocol fee before the callback returns.
 pub fn flash_loan(env: &Env, borrower: Address, amount: i128) -> Result<i128, ContractError> {
+    // Take the transient execution lock *before* handing control to the
+    // borrower. Without it, a malicious `on_flash_loan` can re-enter the vault
+    // while this loan is still outstanding — depositing, withdrawing or taking
+    // another flash loan against assets the vault has already lent out.
+    crate::security::reentrancy::lock(env)?;
+
+    let result = flash_loan_locked(env, borrower, amount);
+
+    // Released explicitly on both the success and the error path rather than
+    // through an RAII guard: a host error or a panic unwinds without running
+    // `Drop` in WASM, which would leave the lock permanently set and brick
+    // every later flash loan.
+    crate::security::reentrancy::unlock(env);
+
+    result
+}
+
+/// Flash loan body. Runs with the re-entrancy lock already held.
+fn flash_loan_locked(env: &Env, borrower: Address, amount: i128) -> Result<i128, ContractError> {
     if amount <= 0 {
         return Err(ContractError::VaultZeroAmount);
     }
@@ -93,13 +121,14 @@ pub fn flash_loan(env: &Env, borrower: Address, amount: i128) -> Result<i128, Co
         ],
     );
 
+    // Repayment is verified only after the callback returns. A shortfall is a
+    // typed revert rather than an `assert!`: panicking aborts the contract
+    // instead of unwinding cleanly, and the message would be the only record
+    // of how far short the borrower came.
     let final_balance = token_client.balance(&env.current_contract_address());
-    assert!(
-        final_balance >= required_balance,
-        "Flash loan repayment incomplete: final={}, required={}",
-        final_balance,
-        required_balance
-    );
+    if final_balance < required_balance {
+        return Err(ContractError::VaultInsufficientBalance);
+    }
 
     Ok(fee)
 }
@@ -219,8 +248,11 @@ pub fn trigger_circuit_breaker(env: &Env) {
     env.storage().instance().set(&crate::vaults::pause_guard::VAULT_PAUSED_KEY, &true);
     env.storage().instance().set(&crate::vaults::pause_guard::EMRG_WD_KEY, &true);
 
+    // Topics are `(protocol_event, action)` so both are filterable symbols.
+    // Previously the first topic was itself an action, so neither topic
+    // identified the emitting area.
     env.events().publish(
-        (soroban_sdk::symbol_short!("circuit"), soroban_sdk::symbol_short!("drawdown")),
+        (EVENT_PROTOCOL_TOPIC, EVENT_ACTION_BREAKER),
         env.ledger().timestamp(),
     );
 }
@@ -450,9 +482,13 @@ pub fn harvest(env: &Env, keeper: Address, yield_amount: i128) -> Result<Harvest
         update_peak_share_value(env, new_share_val);
     }
 
+    // The keeper was previously the second *topic*, mixing an address into the
+    // topic tuple. Addresses are expensive as topics and make the second topic
+    // non-uniform, so it moves into the payload where the rest of the harvest
+    // data already lives.
     env.events().publish(
-        (soroban_sdk::symbol_short!("harvest"), keeper),
-        (yield_amount, fee, compounded, new_assets),
+        (EVENT_PROTOCOL_TOPIC, EVENT_ACTION_HARVEST),
+        (keeper, yield_amount, fee, compounded, new_assets),
     );
 
     // Invariant check: verify balance consistency after state change
@@ -636,7 +672,7 @@ mod tests {
         mint(&env, &asset, &keeper, 500);
         let res = client.try_vault_harvest(&keeper, &500);
         assert!(res.is_err());
-        assert!(client.vault_circuit_breaker_triggered());
+        assert_eq!(client.vault_circuit_breaker_triggered(), true);
     }
 
     #[test]
@@ -653,9 +689,9 @@ mod tests {
         });
 
         // Current share price is 1.0e18 (50% loss from peak)
-        let triggered = client.vault_check_circuit_breaker().unwrap();
+        let triggered = client.vault_check_circuit_breaker();
         assert_eq!(triggered, true);
-        assert!(client.vault_circuit_breaker_triggered());
+        assert_eq!(client.vault_circuit_breaker_triggered(), true);
 
         // Vault is now paused & in emergency withdrawal mode
         env.as_contract(&client.address, || {

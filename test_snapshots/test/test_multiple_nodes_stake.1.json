@@ -89,7 +89,14 @@
           "contract_data": {
             "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
             "key": {
-              "symbol": "HBEAT"
+              "vec": [
+                {
+                  "symbol": "HeartbeatByAsset"
+                },
+                {
+                  "u32": 0
+                }
+              ]
             },
             "durability": "temporary"
           }
@@ -102,20 +109,18 @@
                 "ext": "v0",
                 "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
                 "key": {
-                  "symbol": "HBEAT"
+                  "vec": [
+                    {
+                      "symbol": "HeartbeatByAsset"
+                    },
+                    {
+                      "u32": 0
+                    }
+                  ]
                 },
                 "durability": "temporary",
                 "val": {
-                  "map": [
-                    {
-                      "key": {
-                        "u32": 0
-                      },
-                      "val": {
-                        "u64": 0
-                      }
-                    }
-                  ]
+                  "u64": 0
                 }
               }
             },
@@ -159,6 +164,14 @@
                               },
                               "val": {
                                 "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
+                              }
+                            },
+                            {
+                              "key": {
+                                "symbol": "max_fee_ceiling"
+                              },
+                              "val": {
+                                "u64": 10000
                               }
                             },
                             {
@@ -207,7 +220,7 @@
                       },
                       {
                         "key": {
-                          "symbol": "TREASUR"
+                          "symbol": "TREASURY"
                         },
                         "val": {
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"

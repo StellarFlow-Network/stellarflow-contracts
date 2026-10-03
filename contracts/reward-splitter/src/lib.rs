@@ -58,20 +58,34 @@ pub enum DataKey {
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
-pub enum Error {
+pub enum ContractError {
+    /// Recovery steps: Inspect the state for AlreadyInitialized and retry with valid inputs or proper conditions.
     AlreadyInitialized = 1,
+    /// Recovery steps: Inspect the state for Unauthorized and retry with valid inputs or proper conditions.
     Unauthorized = 2,
+    /// Recovery steps: Inspect the state for InvalidShare and retry with valid inputs or proper conditions.
     InvalidShare = 3,
+    /// Recovery steps: Inspect the state for TotalSharesExceeded and retry with valid inputs or proper conditions.
     TotalSharesExceeded = 4,
+    /// Recovery steps: Inspect the state for NoRecipients and retry with valid inputs or proper conditions.
     NoRecipients = 5,
+    /// Recovery steps: Inspect the state for InsufficientBalance and retry with valid inputs or proper conditions.
     InsufficientBalance = 6,
+    /// Recovery steps: Inspect the state for ZeroAmount and retry with valid inputs or proper conditions.
     ZeroAmount = 7,
+    /// Recovery steps: Inspect the state for TokenNotSet and retry with valid inputs or proper conditions.
     TokenNotSet = 8,
+    /// Recovery steps: Inspect the state for CooldownNotExpired and retry with valid inputs or proper conditions.
     CooldownNotExpired = 9,
+    /// Recovery steps: Inspect the state for ActionNotFound and retry with valid inputs or proper conditions.
     ActionNotFound = 10,
+    /// Recovery steps: Inspect the state for ActionAlreadyExecuted and retry with valid inputs or proper conditions.
     ActionAlreadyExecuted = 11,
+    /// Recovery steps: Inspect the state for ActionAlreadyCancelled and retry with valid inputs or proper conditions.
     ActionAlreadyCancelled = 12,
+    /// Recovery steps: Inspect the state for InvalidStage and retry with valid inputs or proper conditions.
     InvalidStage = 13,
+    /// Recovery steps: Inspect the state for InvalidActionType and retry with valid inputs or proper conditions.
     InvalidActionType = 14,
 }
 
@@ -88,7 +102,7 @@ impl RewardSplitter {
     /// Initialize the contract with admin address and token to distribute
     pub fn initialize(env: Env, admin: Address, token: Address) {
         if env.storage().instance().has(&DataKey::Initialized) {
-            panic_with_error!(&env, Error::AlreadyInitialized);
+            panic_with_error!(&env, ContractError::AlreadyInitialized);
         }
 
         // Store current values as defaults
@@ -141,7 +155,7 @@ impl RewardSplitter {
         Self::require_admin(&env, &admin);
 
         if share == 0 || share > 10000 {
-            panic_with_error!(&env, Error::InvalidShare);
+            panic_with_error!(&env, ContractError::InvalidShare);
         }
 
         let mut recipients: Vec<Recipient> = env
@@ -158,7 +172,7 @@ impl RewardSplitter {
 
         // Check if total shares would exceed 10000 (100%)
         if total_shares + share > 10000 {
-            panic_with_error!(&env, Error::TotalSharesExceeded);
+            panic_with_error!(&env, ContractError::TotalSharesExceeded);
         }
 
         // Add recipient
@@ -222,7 +236,7 @@ impl RewardSplitter {
         Self::require_admin(&env, &admin);
 
         if new_share == 0 || new_share > 10000 {
-            panic_with_error!(&env, Error::InvalidShare);
+            panic_with_error!(&env, ContractError::InvalidShare);
         }
 
         let mut recipients: Vec<Recipient> = env
@@ -255,7 +269,7 @@ impl RewardSplitter {
         // Check if new total would exceed 10000
         let new_total = total_shares - old_share + new_share;
         if new_total > 10000 {
-            panic_with_error!(&env, Error::TotalSharesExceeded);
+            panic_with_error!(&env, ContractError::TotalSharesExceeded);
         }
 
         // Update the recipient
@@ -282,14 +296,14 @@ impl RewardSplitter {
     /// Distribute tokens to all recipients according to their fixed shares
     pub fn distribute(env: Env, amount: i128) {
         if amount <= 0 {
-            panic_with_error!(&env, Error::ZeroAmount);
+            panic_with_error!(&env, ContractError::ZeroAmount);
         }
 
         let token: Address = env
             .storage()
             .instance()
             .get(&DataKey::Token)
-            .ok_or_else(|| panic_with_error!(&env, Error::TokenNotSet))
+            .ok_or_else(|| panic_with_error!(&env, ContractError::TokenNotSet))
             .unwrap();
 
         let recipients: Vec<Recipient> = env
@@ -299,7 +313,7 @@ impl RewardSplitter {
             .unwrap_or_else(|| Vec::new(&env));
 
         if recipients.is_empty() {
-            panic_with_error!(&env, Error::NoRecipients);
+            panic_with_error!(&env, ContractError::NoRecipients);
         }
 
         let total_shares: u32 = env
@@ -309,7 +323,7 @@ impl RewardSplitter {
             .unwrap_or(0);
 
         if total_shares == 0 {
-            panic_with_error!(&env, Error::NoRecipients);
+            panic_with_error!(&env, ContractError::NoRecipients);
         }
 
         let contract_address = env.current_contract_address();
@@ -318,7 +332,7 @@ impl RewardSplitter {
         // Check contract balance
         let balance = token_client.balance(&contract_address);
         if balance < amount {
-            panic_with_error!(&env, Error::InsufficientBalance);
+            panic_with_error!(&env, ContractError::InsufficientBalance);
         }
 
         // Distribute to each recipient
@@ -416,7 +430,7 @@ impl RewardSplitter {
         admin.require_auth();
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if stored_admin != *admin {
-            panic_with_error!(env, Error::Unauthorized);
+            panic_with_error!(env, ContractError::Unauthorized);
         }
     }
 
@@ -459,19 +473,19 @@ impl RewardSplitter {
             .storage()
             .instance()
             .get(&DataKey::CooldownAction(action_id))
-            .ok_or_else(|| panic_with_error!(&env, Error::ActionNotFound))
+            .ok_or_else(|| panic_with_error!(&env, ContractError::ActionNotFound))
             .unwrap();
 
         if action.executed {
-            panic_with_error!(&env, Error::ActionAlreadyExecuted);
+            panic_with_error!(&env, ContractError::ActionAlreadyExecuted);
         }
         if action.cancelled {
-            panic_with_error!(&env, Error::ActionAlreadyCancelled);
+            panic_with_error!(&env, ContractError::ActionAlreadyCancelled);
         }
 
         // Prevent advancing past stage 3
         if action.current_stage > 3 {
-            panic_with_error!(&env, Error::InvalidStage);
+            panic_with_error!(&env, ContractError::InvalidStage);
         }
 
         let current_stage = action.current_stage;
@@ -479,14 +493,14 @@ impl RewardSplitter {
             .storage()
             .instance()
             .get(&DataKey::CooldownStage(current_stage as u64))
-            .ok_or_else(|| panic_with_error!(&env, Error::InvalidStage))
+            .ok_or_else(|| panic_with_error!(&env, ContractError::InvalidStage))
             .unwrap();
 
         let now = env.ledger().timestamp();
         let stage_expiry = action.proposed_at + stage.cooldown_seconds;
 
         if now < stage_expiry {
-            panic_with_error!(&env, Error::CooldownNotExpired);
+            panic_with_error!(&env, ContractError::CooldownNotExpired);
         }
 
         // Advance to next stage
@@ -504,19 +518,19 @@ impl RewardSplitter {
             .storage()
             .instance()
             .get(&DataKey::CooldownAction(action_id))
-            .ok_or_else(|| panic_with_error!(&env, Error::ActionNotFound))
+            .ok_or_else(|| panic_with_error!(&env, ContractError::ActionNotFound))
             .unwrap();
 
         if action.executed {
-            panic_with_error!(&env, Error::ActionAlreadyExecuted);
+            panic_with_error!(&env, ContractError::ActionAlreadyExecuted);
         }
         if action.cancelled {
-            panic_with_error!(&env, Error::ActionAlreadyCancelled);
+            panic_with_error!(&env, ContractError::ActionAlreadyCancelled);
         }
 
         // Check if all stages are complete (stage 4 means past stage 3)
         if action.current_stage < 4 {
-            panic_with_error!(&env, Error::CooldownNotExpired);
+            panic_with_error!(&env, ContractError::CooldownNotExpired);
         }
 
         // Execute the action based on type
@@ -548,14 +562,14 @@ impl RewardSplitter {
             .storage()
             .instance()
             .get(&DataKey::CooldownAction(action_id))
-            .ok_or_else(|| panic_with_error!(&env, Error::ActionNotFound))
+            .ok_or_else(|| panic_with_error!(&env, ContractError::ActionNotFound))
             .unwrap();
 
         if action.executed {
-            panic_with_error!(&env, Error::ActionAlreadyExecuted);
+            panic_with_error!(&env, ContractError::ActionAlreadyExecuted);
         }
         if action.cancelled {
-            panic_with_error!(&env, Error::ActionAlreadyCancelled);
+            panic_with_error!(&env, ContractError::ActionAlreadyCancelled);
         }
 
         action.cancelled = true;
@@ -608,7 +622,7 @@ impl RewardSplitter {
         Self::require_admin(&env, &admin);
 
         if stage_number < 1 || stage_number > 3 {
-            panic_with_error!(&env, Error::InvalidStage);
+            panic_with_error!(&env, ContractError::InvalidStage);
         }
 
         let stage = CooldownStage {

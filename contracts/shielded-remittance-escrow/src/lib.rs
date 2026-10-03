@@ -19,28 +19,41 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Vec,
 };
 
 /// A nullifier is the output of the note's ZK circuit — a 32-byte field
 /// element. It is unlinkable to the deposit note but unique per spend.
 pub type Nullifier = BytesN<32>;
 
+/// Sparse spent-nullifier tree depth. The path direction is derived from all
+/// 256 bits of the nullifier, so every nullifier has a deterministic slot.
+pub const SPENT_TREE_DEPTH: u32 = 256;
+
+const SPENT_TREE_TTL_THRESHOLD: u32 = 5_000;
+const SPENT_TREE_TTL_LEDGERS: u32 = 6_312_000;
+
 #[contracttype]
 #[derive(Clone)]
 enum DataKey {
     /// Maps a spent nullifier -> unit marker. Presence = spent.
     Nullifier(Nullifier),
+    /// Root of the sparse tree containing all spent nullifiers.
+    SpentTreeRoot,
 }
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
-pub enum NullifierError {
+pub enum ContractError {
     /// The nullifier has already been recorded — this note was already withdrawn.
-    AlreadySpent = 1,
+    NullifierAlreadySpent = 1,
     /// The supplied ZK proof did not verify against the nullifier/public inputs.
+    /// Recovery steps: Inspect the state for InvalidProof and retry with valid inputs or proper conditions.
     InvalidProof = 2,
+    /// The supplied sparse Merkle path does not prove the nullifier is unspent.
+    /// Recovery steps: Inspect the state for InvalidMerkleProof and retry with valid inputs or proper conditions.
+    InvalidMerkleProof = 3,
 }
 
 /// ---- Storage layer ---------------------------------------------------
@@ -61,11 +74,93 @@ mod storage {
     pub fn mark_spent(env: &Env, nullifier: &Nullifier) {
         let key = DataKey::Nullifier(nullifier.clone());
         env.storage().persistent().set(&key, &true);
-        env.storage().persistent().extend_ttl(
-            &key,
-            NULLIFIER_TTL_THRESHOLD,
-            NULLIFIER_TTL_LEDGERS,
-        );
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, NULLIFIER_TTL_THRESHOLD, NULLIFIER_TTL_LEDGERS);
+    }
+
+    pub fn spent_tree_root(env: &Env) -> BytesN<32> {
+        env.storage()
+            .instance()
+            .get(&DataKey::SpentTreeRoot)
+            .unwrap_or_else(|| super::spent_tree::empty_root(env))
+    }
+
+    pub fn store_spent_tree_root(env: &Env, root: &BytesN<32>) {
+        let key = DataKey::SpentTreeRoot;
+        env.storage().instance().set(&key, root);
+        env.storage()
+            .instance()
+            .extend_ttl(SPENT_TREE_TTL_THRESHOLD, SPENT_TREE_TTL_LEDGERS);
+    }
+}
+
+/// ---- Sparse spent-nullifier Merkle tree -------------------------------
+///
+/// A valid spend supplies a path proving that the nullifier's deterministic
+/// leaf is empty in the current root. The leaf is then replaced with the
+/// nullifier hash and the updated root is persisted in instance storage.
+mod spent_tree {
+    use super::*;
+
+    fn hash_pair(env: &Env, left: &BytesN<32>, right: &BytesN<32>) -> BytesN<32> {
+        let mut bytes = soroban_sdk::Bytes::new(env);
+        bytes.append(&soroban_sdk::Bytes::from_slice(env, &left.to_array()));
+        bytes.append(&soroban_sdk::Bytes::from_slice(env, &right.to_array()));
+        env.crypto().sha256(&bytes)
+    }
+
+    fn nullifier_bit(nullifier: &Nullifier, level: u32) -> bool {
+        let bytes = nullifier.to_array();
+        let byte_index = 31 - (level / 8) as usize;
+        let bit_index = level % 8;
+        (bytes[byte_index] & (1 << bit_index)) != 0
+    }
+
+    pub fn empty_root(env: &Env) -> BytesN<32> {
+        let mut root = BytesN::from_array(env, &[0u8; 32]);
+        for _ in 0..SPENT_TREE_DEPTH {
+            root = hash_pair(env, &root, &root);
+        }
+        root
+    }
+
+    /// Return the new root if `nullifier` is absent from `current_root`.
+    /// An inclusion proof for the nullifier itself identifies a prior spend.
+    pub fn verify_unspent_and_compute_root(
+        env: &Env,
+        nullifier: &Nullifier,
+        path: &Vec<BytesN<32>>,
+        current_root: &BytesN<32>,
+    ) -> Result<BytesN<32>, ContractError> {
+        if nullifier == &BytesN::from_array(env, &[0u8; 32]) {
+            return Err(ContractError::InvalidMerkleProof);
+        }
+
+        if path.len() != SPENT_TREE_DEPTH {
+            return Err(ContractError::InvalidMerkleProof);
+        }
+
+        let mut empty_root = BytesN::from_array(env, &[0u8; 32]);
+        let mut spent_root = nullifier.clone();
+        for level in 0..SPENT_TREE_DEPTH {
+            let sibling = path.get(level).ok_or(ContractError::InvalidMerkleProof)?;
+            if nullifier_bit(nullifier, level) {
+                empty_root = hash_pair(env, &sibling, &empty_root);
+                spent_root = hash_pair(env, &sibling, &spent_root);
+            } else {
+                empty_root = hash_pair(env, &empty_root, &sibling);
+                spent_root = hash_pair(env, &spent_root, &sibling);
+            }
+        }
+
+        if &spent_root == current_root {
+            return Err(ContractError::NullifierAlreadySpent);
+        }
+        if &empty_root != current_root {
+            return Err(ContractError::InvalidMerkleProof);
+        }
+        Ok(spent_root)
     }
 }
 
@@ -85,16 +180,24 @@ mod verifier {
         nullifier: &Nullifier,
         proof: &BytesN<256>,
         public_inputs: &BytesN<32>,
-    ) -> Result<(), NullifierError> {
+        spent_path: &Vec<BytesN<32>>,
+    ) -> Result<BytesN<32>, ContractError> {
         if storage::is_spent(env, nullifier) {
-            return Err(NullifierError::AlreadySpent);
+            return Err(ContractError::NullifierAlreadySpent);
         }
+
+        let updated_spent_root = spent_tree::verify_unspent_and_compute_root(
+            env,
+            nullifier,
+            spent_path,
+            &storage::spent_tree_root(env),
+        )?;
 
         if !verify_zk_proof(proof, nullifier, public_inputs) {
-            return Err(NullifierError::InvalidProof);
+            return Err(ContractError::InvalidProof);
         }
 
-        Ok(())
+        Ok(updated_spent_root)
     }
 
     /// Placeholder for the actual proof system integration (e.g. Groth16 /
@@ -131,21 +234,22 @@ impl NullifierVerifier {
         nullifier: Nullifier,
         proof: BytesN<256>,
         public_inputs: BytesN<32>,
+        spent_path: Vec<BytesN<32>>,
         recipient: Address,
         amount: i128,
-    ) -> Result<(), NullifierError> {
-        verifier::verify_withdrawal(&env, &nullifier, &proof, &public_inputs)?;
+    ) -> Result<(), ContractError> {
+        let updated_spent_root =
+            verifier::verify_withdrawal(&env, &nullifier, &proof, &public_inputs, &spent_path)?;
 
         storage::mark_spent(&env, &nullifier);
+        storage::store_spent_tree_root(&env, &updated_spent_root);
 
         // Anonymous payout event: topics carry only the event tag and the
         // nullifier (spend-uniqueness marker, unlinkable to the deposit).
         // Data carries recipient + amount — the only fields that must be
         // public for the payout to be indexable at all.
-        env.events().publish(
-            (symbol_short!("payout"), nullifier),
-            (recipient, amount),
-        );
+        env.events()
+            .publish((symbol_short!("payout"), nullifier), (recipient, amount));
 
         Ok(())
     }
@@ -154,5 +258,88 @@ impl NullifierVerifier {
     /// pre-flight a nullifier before submitting a withdrawal tx.
     pub fn is_nullifier_spent(env: Env, nullifier: Nullifier) -> bool {
         storage::is_spent(&env, &nullifier)
+    }
+
+    /// Return the current spent-nullifier Merkle root for proof construction.
+    pub fn spent_tree_root(env: Env) -> BytesN<32> {
+        storage::spent_tree_root(&env)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::testutils::Ledger;
+
+    fn nullifier(env: &Env, byte: u8) -> Nullifier {
+        BytesN::from_array(env, &[byte; 32])
+    }
+
+    fn empty_path(env: &Env) -> Vec<BytesN<32>> {
+        let mut path = Vec::new(env);
+        let zero = BytesN::from_array(env, &[0u8; 32]);
+        for _ in 0..SPENT_TREE_DEPTH {
+            path.push_back(zero.clone());
+        }
+        path
+    }
+
+    #[test]
+    fn verifies_absence_and_updates_root_for_next_ledger() {
+        let env = Env::default();
+        let nf = nullifier(&env, 7);
+        let path = empty_path(&env);
+        let empty_root = spent_tree::empty_root(&env);
+
+        let updated_root =
+            spent_tree::verify_unspent_and_compute_root(&env, &nf, &path, &empty_root).unwrap();
+        assert_ne!(updated_root, empty_root);
+
+        storage::store_spent_tree_root(&env, &updated_root);
+        storage::mark_spent(&env, &nf);
+        env.ledger().set_sequence_number(2);
+
+        assert_eq!(storage::spent_tree_root(&env), updated_root);
+        assert!(storage::is_spent(&env, &nf));
+        assert_eq!(
+            spent_tree::verify_unspent_and_compute_root(&env, &nf, &path, &updated_root),
+            Err(ContractError::NullifierAlreadySpent)
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_or_wrong_length_paths() {
+        let env = Env::default();
+        let nf = nullifier(&env, 9);
+        let root = spent_tree::empty_root(&env);
+        let mut short_path = empty_path(&env);
+        short_path.pop_back();
+
+        assert_eq!(
+            spent_tree::verify_unspent_and_compute_root(&env, &nf, &short_path, &root),
+            Err(ContractError::InvalidMerkleProof)
+        );
+
+        let mut invalid_path = empty_path(&env);
+        invalid_path.set(0, nullifier(&env, 44));
+        assert_eq!(
+            spent_tree::verify_unspent_and_compute_root(&env, &nf, &invalid_path, &root),
+            Err(ContractError::InvalidMerkleProof)
+        );
+    }
+
+    #[test]
+    fn rejects_zero_nullifier() {
+        let env = Env::default();
+        let zero = BytesN::from_array(&env, &[0u8; 32]);
+        assert_eq!(
+            spent_tree::verify_unspent_and_compute_root(
+                &env,
+                &zero,
+                &empty_path(&env),
+                &spent_tree::empty_root(&env),
+            ),
+            Err(ContractError::InvalidMerkleProof)
+        );
     }
 }

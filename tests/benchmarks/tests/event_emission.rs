@@ -1,9 +1,12 @@
-use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env, Symbol, TryFromVal};
+use soroban_sdk::{
+    symbol_short, testutils::Address as _, testutils::Events as _, Address, Env, IntoVal, Symbol,
+    TryFromVal,
+};
 use stellarflow_benchmarks::events::{
     emit_compact, emit_governance_compact, emit_raw, emit_vault_compact, publish_topics,
     AmmRawEvent, GovernanceCompactEvent, VaultCompactEvent, EVENT_NAMESPACE,
 };
-use price_oracle::PriceOracle;
+use stellarflow_contracts::TimeLockedUpgradeContract;
 
 #[derive(Debug, Clone, Copy)]
 struct Usage {
@@ -14,7 +17,7 @@ struct Usage {
 fn measure_raw(env: &Env, trader: &Address) -> Usage {
     let cpu_before = env.budget().cpu_instruction_cost();
     let memory_before = env.budget().memory_bytes_cost();
-    let contract_id = env.register_contract(None, PriceOracle);
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
     env.as_contract(&contract_id, || {
         emit_raw(
             env,
@@ -38,7 +41,7 @@ fn measure_raw(env: &Env, trader: &Address) -> Usage {
 fn measure_compact(env: &Env, trader: &Address) -> Usage {
     let cpu_before = env.budget().cpu_instruction_cost();
     let memory_before = env.budget().memory_bytes_cost();
-    let contract_id = env.register_contract(None, PriceOracle);
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
     env.as_contract(&contract_id, || {
         emit_compact(
             env,
@@ -80,7 +83,7 @@ fn compact_tuple_is_no_more_expensive_than_raw_struct() {
 fn compact_event_topics_and_payload_are_indexer_compatible() {
     let env = Env::default();
     let trader = Address::generate(&env);
-    let contract_id = env.register_contract(None, PriceOracle);
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
     env.as_contract(&contract_id, || {
         emit_compact(
             &env,
@@ -133,7 +136,7 @@ fn amm_vault_and_governance_use_the_same_topic_order() {
     );
 
     let keeper = Address::generate(&env);
-    let contract_id = env.register_contract(None, PriceOracle);
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
     env.as_contract(&contract_id, || {
         emit_vault_compact(
             &env,

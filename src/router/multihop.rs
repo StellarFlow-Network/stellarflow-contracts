@@ -626,6 +626,8 @@ mod tests {
     #[test]
     fn validate_route_rejects_inconsistent_assets() {
         let env = Env::default();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
         let sender = Address::generate(&env);
         let pool = Address::generate(&env);
         let mut steps = Vec::new(&env);
@@ -650,7 +652,8 @@ mod tests {
             validate_route(&env, &route),
             Err(ContractError::InconsistentRouteAssets)
         );
-    }
+    });
+}
 
     #[test]
     fn estimate_route_rejects_empty() {
@@ -733,6 +736,8 @@ mod tests {
         use soroban_sdk::testutils::{Address as _, Ledger};
 
         let env = Env::default();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
         env.mock_all_auths();
         env.budget().reset_default();
 
@@ -803,5 +808,6 @@ mod tests {
             HALF_LIMIT,
         );
         let _ = result; // suppress unused-result warning
-    }
+    });
+}
 }

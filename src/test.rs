@@ -1,6 +1,7 @@
 use soroban_sdk::{symbol_short, Bytes, Env};
-use soroban_sdk::testutils::{Address as _, Ledger, LedgerInfo}; // Removed Symbol as _
+use soroban_sdk::testutils::{Address as _, Events, Ledger, LedgerInfo}; // Removed Symbol as _
 use crate::{
+    flash_loan_guard::FlashLoanFeeTier,
     ContractError, StakingTier, StakingTierConfig, TimeLockedUpgradeContract,
     TimeLockedUpgradeContractClient, DEFAULT_HEARTBEAT_INTERVAL, 
     AssetId,
@@ -17,7 +18,7 @@ fn advance_ledger_timestamp(env: &Env, delta: u64) {
         base_reserve: 10,
         min_temp_entry_ttl: 0,
         min_persistent_entry_ttl: 0,
-        max_entry_ttl: u32::MAX,
+        max_entry_ttl: 6_312_000,
     });
 }
 
@@ -171,7 +172,8 @@ fn test_propose_upgrade() {
     let new_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[1u8; 32]);
     let (salt, signature) = nonce_proof(&env, 0, b"propose-upgrade-0");
 
-    client.propose_upgrade(&new_wasm_hash, &admin, &0, &salt, &signature, &u64::MAX);
+    let signers = soroban_sdk::vec![&env, admin.clone()];
+    client.propose_upgrade(&new_wasm_hash, &admin, &signers, &0, &salt, &signature, &u64::MAX);
 
     let pending = client.get_pending_upgrade();
     assert!(pending.is_some());
@@ -184,6 +186,123 @@ fn test_propose_upgrade() {
     let remaining = client.get_upgrade_timelock_remaining();
     assert!(remaining.is_some());
     assert_eq!(remaining.unwrap(), 5000u32);
+}
+
+#[test]
+fn test_multi_stage_timelock_full_lifecycle() {
+    use crate::upgrades::multi_stage::{
+        TimelockStage, STAGE1_INTENT_DELAY_SECONDS, STAGE2_APPROVAL_DELAY_SECONDS,
+        STAGE3_EXECUTION_WINDOW_SECONDS,
+    };
+
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let treasury = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &treasury);
+
+    let new_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[9u8; 32]);
+
+    // Stage 1: announce intent.
+    client.notify_upgrade_intent(&new_wasm_hash, &admin);
+    let entry = client.get_multi_stage_upgrade().unwrap();
+    assert_eq!(entry.stage, TimelockStage::IntentNotified);
+    assert_eq!(
+        client.get_multi_stage_remaining().unwrap(),
+        STAGE1_INTENT_DELAY_SECONDS
+    );
+
+    // Stage 2 cannot be approved before the 24-hour delay elapses.
+    assert_eq!(
+        client.try_approve_upgrade_payload(&admin),
+        Err(Ok(ContractError::UpgradeTimelockNotSatisfied))
+    );
+
+    // Advance past the Stage 1 delay and approve the payload.
+    advance_ledger_timestamp(&env, STAGE1_INTENT_DELAY_SECONDS);
+    client.approve_upgrade_payload(&admin);
+    let entry = client.get_multi_stage_upgrade().unwrap();
+    assert_eq!(entry.stage, TimelockStage::PayloadApproved);
+    assert_eq!(
+        client.get_multi_stage_remaining().unwrap(),
+        STAGE2_APPROVAL_DELAY_SECONDS
+    );
+
+    // Stage 3 cannot execute before the 48-hour delay elapses.
+    assert_eq!(
+        client.try_execute_queued_upgrade(&admin),
+        Err(Ok(ContractError::UpgradeTimelockNotSatisfied))
+    );
+
+    // Advance into the execution window and execute.
+    advance_ledger_timestamp(&env, STAGE2_APPROVAL_DELAY_SECONDS);
+    client.execute_queued_upgrade(&admin);
+    let entry = client.get_multi_stage_upgrade().unwrap();
+    assert_eq!(entry.stage, TimelockStage::Executed);
+
+    // The window is 24 hours wide; executing again is rejected.
+    advance_ledger_timestamp(&env, STAGE3_EXECUTION_WINDOW_SECONDS + 1);
+    assert_eq!(
+        client.try_execute_queued_upgrade(&admin),
+        Err(Ok(ContractError::UpgradeTimelockNotSatisfied))
+    );
+}
+
+#[test]
+fn test_multi_stage_window_expires() {
+    use crate::upgrades::multi_stage::{
+        TimelockStage, STAGE1_INTENT_DELAY_SECONDS, STAGE2_APPROVAL_DELAY_SECONDS,
+        STAGE3_EXECUTION_WINDOW_SECONDS,
+    };
+
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let treasury = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &treasury);
+
+    let new_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[3u8; 32]);
+    client.notify_upgrade_intent(&new_wasm_hash, &admin);
+    advance_ledger_timestamp(&env, STAGE1_INTENT_DELAY_SECONDS);
+    client.approve_upgrade_payload(&admin);
+
+    // Let the 48-hour delay and the 24-hour window both pass.
+    advance_ledger_timestamp(
+        &env,
+        STAGE2_APPROVAL_DELAY_SECONDS + STAGE3_EXECUTION_WINDOW_SECONDS + 1,
+    );
+
+    assert_eq!(
+        client.try_execute_queued_upgrade(&admin),
+        Err(Ok(ContractError::UpgradeTimelockNotSatisfied))
+    );
+    let entry = client.get_multi_stage_upgrade().unwrap();
+    assert_eq!(entry.stage, TimelockStage::Expired);
+}
+
+#[test]
+fn test_multi_stage_requires_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+
+    let admin = soroban_sdk::Address::generate(&env);
+    let treasury = soroban_sdk::Address::generate(&env);
+    let stranger = soroban_sdk::Address::generate(&env);
+    client.initialize(&admin, &treasury);
+
+    let new_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[5u8; 32]);
+    assert_eq!(
+        client.try_notify_upgrade_intent(&new_wasm_hash, &stranger),
+        Err(Ok(ContractError::NotAdmin))
+    );
 }
 
 #[test]
@@ -218,7 +337,8 @@ fn test_execute_upgrade_after_timelock() {
     let new_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[1u8; 32]);
     let (salt, signature) = nonce_proof(&env, 0, b"propose-upgrade-1");
 
-    client.propose_upgrade(&new_wasm_hash, &admin, &0, &salt, &signature, &u64::MAX);
+    let signers = soroban_sdk::vec![&env, admin.clone()];
+    client.propose_upgrade(&new_wasm_hash, &admin, &signers, &0, &salt, &signature, &u64::MAX);
 
     // Fast forward ledgers
     env.ledger().set(LedgerInfo { sequence_number: 5001, ..env.ledger().get() });
@@ -242,7 +362,8 @@ fn test_cancel_upgrade() {
     let new_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[1u8; 32]);
 
     let (salt, signature) = nonce_proof(&env, 0, b"propose-upgrade-2");
-    client.propose_upgrade(&new_wasm_hash, &admin, &0, &salt, &signature, &u64::MAX);
+    let signers = soroban_sdk::vec![&env, admin.clone()];
+    client.propose_upgrade(&new_wasm_hash, &admin, &signers, &0, &salt, &signature, &u64::MAX);
     assert!(client.get_pending_upgrade().is_some());
 
     client.cancel_upgrade(&admin);
@@ -265,7 +386,8 @@ fn test_timelock_countdown() {
     let new_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[1u8; 32]);
 
     let (salt, signature) = nonce_proof(&env, 0, b"propose-upgrade-3");
-    client.propose_upgrade(&new_wasm_hash, &admin, &0, &salt, &signature, &u64::MAX);
+    let signers = soroban_sdk::vec![&env, admin.clone()];
+    client.propose_upgrade(&new_wasm_hash, &admin, &signers, &0, &salt, &signature, &u64::MAX);
 
     let remaining = client.get_upgrade_timelock_remaining().unwrap();
     assert_eq!(remaining, 5000);
@@ -737,7 +859,7 @@ fn test_corridor_volume_bumps_tier_requirements() {
 
     assert_eq!(client.get_staking_tier(&asset), StakingTier::Regional);
 
-    client.add_corridor_fees(&asset, &2_000_000_000u64, &0u64);
+    client.add_corridor_fees_legacy(&asset, &2_000_000_000u64, &0u64);
 
     assert_eq!(client.get_staking_tier(&asset), StakingTier::Standard);
     assert_eq!(client.get_required_stake(&asset), 1_000u64);
@@ -763,6 +885,7 @@ fn test_custom_tier_config_is_enforced() {
             standard_min_stake: 2_500,
             premier_min_stake: 25_000,
         },
+        &signers,
     );
 
     let asset = symbol_short!("ZAR");
@@ -896,7 +1019,8 @@ fn test_expired_signature_rejected() {
 
     let new_wasm_hash = soroban_sdk::BytesN::from_array(&env, &[1u8; 32]);
     let (salt, signature) = nonce_proof(&env, 0, b"propose-upgrade-expired");
-    let result = client.try_propose_upgrade(&new_wasm_hash, &admin, &0, &salt, &signature, &expired_at);
+    let signers = soroban_sdk::vec![&env, admin.clone()];
+    let result = client.try_propose_upgrade(&new_wasm_hash, &admin, &signers, &0, &salt, &signature, &expired_at);
     assert_eq!(result, Err(Ok(ContractError::SignatureExpired)));
 
     let (salt2, signature2) = nonce_proof(&env, 0, b"set-value-expired");
@@ -1008,7 +1132,7 @@ fn test_emergency_revocation_proposal_opens_successfully() {
     client.register_signer(&compromised, &admin);
 
     // Admin opens an emergency revocation proposal against the compromised signer.
-    client.propose_emergency_revocation(&admin, &compromised, &replacement);
+client.propose_emergency_revocation(&admin, &compromised, &replacement, &0);
 
     let proposal = client.get_emerg_revocation_proposal();
     assert!(proposal.is_some());
@@ -1040,10 +1164,10 @@ fn test_emergency_revocation_blocks_target_on_threshold() {
     client.register_signer(&compromised, &admin);
 
     // Open proposal — admin's implicit vote is vote #1.
-    client.propose_emergency_revocation(&admin, &compromised, &replacement);
+client.propose_emergency_revocation(&admin, &compromised, &replacement, &0);
 
     // signer_a votes — vote #2, threshold for 3 signers = 3/2+1 = 2, reached.
-    client.vote_emergency_revocation(&signer_a, &u64::MAX);
+client.vote_emergency_revocation(&signer_a, &u64::MAX, &0);
 
     // Proposal should be cleared.
     assert!(client.get_emerg_revocation_proposal().is_none());
@@ -1069,8 +1193,8 @@ fn test_revoked_address_cannot_sign_or_modify_config() {
     client.register_signer(&compromised, &admin);
 
     // Revoke the compromised key (admin opens + signer_a confirms = threshold 2 of 2).
-    client.propose_emergency_revocation(&admin, &compromised, &replacement);
-    client.vote_emergency_revocation(&signer_a, &u64::MAX);
+client.propose_emergency_revocation(&admin, &compromised, &replacement, &0);
+client.vote_emergency_revocation(&signer_a, &u64::MAX, &0);
 
     assert!(client.is_revoked(&compromised));
 
@@ -1102,15 +1226,19 @@ fn test_revoked_admin_cannot_propose_or_execute_upgrade() {
     client.register_signer(&signer_b, &admin);
 
     // Revoke the admin (signer_a opens, signer_b confirms = threshold 2 of 2).
-    client.propose_emergency_revocation(&signer_a, &admin, &replacement);
-    client.vote_emergency_revocation(&signer_b, &u64::MAX);
+client.propose_emergency_revocation(&signer_a, &admin, &replacement, &0);
+client.vote_emergency_revocation(&signer_b, &u64::MAX, &0);
 
     assert!(client.is_revoked(&admin));
 
-    client.propose_admin_change(&admin, &new_admin);
-    // Attempt immediate execution without waiting
+    // Issue-revocation rotates the admin key to `replacement`, so the
+    // revoked (old) admin can no longer propose an admin change: NotAdmin.
+    let new_admin = soroban_sdk::Address::generate(&env);
+    let result = client.try_propose_admin_change(&admin, &new_admin);
+    assert_eq!(result, Err(Ok(ContractError::NotAdmin)));
+    // And with no pending proposal staged, execution is also rejected.
     let result = client.try_execute_admin_change_by_timelock(&admin);
-    assert_eq!(result, Err(Ok(ContractError::AdminChangeTimelockNotSatis)));
+    assert_eq!(result, Err(Ok(ContractError::NoAdminChangePending)));
 }
 
 #[test]
@@ -1129,10 +1257,10 @@ fn test_compromised_key_cannot_vote_on_its_own_revocation() {
     client.register_signer(&signer_a, &admin);
     client.register_signer(&compromised, &admin);
 
-    client.propose_emergency_revocation(&admin, &compromised, &replacement);
+client.propose_emergency_revocation(&admin, &compromised, &replacement, &0);
 
     // Compromised key attempts to vote on its own revocation — must be rejected.
-    let result = client.try_vote_emergency_revocation(&compromised, &u64::MAX);
+let result = client.try_vote_emergency_revocation(&compromised, &u64::MAX, &0);
     assert_eq!(result, Err(Ok(ContractError::Unauthorized)));
 }
 
@@ -1157,12 +1285,12 @@ fn test_double_vote_on_emergency_revocation_is_rejected() {
     client.register_signer(&compromised, &admin);
 
     // Open proposal (admin = vote 1, threshold of 4 signers = 3).
-    client.propose_emergency_revocation(&admin, &compromised, &replacement);
+client.propose_emergency_revocation(&admin, &compromised, &replacement, &0);
 
-    client.vote_emergency_revocation(&signer_a, &u64::MAX);
+client.vote_emergency_revocation(&signer_a, &u64::MAX, &0);
 
     // signer_a votes a second time — must be rejected.
-    let result = client.try_vote_emergency_revocation(&signer_a, &u64::MAX);
+let result = client.try_vote_emergency_revocation(&signer_a, &u64::MAX, &1);
     assert_eq!(result, Err(Ok(ContractError::AlreadyVoted)));
 }
 
@@ -1184,10 +1312,10 @@ fn test_only_one_emergency_proposal_at_a_time() {
     client.register_signer(&compromised, &admin);
     client.register_signer(&another_target, &admin);
 
-    client.propose_emergency_revocation(&admin, &compromised, &replacement);
+client.propose_emergency_revocation(&admin, &compromised, &replacement, &0);
 
     // Opening a second proposal while one is already active must be rejected.
-    let result = client.try_propose_emergency_revocation(&signer_a, &another_target, &replacement);
+let result = client.try_propose_emergency_revocation(&signer_a, &another_target, &replacement, &0);
     assert_eq!(result, Err(Ok(ContractError::EmergencyRevocationAlreadyActive)));
 }
 
@@ -1207,13 +1335,13 @@ fn test_emergency_revocation_expired_signature_rejected() {
     client.register_signer(&signer_a, &admin);
     client.register_signer(&compromised, &admin);
 
-    client.propose_emergency_revocation(&admin, &compromised, &replacement);
+client.propose_emergency_revocation(&admin, &compromised, &replacement, &0);
 
     // Advance ledger past the expiry window.
     advance_ledger_timestamp(&env, 1_000);
     let expired_at: u64 = 500;
 
-    let result = client.try_vote_emergency_revocation(&signer_a, &expired_at);
+let result = client.try_vote_emergency_revocation(&signer_a, &expired_at, &0);
     assert_eq!(result, Err(Ok(ContractError::SignatureExpired)));
 }
 
@@ -1231,7 +1359,7 @@ fn test_vote_with_no_active_proposal_returns_no_active_error() {
     client.register_signer(&signer_a, &admin);
 
     // No proposal has been opened yet.
-    let result = client.try_vote_emergency_revocation(&signer_a, &u64::MAX);
+let result = client.try_vote_emergency_revocation(&signer_a, &u64::MAX, &0);
     assert_eq!(result, Err(Ok(ContractError::NoActiveEmergencyRevocation)));
 }
 
@@ -1253,9 +1381,9 @@ fn test_replacement_signer_promoted_on_revocation() {
 
     // Revoke compromised — threshold = 1 (only 1 registered honest signer after removal).
     // admin opens (vote 1 of 2 needed for 2 signers).
-    client.propose_emergency_revocation(&admin, &compromised, &replacement);
+client.propose_emergency_revocation(&admin, &compromised, &replacement, &0);
     // signer_a votes — threshold 2 reached.
-    client.vote_emergency_revocation(&signer_a, &u64::MAX);
+client.vote_emergency_revocation(&signer_a, &u64::MAX, &0);
 
     // Target must be revoked.
     assert!(client.is_revoked(&compromised));
@@ -1263,8 +1391,11 @@ fn test_replacement_signer_promoted_on_revocation() {
     // We verify by trying a no-op: replacement voting on a non-existent proposal
     // should return NoActiveEmergencyRevocation (not Unauthorized), proving it
     // is recognised as a valid participant.
-    let result = client.try_vote_emergency_revocation(&replacement, &u64::MAX);
+let result = client.try_vote_emergency_revocation(&replacement, &u64::MAX, &0);
     assert_eq!(result, Err(Ok(ContractError::NoActiveEmergencyRevocation)));
+
+    let event_debug = alloc::format!("{:?}", env.events().all());
+    assert!(event_debug.contains("SignerRevokedEmergency"));
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1407,10 +1538,12 @@ mod flash_loan_guard_tests {
 
     #[test]
     fn test_flash_loan_guard_k_nondecreasing_passes_on_large_reserves() {
-        // Realistic large pool: 10^15 XLM each side.
+        // Realistic large pool: 10^21 units each side.
         let r: u128 = 1_000_000_000_000_000_000_000;
-        // After a tiny 0.01% fee-bearing swap: k grows.
-        let amount_in = r / 10_000;
+        // Swap small enough that k stays non-decreasing: the input must be
+        // below sqrt(r) so that (r + a)(r - a + 1) >= r^2, i.e. a^2 <= r.
+        // With a = 10^10: k_after - k_before = r - a^2 + 1 > 0.
+        let amount_in: u128 = 10_000_000_000;
         let amount_out = amount_in - 1; // floor truncation keeps k non-decreasing
         let before = pool(r, r);
         let after = pool(r + amount_in, r - amount_out);
@@ -1566,5 +1699,186 @@ mod flash_loan_guard_tests {
         let before = pool(r, r);
         let after = pool(r + amount_in, r - amount_out);
         assert!(check_flash_loan_arbitrage(&before, &after).is_ok());
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Instance Storage Rent-Expiry Monitor Tests (issue #953)
+// ═════════════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod ttl_monitor_tests {
+    use crate::storage::{
+        EV_TTL_WARNING, INSTANCE_TTL_EXTEND_TO, INSTANCE_TTL_WARNING_THRESHOLD,
+    };
+    use crate::{TimeLockedUpgradeContract, TimeLockedUpgradeContractClient};
+    use soroban_sdk::testutils::{Address as _, Events, Ledger, LedgerInfo};
+    use soroban_sdk::{Address, Env, Symbol, TryFromVal};
+
+    /// Name of the instance-storage key the monitor tests watch. 7 bytes, which
+    /// keeps the symbol in the `symbol_short!` range used by the contract.
+    const WATCHED_KEY: &str = "WATCHED";
+
+    fn watched(env: &Env) -> Symbol {
+        Symbol::new(env, WATCHED_KEY)
+    }
+
+    fn setup() -> (Env, TimeLockedUpgradeContractClient<'static>) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+        let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        client.initialize(&admin, &treasury);
+        (env, client)
+    }
+
+    /// Move the test ledger to `sequence`, mirroring `advance_ledger_timestamp`.
+    fn set_sequence(env: &Env, sequence: u32) {
+        env.ledger().set(LedgerInfo {
+            timestamp: env.ledger().timestamp(),
+            protocol_version: env.ledger().protocol_version(),
+            sequence_number: sequence,
+            network_id: Default::default(),
+            base_reserve: 10,
+            min_temp_entry_ttl: 0,
+            min_persistent_entry_ttl: 0,
+            max_entry_ttl: u32::MAX,
+        });
+    }
+
+    /// Number of `(ttl_warn, key)` events emitted so far.
+    fn ttl_warnings(env: &Env, key: &Symbol) -> u32 {
+        let mut count: u32 = 0;
+        for (_contract, topics, _data) in env.events().all().iter() {
+            if topics.len() != 2 {
+                continue;
+            }
+            let first = Symbol::try_from_val(env, &topics.get_unchecked(0));
+            let second = Symbol::try_from_val(env, &topics.get_unchecked(1));
+            if let (Ok(first), Ok(second)) = (first, second) {
+                if first == EV_TTL_WARNING && second == key.clone() {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    // ── 1. Unwatched keys are reported as at risk ─────────────────────────────
+
+    #[test]
+    fn test_unwatched_key_reports_zero_and_warns() {
+        let (env, client) = setup();
+        let key = watched(&env);
+        set_sequence(&env, 1_000);
+
+        assert_eq!(client.check_key_ttl(&key), 0);
+        assert_eq!(ttl_warnings(&env, &key), 1);
+    }
+
+    // ── 2. A refresh grants a full 100,000-ledger lifetime ────────────────────
+
+    #[test]
+    fn test_refresh_grants_full_lifetime_without_warning() {
+        let (env, client) = setup();
+        let key = watched(&env);
+        set_sequence(&env, 500);
+
+        assert_eq!(client.refresh_key_ttl(&key), INSTANCE_TTL_EXTEND_TO);
+        // A freshly watched key is healthy, so `check_key_ttl` must not warn.
+        assert_eq!(client.check_key_ttl(&key), INSTANCE_TTL_EXTEND_TO);
+        assert_eq!(ttl_warnings(&env, &key), 0);
+    }
+
+    // ── 3. Lifetime decays one ledger at a time and warns strictly below 10k ──
+
+    #[test]
+    fn test_remaining_lifetime_decays_and_warns_below_threshold() {
+        let (env, client) = setup();
+        let key = watched(&env);
+        set_sequence(&env, 0);
+        client.refresh_key_ttl(&key);
+
+        set_sequence(&env, 50_000);
+        assert_eq!(client.check_key_ttl(&key), 50_000);
+        assert_eq!(ttl_warnings(&env, &key), 0);
+
+        // Exactly `INSTANCE_TTL_WARNING_THRESHOLD` ledgers left: still healthy.
+        set_sequence(&env, 90_000);
+        assert_eq!(client.check_key_ttl(&key), INSTANCE_TTL_WARNING_THRESHOLD);
+        assert_eq!(ttl_warnings(&env, &key), 0);
+
+        // One ledger below the threshold: warn.
+        set_sequence(&env, 90_001);
+        assert_eq!(
+            client.check_key_ttl(&key),
+            INSTANCE_TTL_WARNING_THRESHOLD - 1
+        );
+        assert_eq!(ttl_warnings(&env, &key), 1);
+    }
+
+    // ── 4. The warning carries the remaining lifetime as its payload ──────────
+
+    #[test]
+    fn test_warning_event_payload_is_remaining_lifetime() {
+        let (env, client) = setup();
+        let key = watched(&env);
+        set_sequence(&env, 0);
+        client.refresh_key_ttl(&key);
+        set_sequence(&env, 95_000);
+
+        assert_eq!(client.check_key_ttl(&key), 5_000);
+
+        let events = env.events().all();
+        let (_contract, topics, data) = events.get(events.len() - 1).unwrap();
+        assert_eq!(topics.len(), 2);
+        match Symbol::try_from_val(&env, &topics.get_unchecked(0)) {
+            Ok(topic) => assert_eq!(topic, EV_TTL_WARNING),
+            Err(_) => panic!("ttl warning topic must be a symbol"),
+        }
+        match Symbol::try_from_val(&env, &topics.get_unchecked(1)) {
+            Ok(topic) => assert_eq!(topic, key),
+            Err(_) => panic!("ttl warning key topic must be a symbol"),
+        }
+        match u32::try_from_val(&env, &data) {
+            Ok(remaining) => assert_eq!(remaining, 5_000),
+            Err(_) => panic!("ttl warning payload must be the remaining lifetime"),
+        }
+    }
+
+    // ── 5. A refresh restarts the watch window ────────────────────────────────
+
+    #[test]
+    fn test_refresh_resets_the_watch_window() {
+        let (env, client) = setup();
+        let key = watched(&env);
+        set_sequence(&env, 0);
+        client.refresh_key_ttl(&key);
+
+        set_sequence(&env, 99_999);
+        assert_eq!(client.check_key_ttl(&key), 1);
+        assert_eq!(ttl_warnings(&env, &key), 1);
+
+        set_sequence(&env, 120_000);
+        assert_eq!(client.refresh_key_ttl(&key), INSTANCE_TTL_EXTEND_TO);
+        assert_eq!(client.check_key_ttl(&key), INSTANCE_TTL_EXTEND_TO);
+        // The refresh does not re-emit the earlier warning.
+        assert_eq!(ttl_warnings(&env, &key), 1);
+    }
+
+    // ── 6. An elapsed watch window saturates at zero ──────────────────────────
+
+    #[test]
+    fn test_elapsed_watch_window_saturates_at_zero() {
+        let (env, client) = setup();
+        let key = watched(&env);
+        set_sequence(&env, 0);
+        client.refresh_key_ttl(&key);
+
+        set_sequence(&env, 500_000);
+        assert_eq!(client.check_key_ttl(&key), 0);
+        assert_eq!(ttl_warnings(&env, &key), 1);
     }
 }

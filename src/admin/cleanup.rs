@@ -420,4 +420,151 @@ mod tests {
 
         assert_eq!(result, Err(ContractError::NotInitialized));
     }
+
+    #[test]
+    fn test_reclaim_closed_orders_storage_and_footprint_reduction() {
+        let (env, cid, admin, _sa, _sb) = setup();
+        let client = crate::TimeLockedUpgradeContractClient::new(&env, &cid);
+
+        let sell_issuer = Address::generate(&env);
+        let buy_issuer = Address::generate(&env);
+        let sell_asset = env.register_stellar_asset_contract(sell_issuer);
+        let buy_asset = env.register_stellar_asset_contract(buy_issuer);
+
+        let maker = Address::generate(&env);
+        let filler = Address::generate(&env);
+
+        soroban_sdk::token::StellarAssetClient::new(&env, &sell_asset).mint(&maker, &10_000);
+        soroban_sdk::token::StellarAssetClient::new(&env, &buy_asset).mint(&filler, &50_000);
+
+        let pair = crate::orders::limit::AssetPair {
+            sell_asset: sell_asset.clone(),
+            buy_asset: buy_asset.clone(),
+        };
+
+        // Create 2 spent orders (one filled, one cancelled)
+        let order_filled = client.place_limit_order(&maker, &pair, &crate::orders::limit::PRICE_SCALE, &1_000);
+        client.fill_limit_order(&filler, &order_filled.id, &1_000);
+
+        let order_cancelled = client.place_limit_order(&maker, &pair, &crate::orders::limit::PRICE_SCALE, &1_000);
+        client.cancel_limit_order(&maker, &order_cancelled.id);
+
+        // One active resting order (should NOT be purged)
+        let order_active = client.place_limit_order(&maker, &pair, &crate::orders::limit::PRICE_SCALE, &1_000);
+
+        let mut order_ids = Vec::new(&env);
+        order_ids.push_back(order_filled.id);
+        order_ids.push_back(order_cancelled.id);
+        order_ids.push_back(order_active.id);
+
+        // Verify storage keys exist prior to reclamation
+        env.as_contract(&cid, || {
+            assert!(env.storage().persistent().has(&crate::orders::limit::OrderStorageKey::OrderIndex(order_filled.id)));
+            assert!(env.storage().persistent().has(&crate::orders::limit::OrderStorageKey::OrderIndex(order_cancelled.id)));
+            assert!(env.storage().persistent().has(&crate::orders::limit::OrderStorageKey::OrderIndex(order_active.id)));
+        });
+
+        // Reclaim closed orders via automated helper
+        let caller = Address::generate(&env);
+        let reclaimed = client.reclaim_closed_orders(&caller, &order_ids);
+        assert_eq!(reclaimed, 2);
+
+        // Verify storage entries evicted for closed orders and retained for active order
+        env.as_contract(&cid, || {
+            assert!(!env.storage().persistent().has(&crate::orders::limit::OrderStorageKey::OrderIndex(order_filled.id)));
+            assert!(!env.storage().persistent().has(&crate::orders::limit::OrderStorageKey::OrderIndex(order_cancelled.id)));
+            assert!(env.storage().persistent().has(&crate::orders::limit::OrderStorageKey::OrderIndex(order_active.id)));
+        });
+    }
+
+    #[test]
+    fn test_reclaim_expired_proposals_storage() {
+        let (env, cid, admin, _sa, _sb) = setup();
+        let client = crate::TimeLockedUpgradeContractClient::new(&env, &cid);
+        let caller = Address::generate(&env);
+        let target_admin = Address::generate(&env);
+        let replacement = Address::generate(&env);
+
+        let past_time = env.ledger().timestamp().saturating_sub(8 * 24 * 60 * 60); // 8 days ago (> 7 day expiry)
+        env.as_contract(&cid, || {
+            let proposal = crate::admin::EmergencyRevocationProposal {
+                target: target_admin.clone(),
+                replacement: replacement.clone(),
+                proposer: admin.clone(),
+                proposed_at: past_time,
+                votes: soroban_sdk::Map::new(&env),
+            };
+            crate::temp_governance::store_temp_proposal(
+                &env,
+                &crate::temp_governance::EMERGENCY_REVOCATION_TEMP_KEY,
+                &proposal,
+                crate::temp_governance::DEFAULT_PROPOSAL_TTL,
+            );
+            assert!(crate::temp_governance::has_temp_proposal(
+                &env,
+                &crate::temp_governance::EMERGENCY_REVOCATION_TEMP_KEY,
+            ));
+        });
+
+        let purged = client.reclaim_expired_proposals(&caller);
+        assert_eq!(purged, 1);
+
+        env.as_contract(&cid, || {
+            assert!(!crate::temp_governance::has_temp_proposal(
+                &env,
+                &crate::temp_governance::EMERGENCY_REVOCATION_TEMP_KEY,
+            ));
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Expired Governance Proposal State Purge Utility
+// ---------------------------------------------------------------------------
+
+pub fn purge_obsolete_proposals(
+    env: &Env,
+    signers: &Vec<Address>,
+    proposal_ids: &Vec<Address>,
+) -> Result<u32, ContractError> {
+    // Verify the contract has been initialised
+    let _data: ContractData = env
+        .storage()
+        .instance()
+        .get(&DATA_KEY)
+        .ok_or(ContractError::NotInitialized)?;
+
+    // Enforce multi-sig quorum
+    crate::auth::require_multisig(env, signers)?;
+
+    let mut purged: u32 = 0;
+    let now = env.ledger().timestamp();
+    let ninety_days: u64 = 90 * 24 * 60 * 60;
+
+    for proposal_id in proposal_ids.iter() {
+        let key = ProposalStorageKey::Proposal(proposal_id.clone());
+        if let Some(proposal) = env
+            .storage()
+            .persistent()
+            .get::<_, ProposalState>(&key)
+        {
+            if (proposal.status == ProposalStatus::Executed || proposal.status == ProposalStatus::Rejected)
+                && now >= proposal.created_at.saturating_add(ninety_days)
+            {
+                // Erase vote entries
+                // Assuming votes are stored separately
+                let votes_key = ProposalStorageKey::Votes(proposal_id.clone());
+                env.storage().persistent().remove(&votes_key);
+                
+                // Erase proposal itself
+                env.storage().persistent().remove(&key);
+                
+                // Note: Removing the persistent entries automatically refunds the storage rent 
+                // balances back to the original proposal submitter.
+                purged += 1;
+            }
+        }
+    }
+
+    Ok(purged)
 }

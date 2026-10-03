@@ -233,6 +233,82 @@ fn wide_mul(a: u128, b: u128) -> (u128, u128) {
     (lo, hi)
 }
 
+use soroban_sdk::{contracttype, Address, Env, Vec};
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FlashLoanFeeTier {
+    pub min_volume: i128,
+    pub discount_bps: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FlashLoanFeeQuote {
+    pub tier_index: i32,
+    pub discount_bps: u32,
+    pub fee: i128,
+}
+
+pub fn set_flash_loan_fee_tiers(
+    env: &Env,
+    caller: &Address,
+    tiers: &Vec<FlashLoanFeeTier>,
+) -> Result<(), ContractError> {
+    let data: crate::ContractData = env
+        .storage()
+        .instance()
+        .get(&crate::DATA_KEY)
+        .ok_or(ContractError::NotInitialized)?;
+    if data.admin != *caller {
+        return Err(ContractError::NotAdmin);
+    }
+    caller.require_auth();
+
+    let mut prev_volume: Option<i128> = None;
+    for tier in tiers.iter() {
+        if let Some(prev) = prev_volume {
+            if tier.min_volume <= prev {
+                return Err(ContractError::InvalidFlashLoanFeeTier);
+            }
+        }
+        if tier.discount_bps > 10_000 {
+            return Err(ContractError::InvalidFlashLoanFeeDiscount);
+        }
+        prev_volume = Some(tier.min_volume);
+    }
+
+    env.storage()
+        .instance()
+        .set(&soroban_sdk::symbol_short!("flfee"), tiers);
+    Ok(())
+}
+
+pub fn quote_flash_loan_fee(env: &Env, base_fee: i128, volume: i128) -> FlashLoanFeeQuote {
+    let tiers: Vec<FlashLoanFeeTier> = env
+        .storage()
+        .instance()
+        .get(&soroban_sdk::symbol_short!("flfee"))
+        .unwrap_or_else(|| Vec::new(env));
+
+    let mut tier_index: i32 = -1;
+    let mut discount_bps: u32 = 0;
+    for (i, tier) in tiers.iter().enumerate() {
+        if tier.min_volume <= volume {
+            tier_index = i as i32;
+            discount_bps = tier.discount_bps;
+        } else {
+            break;
+        }
+    }
+    let fee = base_fee - base_fee * i128::from(discount_bps) / 10_000;
+    FlashLoanFeeQuote {
+        tier_index,
+        discount_bps,
+        fee,
+    }
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -267,12 +343,14 @@ mod tests {
 
     #[test]
     fn wide_mul_max() {
+
         // u128::MAX * u128::MAX = 2^256 - 2^129 + 1
         // lo = 1, hi = u128::MAX - 1
         let (lo, hi) = wide_mul(u128::MAX, u128::MAX);
         assert_eq!(lo, 1);
         assert_eq!(hi, u128::MAX - 1);
-    }
+    
+}
 
     // ── check_liquidity_depth ────────────────────────────────────────────────
 

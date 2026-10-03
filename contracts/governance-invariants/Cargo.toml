@@ -10,6 +10,10 @@ doctest = false
 
 [dependencies]
 soroban-sdk = { workspace = true, default-features = false }
+num-integer = "0.1"
+num-traits = "0.2"
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, default-features = false, features = ["testutils"] }
+num-integer = "0.1"
+num-traits = "0.2"

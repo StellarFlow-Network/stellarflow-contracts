@@ -318,39 +318,55 @@ mod tests {
 
     #[test]
     fn test_swap_out_basic() {
-        let out = compute_swap_out(10, 100, 200).unwrap();
+        let env = crate::Env::default();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
+        let out = compute_swap_out(&env, 7u32, 10, 100, 200).unwrap().0;
         assert_eq!(out, 18);
-    }
+    });
+}
 
     #[test]
     fn test_swap_out_floor_reserves_favored() {
-        let out = compute_swap_out(1, 3, 10).unwrap();
+        let env = crate::Env::default();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
+        let out = compute_swap_out(&env, 7u32, 1, 3, 10).unwrap().0;
         assert_eq!(out, 2);
-    }
+    });
+}
 
     #[test]
     fn test_invariant_stable_after_swap() {
+        let env = crate::Env::default();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
         let reserve_in = 100u128;
         let reserve_out = 200u128;
         let amount_in = 10u128;
-        let amount_out = compute_swap_out(amount_in, reserve_in, reserve_out).unwrap();
+        let amount_out = compute_swap_out(&env, 7u32, amount_in, reserve_in, reserve_out).unwrap().0;
         assert!(amount_out < reserve_out);
         assert_invariant_stable(reserve_in, reserve_out, amount_in, amount_out).unwrap();
-    }
+    });
+}
 
     #[test]
     fn test_invariant_increases_with_floor_rounding() {
+        let env = crate::Env::default();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
         let reserve_in = 1000u128;
         let reserve_out = 2000u128;
         let amount_in = 1u128;
-        let amount_out = compute_swap_out(amount_in, reserve_in, reserve_out).unwrap();
+        let amount_out = compute_swap_out(&env, 7u32, amount_in, reserve_in, reserve_out).unwrap().0;
         let k_before = U256::mul(reserve_in, reserve_out);
         let k_after = U256::mul(reserve_in + amount_in, reserve_out - amount_out);
         assert!(
             k_after.1 > k_before.1 || (k_after.1 == k_before.1 && k_after.0 >= k_before.0),
             "k must not decrease"
         );
-    }
+    });
+}
 
     #[test]
     fn test_lp_shares_basic() {
@@ -386,8 +402,9 @@ mod tests {
 
     #[test]
     fn test_swap_out_zero_input_rejected() {
+        let env = crate::Env::default();
         assert_eq!(
-            compute_swap_out(0, 100, 200),
+            compute_swap_out(&env, 7u32, 0, 100, 200),
             Err(ContractError::InvalidInput)
         );
     }
@@ -450,21 +467,29 @@ mod tests {
 
     #[test]
     fn test_invariant_max_bounds() {
+        let env = crate::Env::default();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
         let reserve_in = u128::MAX / 2;
         let reserve_out = u128::MAX / 2;
         let amount_in = 1;
-        let amount_out = compute_swap_out(amount_in, reserve_in, reserve_out).unwrap();
+        let amount_out = compute_swap_out(&env, 7u32, amount_in, reserve_in, reserve_out).unwrap().0;
         assert_eq!(amount_out, 0);
         assert_invariant_stable(reserve_in, reserve_out, amount_in, amount_out).unwrap();
-    }
+    });
+}
 
     #[test]
     fn test_invariant_high_volume() {
+        let env = crate::Env::default();
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
         let reserve_in = 1_000_000_000_000_000_000u128;
         let reserve_out = 2_000_000_000_000_000_000u128;
         let amount_in = 100_000_000_000_000_000u128;
-        let amount_out = compute_swap_out(amount_in, reserve_in, reserve_out).unwrap();
+        let amount_out = compute_swap_out(&env, 7u32, amount_in, reserve_in, reserve_out).unwrap().0;
         assert!(amount_out > 0);
         assert_invariant_stable(reserve_in, reserve_out, amount_in, amount_out).unwrap();
-    }
+    });
+}
 }

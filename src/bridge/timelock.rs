@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, symbol_short, Address, BytesN, Env, Symbol, Vec};
+use soroban_sdk::{contracttype, Address, BytesN, Env, Symbol, Vec};
 
 use crate::ContractError;
 
@@ -130,7 +130,7 @@ pub fn rotate_validators(
     validator_set.keys = new_keys.clone();
     env.storage().persistent().set(&key, &validator_set);
 
-    let topic = (symbol_short!("vkeys"),);
+    let topic = (Symbol::new(env, "BridgeValidatorsUpdated"),);
     env.events().publish(topic, new_keys);
 
     Ok(validator_set)
@@ -142,10 +142,14 @@ mod tests {
     use soroban_sdk::testutils::Address as _;
 
     #[test]
-    fn timelock_blocks_large_withdrawals() {
+    fn timelocks_large_withdrawals() {
         let env = Env::default();
+        // Persistent storage access requires a running contract context.
+        let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
         let receiver = Address::generate(&env);
-        let w = queue_withdrawal(&env, receiver.clone(), LARGE_TRANSFER_THRESHOLD + 1);
+        let w = env.as_contract(&cid, || {
+            queue_withdrawal(&env, receiver.clone(), LARGE_TRANSFER_THRESHOLD + 1)
+        });
         assert!(w.execute_after > w.queued_at);
         assert_eq!(
             execute_withdrawal(&env, &receiver),

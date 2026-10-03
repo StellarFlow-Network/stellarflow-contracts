@@ -433,6 +433,45 @@
         {
           "contract_data": {
             "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+            "key": {
+              "vec": [
+                {
+                  "symbol": "NextEventSequenceId"
+                }
+              ]
+            },
+            "durability": "persistent"
+          }
+        },
+        [
+          {
+            "last_modified_ledger_seq": 0,
+            "data": {
+              "contract_data": {
+                "ext": "v0",
+                "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
+                "key": {
+                  "vec": [
+                    {
+                      "symbol": "NextEventSequenceId"
+                    }
+                  ]
+                },
+                "durability": "persistent",
+                "val": {
+                  "u64": 3
+                }
+              }
+            },
+            "ext": "v0"
+          },
+          4095
+        ]
+      ],
+      [
+        {
+          "contract_data": {
+            "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4",
             "key": "ledger_key_contract_instance",
             "durability": "persistent"
           }
@@ -777,7 +816,7 @@
                                 "symbol": "symbol"
                               },
                               "val": {
-                                "string": "aaa"
+                                "string": "aaa\\0"
                               }
                             }
                           ]
@@ -1206,6 +1245,9 @@
             "topics": [
               {
                 "symbol": "cinit"
+              },
+              {
+                "u64": 0
               }
             ],
             "data": {
@@ -1444,6 +1486,9 @@
             "topics": [
               {
                 "symbol": "coldep"
+              },
+              {
+                "u64": 1
               }
             ],
             "data": {
@@ -1800,6 +1845,9 @@
             "topics": [
               {
                 "symbol": "coldep"
+              },
+              {
+                "u64": 2
               }
             ],
             "data": {

@@ -69,25 +69,40 @@ const TTL_EXTEND_TO: u32 = 535_680;
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum ContractError {
+    /// Recovery steps: Inspect the state for AlreadyInitialized and retry with valid inputs or proper conditions.
     AlreadyInitialized = 1,
+    /// Recovery steps: Inspect the state for NotInitialized and retry with valid inputs or proper conditions.
     NotInitialized = 2,
+    /// Recovery steps: Inspect the state for NotAdmin and retry with valid inputs or proper conditions.
     NotAdmin = 3,
+    /// Recovery steps: Inspect the state for TriggerNotFound and retry with valid inputs or proper conditions.
     TriggerNotFound = 4,
+    /// Recovery steps: Inspect the state for TriggerNotActive and retry with valid inputs or proper conditions.
     TriggerNotActive = 5,
+    /// Recovery steps: Inspect the state for NotTriggerOwner and retry with valid inputs or proper conditions.
     NotTriggerOwner = 6,
+    /// Recovery steps: Inspect the state for InvalidAmount and retry with valid inputs or proper conditions.
     InvalidAmount = 7,
+    /// Recovery steps: Inspect the state for InvalidTriggerPrice and retry with valid inputs or proper conditions.
     InvalidTriggerPrice = 8,
+    /// Recovery steps: Inspect the state for InvalidSlippageBounds and retry with valid inputs or proper conditions.
     InvalidSlippageBounds = 9,
     /// The TWAP oracle returned no verified price for the trigger's feed.
+    /// Recovery steps: Inspect the state for OraclePriceUnavailable and retry with valid inputs or proper conditions.
     OraclePriceUnavailable = 10,
     /// The keeper's submitted price does not match the verified TWAP oracle price.
+    /// Recovery steps: Inspect the state for TriggerPriceNotVerified and retry with valid inputs or proper conditions.
     TriggerPriceNotVerified = 11,
     /// The verified TWAP has not (yet) crossed the configured stop price.
+    /// Recovery steps: Inspect the state for TriggerConditionNotMet and retry with valid inputs or proper conditions.
     TriggerConditionNotMet = 12,
     /// The resulting fill price / proceeds exceed the user-configured slippage bounds.
+    /// Recovery steps: Inspect the state for SlippageExceeded and retry with valid inputs or proper conditions.
     SlippageExceeded = 13,
     /// The pool does not hold enough `buy_asset` to settle the swap.
+    /// Recovery steps: Inspect the state for InsufficientLiquidity and retry with valid inputs or proper conditions.
     InsufficientLiquidity = 14,
+    /// Recovery steps: Inspect the state for MathOverflow and retry with valid inputs or proper conditions.
     MathOverflow = 15,
 }
 

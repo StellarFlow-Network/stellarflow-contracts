@@ -8,7 +8,7 @@ use crate::{
     asset_id_to_symbol, AssetId, ContractData, ContractError, TimeLockedUpgradeContract,
     DATA_KEY,
 };
-use crate::events::{emit_event, EV_PROTOCOL_FEE_FLOOR_ENFORCED};
+use crate::events::{emit_event, EV_PROTOCOL_FEE_CHANGED, EV_PROTOCOL_FEE_FLOOR_ENFORCED};
 use soroban_sdk::{contracttype, Address, Env, Vec};
 
 pub const STANDARD_FIXED_POINT_SCALE: i128 = 10_000_000;
@@ -24,6 +24,16 @@ pub const FEE_TIER_100_BPS: u32 = 100;
 
 /// Hardcoded protocol fee floor: 0.0001 (0.01%) = 1 basis point.
 pub const PROTOCOL_FEE_FLOOR_BPS: u32 = 1;
+
+/// Hardcoded absolute ceiling for any protocol swap fee: 1.00% = 100 basis points.
+///
+/// This ceiling is **immutable by construction** — it is a `const`, so there is
+/// deliberately no setter for it and no storage slot that could be written to
+/// raise it. Admin and governance fee-adjustment transactions revert with
+/// [`ContractError::ProtocolFeeCapExceeded`] whenever a requested fee would
+/// exceed it, so a compromised key or a malicious proposal can never configure
+/// the protocol to charge more than 1.00% on a swap.
+pub const MAX_PROTOCOL_FEE_BPS: u32 = 100;
 
 /// Collected fee split: 80% to LP token holders, 20% to protocol treasury.
 pub const LP_FEE_SHARE_BPS: u64 = 8_000;
@@ -113,6 +123,20 @@ pub struct ProtocolFeeFloorEnforced {
     pub requested_fee_bps: u32,
     pub enforced_fee_bps: u32,
     pub floor_bps: u32,
+    pub timestamp: u64,
+}
+
+/// Immutable audit payload emitted on every accepted protocol fee change.
+///
+/// Records the previous and new fee alongside the hard cap that was enforced,
+/// so the fee-adjustment history is reconstructible from ledger events alone.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProtocolFeeChanged {
+    pub asset: AssetId,
+    pub old_fee_bps: u32,
+    pub new_fee_bps: u32,
+    pub cap_bps: u32,
     pub timestamp: u64,
 }
 
@@ -708,6 +732,22 @@ pub fn calculate_and_deduct_fee(amount: u128, fee_bps: u32) -> Result<(u128, u12
     Ok((amount_after_fees, fee_amount))
 }
 
+/// Emit the immutable audit event for an accepted protocol fee change.
+///
+/// Best-effort: an over-long topic list must never abort a fee write that has
+/// already passed the ceiling check, mirroring how the floor event is emitted.
+fn emit_protocol_fee_changed(env: &Env, asset: AssetId, old_fee_bps: u32, new_fee_bps: u32) {
+    let event = ProtocolFeeChanged {
+        asset,
+        old_fee_bps,
+        new_fee_bps,
+        cap_bps: MAX_PROTOCOL_FEE_BPS,
+        timestamp: env.ledger().timestamp(),
+    };
+    let asset_symbol = asset_id_to_symbol(env, asset);
+    emit_event(env, EV_PROTOCOL_FEE_CHANGED, &[&asset_symbol], event).ok();
+}
+
 /// Admin function to update dynamic fee configuration
 pub fn set_dynamic_fee_config(
     env: &Env,
@@ -729,6 +769,13 @@ pub fn set_dynamic_fee_config(
 
     let clamped_min = min_fee_bps.max(PROTOCOL_FEE_FLOOR_BPS);
     let clamped_max = max_fee_bps.max(clamped_min);
+
+    // Hard, immutable ceiling (issue #922): no admin, governance or timelocked
+    // action may raise the configurable protocol fee above the hardcoded 1.00%.
+    if clamped_min > MAX_PROTOCOL_FEE_BPS || clamped_max > MAX_PROTOCOL_FEE_BPS {
+        return Err(ContractError::ProtocolFeeCapExceeded);
+    }
+
     if !is_valid_protocol_fee_value(clamped_min)
         || !is_valid_protocol_fee_value(clamped_max)
         || clamped_min >= clamped_max
@@ -744,7 +791,9 @@ pub fn set_dynamic_fee_config(
         .instance()
         .get(&fee_key)
         .unwrap_or(DynamicFeeState::new());
-    
+
+    let previous_cap_bps = dynamic_fee.max_fee_bps;
+
     dynamic_fee.min_fee_bps = clamped_min;
     dynamic_fee.max_fee_bps = clamped_max;
     dynamic_fee.period_seconds = period_seconds;
@@ -763,7 +812,11 @@ pub fn set_dynamic_fee_config(
     }
     
     env.storage().instance().set(&fee_key, &dynamic_fee);
-    
+
+    if previous_cap_bps != clamped_max {
+        emit_protocol_fee_changed(env, asset, previous_cap_bps, clamped_max);
+    }
+
     Ok(())
 }
 
@@ -796,6 +849,14 @@ pub fn governance_adjust_fee_tier(
         .unwrap_or(DynamicFeeState::new());
 
     let requested_fee_bps = new_fee_bps;
+
+    // Hard, immutable ceiling (issue #922): a governance vote cannot raise the
+    // active protocol fee above the hardcoded 1.00% maximum.
+    if requested_fee_bps > MAX_PROTOCOL_FEE_BPS {
+        return Err(ContractError::ProtocolFeeCapExceeded);
+    }
+
+    let previous_fee_bps = dynamic_fee.current_fee_bps;
     let enforced_fee_bps = requested_fee_bps.max(PROTOCOL_FEE_FLOOR_BPS);
     if enforced_fee_bps != requested_fee_bps {
         let event = ProtocolFeeFloorEnforced {
@@ -818,6 +879,10 @@ pub fn governance_adjust_fee_tier(
 
     dynamic_fee.current_fee_bps = enforced_fee_bps;
     env.storage().instance().set(&fee_key, &dynamic_fee);
+
+    if previous_fee_bps != enforced_fee_bps {
+        emit_protocol_fee_changed(env, asset, previous_fee_bps, enforced_fee_bps);
+    }
 
     Ok(enforced_fee_bps)
 }
@@ -1047,7 +1112,8 @@ pub fn distribute_flash_fees(
 mod tests {
     use super::*;
     use crate::{TimeLockedUpgradeContract, TimeLockedUpgradeContractClient};
-    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::{Address as _, Events};
+    use soroban_sdk::TryFromVal;
 
     fn setup() -> (Env, TimeLockedUpgradeContractClient<'static>, Address, Address) {
         let env = Env::default();
@@ -1090,6 +1156,7 @@ mod tests {
 
     #[test]
     fn corridor_weight_profile_is_isolated_from_fee_pool() {
+
         let (_, client, admin, _) = setup();
         let asset = 3897123275;
 
@@ -1109,7 +1176,8 @@ mod tests {
         let stored_profile = client.get_corridor_weight(&asset);
         assert_eq!(stored_profile.base_weight, 70);
         assert_eq!(stored_profile.dynamic_weight, 30);
-    }
+    
+}
 
     #[test]
     fn non_admin_cannot_edit_corridor_weight_profile() {
@@ -1245,5 +1313,147 @@ mod tests {
             3 * DYNAMIC_FEE_SCALE
         );
         assert_eq!(accumulator.peak_fee, 3 * DYNAMIC_FEE_SCALE);
+    }
+
+    // ── Protocol fee cap safety guard (issue #922) ─────────────────────────
+
+    #[test]
+    fn protocol_fee_cap_rejects_config_above_ceiling() {
+        let (_env, client, admin, _) = setup();
+        let asset: AssetId = 3897123275;
+
+        let result = client.try_set_dynamic_fee_config(
+            &admin,
+            &asset,
+            &5u32,
+            &(MAX_PROTOCOL_FEE_BPS + 1),
+            &3_600u64,
+        );
+
+        assert_eq!(result, Err(Ok(ContractError::ProtocolFeeCapExceeded)));
+    }
+
+    #[test]
+    fn protocol_fee_cap_allows_config_at_ceiling() {
+        let (_env, client, admin, _) = setup();
+        let asset: AssetId = 3897123275;
+
+        let result = client.try_set_dynamic_fee_config(
+            &admin,
+            &asset,
+            &5u32,
+            &MAX_PROTOCOL_FEE_BPS,
+            &3_600u64,
+        );
+
+        assert_eq!(result, Ok(Ok(())));
+    }
+
+    #[test]
+    fn protocol_fee_cap_allows_config_below_ceiling() {
+        let (_env, client, admin, _) = setup();
+        let asset: AssetId = 3897123275;
+
+        let result =
+            client.try_set_dynamic_fee_config(&admin, &asset, &5u32, &30u32, &3_600u64);
+
+        assert_eq!(result, Ok(Ok(())));
+    }
+
+    #[test]
+    fn protocol_fee_cap_rejects_non_admin_config() {
+        let (_env, client, _admin, attacker) = setup();
+        let asset: AssetId = 3897123275;
+
+        let result =
+            client.try_set_dynamic_fee_config(&attacker, &asset, &5u32, &30u32, &3_600u64);
+
+        assert_eq!(result, Err(Ok(ContractError::NotAdmin)));
+    }
+
+    #[test]
+    fn protocol_fee_cap_rejects_governance_adjustment_above_ceiling() {
+        let (_env, client, admin, _) = setup();
+        let asset: AssetId = 3897123275;
+        client.set_dynamic_fee_config(&admin, &asset, &5u32, &30u32, &3_600u64);
+
+        let result = client.try_governance_adjust_fee_tier(
+            &admin,
+            &asset,
+            &(MAX_PROTOCOL_FEE_BPS + 1),
+        );
+
+        assert_eq!(result, Err(Ok(ContractError::ProtocolFeeCapExceeded)));
+    }
+
+    #[test]
+    fn protocol_fee_cap_allows_governance_adjustment_at_ceiling() {
+        let (_env, client, admin, _) = setup();
+        let asset: AssetId = 3897123275;
+        client.set_dynamic_fee_config(&admin, &asset, &5u32, &MAX_PROTOCOL_FEE_BPS, &3_600u64);
+
+        let result =
+            client.try_governance_adjust_fee_tier(&admin, &asset, &MAX_PROTOCOL_FEE_BPS);
+
+        assert_eq!(result, Ok(Ok(MAX_PROTOCOL_FEE_BPS)));
+    }
+
+    #[test]
+    fn protocol_fee_cap_rejects_non_admin_governance_adjustment() {
+        let (_env, client, _admin, attacker) = setup();
+        let asset: AssetId = 3897123275;
+
+        let result = client.try_governance_adjust_fee_tier(&attacker, &asset, &30u32);
+
+        assert_eq!(result, Err(Ok(ContractError::NotAdmin)));
+    }
+
+    #[test]
+    fn protocol_fee_change_emits_audit_event_with_old_and_new_fee() {
+        let (env, client, admin, _) = setup();
+        let asset: AssetId = 3897123275;
+
+        // Move the ceiling down, then back up to the hard cap so the second
+        // accepted write produces a distinct old → new audit record.
+        client.set_dynamic_fee_config(&admin, &asset, &5u32, &30u32, &3_600u64);
+        client.set_dynamic_fee_config(&admin, &asset, &5u32, &MAX_PROTOCOL_FEE_BPS, &3_600u64);
+
+        let events = env.events().all();
+        let mut saw_change = false;
+        for index in 0..events.len() {
+            let (_contract, _topics, data) = events.get(index).unwrap();
+            if let Ok(event) = ProtocolFeeChanged::try_from_val(&env, &data) {
+                if event.old_fee_bps == 30
+                    && event.new_fee_bps == MAX_PROTOCOL_FEE_BPS
+                    && event.cap_bps == MAX_PROTOCOL_FEE_BPS
+                {
+                    saw_change = true;
+                }
+            }
+        }
+
+        assert!(saw_change, "expected a ProtocolFeeChanged audit event");
+    }
+
+    #[test]
+    fn protocol_fee_change_emits_audit_event_on_governance_adjustment() {
+        let (env, client, admin, _) = setup();
+        let asset: AssetId = 3897123275;
+        client.set_dynamic_fee_config(&admin, &asset, &5u32, &30u32, &3_600u64);
+
+        client.governance_adjust_fee_tier(&admin, &asset, &30u32);
+
+        let events = env.events().all();
+        let mut saw_change = false;
+        for index in 0..events.len() {
+            let (_contract, _topics, data) = events.get(index).unwrap();
+            if let Ok(event) = ProtocolFeeChanged::try_from_val(&env, &data) {
+                if event.old_fee_bps == 5 && event.new_fee_bps == 30 {
+                    saw_change = true;
+                }
+            }
+        }
+
+        assert!(saw_change, "expected a ProtocolFeeChanged audit event");
     }
 }

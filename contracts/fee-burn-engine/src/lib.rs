@@ -14,16 +14,26 @@ use soroban_sdk::{
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
-pub enum BurnError {
+pub enum ContractError {
+    /// Recovery steps: Inspect the state for AlreadyInitialized and retry with valid inputs or proper conditions.
     AlreadyInitialized = 1,
+    /// Recovery steps: Inspect the state for NotInitialized and retry with valid inputs or proper conditions.
     NotInitialized = 2,
+    /// Recovery steps: Inspect the state for NotAdmin and retry with valid inputs or proper conditions.
     NotAdmin = 3,
+    /// Recovery steps: Inspect the state for TokenNotRegistered and retry with valid inputs or proper conditions.
     TokenNotRegistered = 4,
+    /// Recovery steps: Inspect the state for InvalidAmount and retry with valid inputs or proper conditions.
     InvalidAmount = 5,
+    /// Recovery steps: Inspect the state for InvalidRatio and retry with valid inputs or proper conditions.
     InvalidRatio = 6,
+    /// Recovery steps: Inspect the state for Overflow and retry with valid inputs or proper conditions.
     Overflow = 7,
+    /// Recovery steps: Inspect the state for InsufficientFees and retry with valid inputs or proper conditions.
     InsufficientFees = 8,
+    /// Recovery steps: Inspect the state for BurnModuleNotSet and retry with valid inputs or proper conditions.
     BurnModuleNotSet = 9,
+    /// Recovery steps: Inspect the state for AlreadyRegistered and retry with valid inputs or proper conditions.
     AlreadyRegistered = 10,
 }
 
@@ -79,9 +89,9 @@ impl FeeBurnEngine {
     ///
     /// # Parameters
     /// - `admin`: Address with management privileges.
-    pub fn initialize(env: Env, admin: Address) -> Result<(), BurnError> {
+    pub fn initialize(env: Env, admin: Address) -> Result<(), ContractError> {
         if env.storage().instance().has(&DataKey::Admin) {
-            return Err(BurnError::AlreadyInitialized);
+            return Err(ContractError::AlreadyInitialized);
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
@@ -103,13 +113,13 @@ impl FeeBurnEngine {
         token: Address,
         burn_module: Address,
         burn_ratio_bps: u32,
-    ) -> Result<BurnModule, BurnError> {
+    ) -> Result<BurnModule, ContractError> {
         Self::require_admin(&env, &admin)?;
         if burn_ratio_bps > 10_000 {
-            return Err(BurnError::InvalidRatio);
+            return Err(ContractError::InvalidRatio);
         }
         if env.storage().persistent().has(&BurnModuleKey(token.clone())) {
-            return Err(BurnError::AlreadyRegistered);
+            return Err(ContractError::AlreadyRegistered);
         }
         let mut module = BurnModule::new(token.clone(), burn_module);
         module.burn_ratio_bps = burn_ratio_bps;
@@ -123,10 +133,10 @@ impl FeeBurnEngine {
         admin: Address,
         token: Address,
         burn_ratio_bps: u32,
-    ) -> Result<BurnModule, BurnError> {
+    ) -> Result<BurnModule, ContractError> {
         Self::require_admin(&env, &admin)?;
         if burn_ratio_bps > 10_000 {
-            return Err(BurnError::InvalidRatio);
+            return Err(ContractError::InvalidRatio);
         }
         let mut module = Self::load_module(&env, &token)?;
         module.burn_ratio_bps = burn_ratio_bps;
@@ -141,7 +151,7 @@ impl FeeBurnEngine {
         admin: Address,
         token: Address,
         threshold: i128,
-    ) -> Result<BurnModule, BurnError> {
+    ) -> Result<BurnModule, ContractError> {
         Self::require_admin(&env, &admin)?;
         let mut module = Self::load_module(&env, &token)?;
         module.auto_burn_threshold = threshold;
@@ -177,10 +187,10 @@ impl FeeBurnEngine {
         admin: Address,
         token: Address,
         amount: i128,
-    ) -> Result<BurnModule, BurnError> {
+    ) -> Result<BurnModule, ContractError> {
         Self::require_admin(&env, &admin)?;
         if amount <= 0 {
-            return Err(BurnError::InvalidAmount);
+            return Err(ContractError::InvalidAmount);
         }
         let mut module = Self::load_module(&env, &token)?;
 
@@ -188,7 +198,7 @@ impl FeeBurnEngine {
         module.fees_accumulated = module
             .fees_accumulated
             .checked_add(burnt_portion)
-            .ok_or(BurnError::Overflow)?;
+            .ok_or(ContractError::Overflow)?;
 
         // Auto-burn once the accumulated pool meets the configured threshold.
         let mut result = module;
@@ -206,7 +216,7 @@ impl FeeBurnEngine {
         env: Env,
         admin: Address,
         token: Address,
-    ) -> Result<BurnModule, BurnError> {
+    ) -> Result<BurnModule, ContractError> {
         Self::require_admin(&env, &admin)?;
         let mut module = Self::load_module(&env, &token)?;
         module = Self::execute_burn(&env, &module)?;
@@ -220,14 +230,14 @@ impl FeeBurnEngine {
         admin: Address,
         token: Address,
         amount: i128,
-    ) -> Result<BurnModule, BurnError> {
+    ) -> Result<BurnModule, ContractError> {
         Self::require_admin(&env, &admin)?;
         if amount <= 0 {
-            return Err(BurnError::InvalidAmount);
+            return Err(ContractError::InvalidAmount);
         }
         let mut module = Self::load_module(&env, &token)?;
         if amount > module.fees_accumulated {
-            return Err(BurnError::InsufficientFees);
+            return Err(ContractError::InsufficientFees);
         }
         module = Self::consume_burn(&env, &module, amount)?;
         Self::save_module(&env, &module);
@@ -236,24 +246,24 @@ impl FeeBurnEngine {
 
     // -- Internal helpers -----------------------------------------------------
 
-    fn require_admin(env: &Env, admin: &Address) -> Result<(), BurnError> {
+    fn require_admin(env: &Env, admin: &Address) -> Result<(), ContractError> {
         let stored: Address = env
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(BurnError::NotInitialized)?;
+            .ok_or(ContractError::NotInitialized)?;
         if admin != &stored {
-            return Err(BurnError::NotAdmin);
+            return Err(ContractError::NotAdmin);
         }
         admin.require_auth();
         Ok(())
     }
 
-    fn load_module(env: &Env, token: &Address) -> Result<BurnModule, BurnError> {
+    fn load_module(env: &Env, token: &Address) -> Result<BurnModule, ContractError> {
         env.storage()
             .persistent()
             .get(&BurnModuleKey(token.clone()))
-            .ok_or(BurnError::TokenNotRegistered)
+            .ok_or(ContractError::TokenNotRegistered)
     }
 
     fn save_module(env: &Env, module: &BurnModule) {
@@ -264,7 +274,7 @@ impl FeeBurnEngine {
 
     /// Burn the entire accumulated fee pool via the token `burn()` entrypoint
     /// and emit a `TokensBurned` event with updated supply metrics.
-    fn execute_burn(env: &Env, module: &BurnModule) -> Result<BurnModule, BurnError> {
+    fn execute_burn(env: &Env, module: &BurnModule) -> Result<BurnModule, ContractError> {
         if module.fees_accumulated == 0 {
             return Ok(module.clone());
         }
@@ -277,9 +287,9 @@ impl FeeBurnEngine {
         env: &Env,
         module: &BurnModule,
         amount: i128,
-    ) -> Result<BurnModule, BurnError> {
+    ) -> Result<BurnModule, ContractError> {
         if module.burn_module == module.token {
-            return Err(BurnError::BurnModuleNotSet);
+            return Err(ContractError::BurnModuleNotSet);
         }
         let token_client = token::Client::new(env, &module.token);
         let from = module.burn_module.clone();
@@ -288,12 +298,12 @@ impl FeeBurnEngine {
         let new_total_burnt = module
             .total_burnt
             .checked_add(amount)
-            .ok_or(BurnError::Overflow)?;
+            .ok_or(ContractError::Overflow)?;
         let new_remaining_supply = if module.remaining_supply > 0 {
             module
                 .remaining_supply
                 .checked_sub(amount)
-                .ok_or(BurnError::Overflow)?
+                .ok_or(ContractError::Overflow)?
         } else {
             0
         };
@@ -454,7 +464,7 @@ mod tests {
 
         client.route_fees(&admin, &token, &1_000);
         let result = client.try_burn_exact(&admin, &token, &2_000);
-        assert_eq!(result, Err(Ok(BurnError::InsufficientFees)));
+        assert_eq!(result, Err(Ok(ContractError::InsufficientFees)));
     }
 
     #[test]
@@ -466,11 +476,11 @@ mod tests {
 
         // Only the admin may register a burn module.
         let reg = client.try_register_burn_module(&attacker, &token, &issuer, &1000);
-        assert_eq!(reg, Err(Ok(BurnError::NotAdmin)));
+        assert_eq!(reg, Err(Ok(ContractError::NotAdmin)));
 
         client.register_burn_module(&admin, &token, &issuer, &1000);
         let result = client.try_route_fees(&attacker, &token, &100);
-        assert_eq!(result, Err(Ok(BurnError::NotAdmin)));
+        assert_eq!(result, Err(Ok(ContractError::NotAdmin)));
     }
 
     #[test]
@@ -485,6 +495,6 @@ mod tests {
         let issuer = Address::generate(&env);
         let token = env.register_stellar_asset_contract(issuer.clone());
         let result = client.try_register_burn_module(&admin, &token, &issuer, &10_001);
-        assert_eq!(result, Err(Ok(BurnError::InvalidRatio)));
+        assert_eq!(result, Err(Ok(ContractError::InvalidRatio)));
     }
 }

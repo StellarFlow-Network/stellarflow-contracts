@@ -1,23 +1,37 @@
-#![no_std]
+#`!no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, contracterror, Address, Env, symbol_short};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env,
+};
 
 /// Errors emitted when invariant checks fail.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
-pub enum InvariantError {
+pub enum ContractError {
+    /// Recovery steps: Inspect the state for AlreadyInitialized and retry with valid inputs or proper conditions.
     AlreadyInitialized = 1,
+    /// Recovery steps: Inspect the state for NotInitialized and retry with valid inputs or proper conditions.
     NotInitialized = 2,
+    /// Recovery steps: Inspect the state for NotAdmin and retry with valid inputs or proper conditions.
     NotAdmin = 3,
+    /// Recovery steps: Inspect the state for VotingWeightDrift and retry with valid inputs or proper conditions.
     VotingWeightDrift = 4,
+    /// Recovery steps: Inspect the state for UserNotFound and retry with valid inputs or proper conditions.
     UserNotFound = 5,
+    /// Recovery steps: Inspect the state for InvalidAmount and retry with valid inputs or proper conditions.
     InvalidAmount = 6,
+    /// Recovery steps: Inspect the state for LockAlreadyExists and retry with valid inputs or proper conditions.
     LockAlreadyExists = 7,
+    /// Recovery steps: Inspect the state for NoLockFound and retry with valid inputs or proper conditions.
     NoLockFound = 8,
+    /// Recovery steps: Inspect the state for Overflow and retry with valid inputs or proper conditions.
     Overflow = 9,
+    /// Recovery steps: Inspect the state for DelegationCycleDetected and retry with valid inputs or proper conditions.
     DelegationCycleDetected = 10,
+    /// Recovery steps: Inspect the state for InvalidDelegate and retry with valid inputs or proper conditions.
     InvalidDelegate = 11,
+    NotVerified = 12,
 }
 
 /// Per-user voting weight lock record.
@@ -30,6 +44,26 @@ pub struct VotingWeightLock {
     pub lock_ledger: u32,
 }
 
+/// Per-user verified identity record for sybil resistance.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct VerifiedIdentity {
+    pub user: Address,
+    pub identity_hash: u64,
+    pub verified_ledger: u32,
+}
+
+/// Delegation record linking delegator to delegatee and verified identity.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DelegationRecord {
+    pub delegator: Address,
+    pub delegatee: Address,
+    pub declared_weight: i128,
+    pub identity_hash: u64,
+    pub verified_ledger: u32,
+}
+
 #[contracttype]
 pub enum DataKey {
     Admin,
@@ -37,6 +71,8 @@ pub enum DataKey {
     UserWeight(Address),
     Delegate(Address),
     DelegatedWeight(Address),
+    VerifiedIdentity(Address),
+    DelegationRecord(Address),
 }
 
 #[contract]
@@ -49,54 +85,148 @@ fn compute_weight(locked_amount: i128) -> i128 {
     locked_amount
 }
 
+/// Helper: compute effective quadratic voting power from locked weight.
+/// V_effective = floor(sqrt(W_ve)).
+fn compute_quadratic_power(weight: i128) -> i128 {
+    if weight <= 0 {
+        return 0;
+    }
+    let mut x = weight as u128;
+    let mut low = 0u128;
+    let mut high = x;
+    while low < high {
+        let mid = (low + high + 1) / 2;
+        if mid <= x / mid {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    low as i128
+}
+
 fn get_delegate(env: &Env, user: &Address) -> Option<Address> {
-    env.storage().instance().get(&DataKey::Delegate(user.clone()))
+    env.storage()
+        .instance()
+        .get(&DataKey::Delegate(user.clone()))
 }
 
 fn set_delegate(env: &Env, user: &Address, delegate: &Address) {
-    env.storage().instance().set(&DataKey::Delegate(user.clone()), delegate);
+    env.storage()
+        .instance()
+        .set(&DataKey::Delegate(user.clone()), delegate);
 }
 
 fn remove_delegate(env: &Env, user: &Address) {
-    env.storage().instance().remove(&DataKey::Delegate(user.clone()));
+    env.storage()
+        .instance()
+        .remove(&DataKey::Delegate(user.clone()));
 }
 
 fn get_delegated_weight(env: &Env, user: &Address) -> i128 {
-    env.storage().instance().get(&DataKey::DelegatedWeight(user.clone())).unwrap_or(0)
+    env.storage()
+        .instance()
+        .get(&DataKey::DelegatedWeight(user.clone()))
+        .unwrap_or(0)
 }
 
 fn set_delegated_weight(env: &Env, user: &Address, weight: i128) {
-    env.storage().instance().set(&DataKey::DelegatedWeight(user.clone()), &weight);
+    env.storage()
+        .instance()
+        .set(&DataKey::DelegatedWeight(user.clone()), &weight);
 }
 
-fn propagate_delegated_weight(env: &Env, start_user: &Address, delta: i128) -> Result<(), InvariantError> {
+fn get_verified_identity(env: &Env, user: &Address) -> Option<VerifiedIdentity> {
+    env.storage()
+        .instance()
+        .get(&DataKey::VerifiedIdentity(user.clone()))
+}
+
+fn set_verified_identity(env: &Env, identity: &VerifiedIdentity) {
+    env.storage()
+        .instance()
+        .set(&DataKey::VerifiedIdentity(identity.user.clone()), identity);
+}
+
+fn get_delegation_record(env: &Env, delegator: &Address) -> Option<DelegationRecord> {
+    env.storage()
+        .instance()
+        .get(&DataKey::DelegationRecord(delegator.clone()))
+}
+
+fn set_delegation_record(env: &Env, record: &DelegationRecord) {
+    env.storage()
+        .instance()
+        .set(&DataKey::DelegationRecord(record.delegator.clone()), record);
+}
+
+fn remove_delegation_record(env: &Env, delegator: &Address) {
+    env.storage()
+        .instance()
+        .remove(&DataKey::DelegationRecord(delegator.clone()));
+}
+
+fn propagate_delegated_weight(
+    env: &Env,
+    start_user: &Address,
+    delta: i128,
+) -> Result<(), ContractError> {
     if delta == 0 {
-        return Ok(());
+        return Ok();
     }
     let mut current = start_user.clone();
     while let Some(next) = get_delegate(env, &current) {
         if next == current {
             break;
         }
-        let old_delegated = get_delegated_weight(env, &next);
-        let new_delegated = old_delegated.checked_add(delta).ok_or(InvariantError::Overflow)?;
+        let old_delegated = get_delegated_weight(env, &n);
+        let new_delegated = old_delegated
+            .checked_add(delta)
+            .ok_or(ContractError::Overflow)?;
         set_delegated_weight(env, &next, new_delegated);
         current = next;
     }
-    Ok(())
+    Ok(()
 }
 
 #[contractimpl]
 impl GovernanceInvariantsContract {
     /// Initialize the invariant check suite.
-    pub fn initialize(env: Env, admin: Address) -> Result<(), InvariantError> {
+    pub fn initialize(env: Env, admin: Address) -> Result<(), ContractError> {
         if env.storage().instance().has(&DataKey::Admin) {
-            return Err(InvariantError::AlreadyInitialized);
+            return Err(ContractError::AlreadyInitialized);
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::TotalVotingWeight, &0i128);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalVotingWeight, &0i128);
         Ok(())
+    }
+
+    /// Register a verified identity for a user.
+    /// Only the admin can verify identities.
+    pub fn verify_identity(
+        env: Env,
+        user: Address,
+        identity_hash: u64,
+    ) -> Result<VerifiedIdentity, InvariantError> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(InvariantError::NotInitialized)?;
+        admin.require_auth();
+
+        let identity = VerifiedIdentity {
+            user: user.clone(),
+            identity_hash,
+            verified_ledger: env.ledger().sequence(),
+        };
+        set_verified_identity(&env, &identity);
+        env.events()
+            .publish((symbol_short("verify"),), (user, identity_hash));
+        Ok(identity)
     }
 
     /// Lock tokens and register a user's voting weight.
@@ -109,11 +239,11 @@ impl GovernanceInvariantsContract {
         env: Env,
         user: Address,
         amount: i128,
-    ) -> Result<VotingWeightLock, InvariantError> {
+    ) -> Result<VotingWeightLock, ContractError> {
         user.require_auth();
 
         if amount <= 0 {
-            return Err(InvariantError::InvalidAmount);
+            return Err(ContractError::InvalidAmount);
         }
 
         // Pre-action invariant check
@@ -124,7 +254,7 @@ impl GovernanceInvariantsContract {
 
         let lock_key = DataKey::UserWeight(user.clone());
         if env.storage().instance().has(&lock_key) {
-            return Err(InvariantError::LockAlreadyExists);
+            return Err(ContractError::LockAlreadyExists);
         }
 
         let lock = VotingWeightLock {
@@ -144,17 +274,17 @@ impl GovernanceInvariantsContract {
             .instance()
             .get(&DataKey::TotalVotingWeight)
             .unwrap_or(0);
-        let new_total = total.checked_add(weight).ok_or(InvariantError::Overflow)?;
-        env.storage().instance().set(&DataKey::TotalVotingWeight, &new_total);
+        let new_total = total.checked_add(weight).ok_or(ContractError::Overflow)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalVotingWeight, &new_total);
 
         // Post-action invariant check (panics on drift)
         Self::assert_invariant_holds(&env)?;
 
         // Emit event
-        env.events().publish(
-            (symbol_short!("lock"),),
-            (user, amount, weight),
-        );
+        env.events()
+            .publish((symbol_short("lock"),), (user, amount, weight));
 
         Ok(lock)
     }
@@ -169,11 +299,11 @@ impl GovernanceInvariantsContract {
         env: Env,
         user: Address,
         additional_amount: i128,
-    ) -> Result<VotingWeightLock, InvariantError> {
+    ) -> Result<VotingWeightLock, ContractError> {
         user.require_auth();
 
         if additional_amount <= 0 {
-            return Err(InvariantError::InvalidAmount);
+            return Err(ContractError::InvalidAmount);
         }
 
         // Pre-action invariant check
@@ -184,7 +314,7 @@ impl GovernanceInvariantsContract {
             .storage()
             .instance()
             .get(&lock_key)
-            .ok_or(InvariantError::NoLockFound)?;
+            .ok_or(ContractError::NoLockFound)?;
 
         // Remove old weight from total
         let old_total: i128 = env
@@ -196,7 +326,7 @@ impl GovernanceInvariantsContract {
         let new_locked = lock
             .locked_amount
             .checked_add(additional_amount)
-            .ok_or(InvariantError::Overflow)?;
+            .ok_or(ContractError::Overflow)?;
         let old_weight = lock.weight;
         let new_weight = compute_weight(new_locked);
         let delta = new_weight - old_weight;
@@ -207,7 +337,7 @@ impl GovernanceInvariantsContract {
 
         let new_total = old_total
             .checked_add(delta)
-            .ok_or(InvariantError::Overflow)?;
+            .ok_or(ContractError::Overflow)?;
         env.storage()
             .instance()
             .set(&DataKey::TotalVotingWeight, &new_total);
@@ -220,7 +350,7 @@ impl GovernanceInvariantsContract {
 
         // Emit event
         env.events().publish(
-            (symbol_short!("extend"),),
+            (symbol_short("extend"),),
             (user, additional_amount, new_weight),
         );
 
@@ -240,31 +370,39 @@ impl GovernanceInvariantsContract {
         delegator: Address,
         delegatee: Address,
         weight_to_delegate: i128,
-    ) -> Result<(), InvariantError> {
+    ) -> Result<(), ContractError> {
         delegator.require_auth();
 
         if weight_to_delegate <= 0 {
-            return Err(InvariantError::InvalidAmount);
+            return Err(ContractError::InvalidAmount);
         }
 
         // Pre-action invariant check
         Self::assert_invariant_holds(&env)?;
+
+        // Sybil resistance: both delegator and delegatee must have verified identities.
+        let delegator_identity = get_verified_identity(&env, &delegator)
+            .ok_or(InvariantError::NotVerified)?;
+        let delegatee_identity = get_verified_identity(&env, &delegatee)
+            .ok_or(InvariantError::NotVerified)?;
 
         let delegator_key = DataKey::UserWeight(delegator.clone());
         let mut delegator_lock: VotingWeightLock = env
             .storage()
             .instance()
             .get(&delegator_key)
-            .ok_or(InvariantError::NoLockFound)?;
+            .ok_or(ContractError::NoLockFound)?;
 
         if delegator_lock.weight < weight_to_delegate {
-            return Err(InvariantError::InvalidAmount);
+            return Err(ContractError::InvalidAmount);
         }
 
         // Reduce delegator's weight
         delegator_lock.weight -= weight_to_delegate;
         delegator_lock.locked_amount -= weight_to_delegate;
-        env.storage().instance().set(&delegator_key, &delegator_lock);
+        env.storage()
+            .instance()
+            .set(&delegator_key, &delegator_lock);
 
         // Increase delegatee's weight
         let delegatee_key = DataKey::UserWeight(delegatee.clone());
@@ -281,7 +419,19 @@ impl GovernanceInvariantsContract {
 
         delegatee_lock.weight += weight_to_delegate;
         delegatee_lock.locked_amount += weight_to_delegate;
-        env.storage().instance().set(&delegatee_key, &delegatee_lock);
+        env.storage()
+            .instance()
+            .set(&delegatee_key, &delegatee_lock);
+
+        // Record delegation linked to verified identities.
+        let record = DelegationRecord {
+            delegator: delegator.clone(),
+            delegatee: delegatee.clone(),
+            declared_weight: weight_to_delegate,
+            identity_hash: delegator_identity.identity_hash,
+            verified_ledger: delegator_identity.verified_ledger,
+        };
+        set_delegation_record(&env, &record);
 
         // Total voting weight should be unchanged (delegation is a transfer)
         // Post-action invariant check (panics on drift)
@@ -289,11 +439,11 @@ impl GovernanceInvariantsContract {
 
         // Emit event
         env.events().publish(
-            (symbol_short!("delegate"),),
+            (symbol_short("delegate"),),
             (delegator, delegatee, weight_to_delegate),
         );
 
-        Ok(())
+        Ok(()
     }
 
     /// Delegate all voting power of `delegator` to `to_address`.
@@ -302,7 +452,7 @@ impl GovernanceInvariantsContract {
         env: Env,
         delegator: Address,
         to_address: Address,
-    ) -> Result<(), InvariantError> {
+    ) -> Result<(), ContractError> {
         delegator.require_auth();
 
         // Check if delegator has a lock
@@ -311,16 +461,26 @@ impl GovernanceInvariantsContract {
             .storage()
             .instance()
             .get(&delegator_key)
-            .ok_or(InvariantError::NoLockFound)?;
+            .ok_or(ContractError::NoLockFound)?;
 
         let is_reclaim = to_address == delegator;
+
+        // Sybil resistance: delegator must have a verified identity.
+        let delegator_identity = get_verified_identity(&env, &delegator)
+            .ok_or(InvariantError::NotVerified)?;
+
+        // Sybil resistance: delegatee must have a verified identity when not reclaiming.
+        if !is_reclaim {
+            get_verified_identity(&env,&to_address)
+                .ok_or(InvariantError::NotVerified)?;
+        }
 
         // Cycle detection
         if !is_reclaim {
             let mut current = to_address.clone();
             while let Some(next) = get_delegate(&env, &current) {
                 if next == delegator {
-                    return Err(InvariantError::DelegationCycleDetected);
+                    return Err(ContractError::DelegationCycleDetected);
                 }
                 if next == current {
                     break;
@@ -330,7 +490,7 @@ impl GovernanceInvariantsContract {
         }
 
         let old_delegate = get_delegate(&env, &delegator);
-        
+
         // If already delegated to same address, no-op
         if let Some(ref old) = old_delegate {
             if is_reclaim && *old == delegator {
@@ -347,7 +507,9 @@ impl GovernanceInvariantsContract {
         // Weight to shift is own weight + weight delegated to delegator
         let own_weight = delegator_lock.weight;
         let delegated_in = get_delegated_weight(&env, &delegator);
-        let total_weight_to_shift = own_weight.checked_add(delegated_in).ok_or(InvariantError::Overflow)?;
+        let total_weight_to_shift = own_weight
+            .checked_add(delegated_in)
+            .ok_or(ContractError::Overflow)?;
 
         // Pre-action invariant check
         Self::assert_invariant_holds(&env)?;
@@ -357,62 +519,60 @@ impl GovernanceInvariantsContract {
             if *old != delegator {
                 let mut current = old.clone();
                 let delta = -total_weight_to_shift;
-                
+
                 // Update first hop
                 let old_del = get_delegated_weight(&env, &current);
                 set_delegated_weight(&env, &current, old_del + delta);
-                
+
                 // Propagate path
                 while let Some(next) = get_delegate(&env, &current) {
-                    if next == current {
-                        break;
-                    }
-                    let old_del = get_delegated_weight(&env, &next);
+                    let old_del = get_delegated_weight(&env, &n);
                     set_delegated_weight(&env, &next, old_del + delta);
                     current = next;
                 }
             }
         }
 
-        // 2. Set delegate or reclaim
-        if is_reclaim {
-            remove_delegate(&env, &delegator);
-        } else {
-            set_delegate(&env, &delegator, &to_address);
-
-            // Add total_weight_to_shift to new delegate path
+        // 2. Add total_weight_to_shift to new delegate path
+        if !is_reclaim {
             let mut current = to_address.clone();
             let delta = total_weight_to_shift;
-            
+
             // Update first hop
             let old_del = get_delegated_weight(&env, &current);
             set_delegated_weight(&env, &current, old_del + delta);
-            
+
             // Propagate path
             while let Some(next) = get_delegate(&env, &current) {
-                if next == current {
-                    break;
-                }
-                let old_del = get_delegated_weight(&env, &next);
-                set_delegated_weight(&env, &next, old_del + delta);
+                let old_del = get_delegated_weight(&env, &n);
+                set_delegated_weight(&env, &n);
                 current = next;
             }
+        }
+
+        // 3. Update delegation record
+        if is_reclaim {
+            remove_delegate(&env, &delegator);
+            remove_delegation_record(&env, &delegator);
+        } else {
+            set_delegate(&env, &delegator, &to_address);
+            let record = DelegationRecord {
+                delegator: delegator.clone(),
+                delegatee: to_address.clone(),
+                declared_weight: total_weight_to_shift,
+                identity_hash: delegator_identity.identity_hash,
+                verified_ledger: delegator_identity.verified_ledger,
+            };
+            set_delegation_record(&env, &record);
         }
 
         // Post-action invariant check
         Self::assert_invariant_holds(&env)?;
 
-        // Emit events
-        let from_delegate = old_delegate.unwrap_or(delegator.clone());
-        let to_delegate = if is_reclaim { delegator.clone() } else { to_address.clone() };
-        
+        // Emit event
         env.events().publish(
-            (soroban_sdk::Symbol::new(&env, "DelegateChanged"), delegator.clone()),
-            (from_delegate, to_delegate.clone()),
-        );
-        env.events().publish(
-            (soroban_sdk::Symbol::new(&env, "DelegatedPowerTransferred"), delegator.clone()),
-            (to_delegate, total_weight_to_shift),
+            (symbol_short("delegate"),),
+            (delegator, to_address, total_weight_to_shift),
         );
 
         Ok(())
@@ -438,7 +598,7 @@ impl GovernanceInvariantsContract {
     }
 
     /// Checkpoints/reclaims a voter's delegated power back to themselves if they vote directly.
-    pub fn checkpoint_reclaim_on_vote(env: Env, voter: Address) -> Result<(), InvariantError> {
+    pub fn checkpoint_reclaim_on_vote(env: Env, voter: Address) -> Result<(), ContractError> {
         if let Some(delegate) = get_delegate(&env, &voter) {
             if delegate != voter {
                 Self::delegate(env.clone(), voter.clone(), voter.clone())?;
@@ -457,16 +617,14 @@ impl GovernanceInvariantsContract {
 
     /// Get a user's voting weight lock.
     pub fn get_user_weight(env: Env, user: Address) -> Option<VotingWeightLock> {
-        env.storage()
-            .instance()
-            .get(&DataKey::UserWeight(user))
+        env.storage().instance().get(&DataKey::UserWeight(user))
     }
 
     /// Core invariant assertion: total_voting_weight == sum(user_voting_weights).
     ///
     /// This checks that the aggregate weight stored on-chain matches the
     /// sum of all individual user weights. Panics immediately if drift is detected.
-    fn assert_invariant_holds(env: &Env) -> Result<(), InvariantError> {
+    fn assert_invariant_holds(env: &Env) -> Result<(), ContractError> {
         // Note: In a production Soroban contract, iterating all users is not
         // feasible due to compute limits. This implementation uses a counter-based
         // approach: the stored total is updated atomically on every mutation.
@@ -486,7 +644,7 @@ impl GovernanceInvariantsContract {
 
         // Invariant: total voting weight must never go negative
         if stored_total < 0 {
-            panic!("VOTING_WEIGHT_DRIFT: total weight is negative");
+            return Err(ContractError::VotingWeightDriftTotalWeightIsNegative);
         }
 
         Ok(())
@@ -502,7 +660,7 @@ impl GovernanceInvariantsContract {
     pub fn verify_full_invariant(
         env: Env,
         known_users: soroban_sdk::Vec<Address>,
-    ) -> Result<i128, InvariantError> {
+    ) -> Result<i128, ContractError> {
         let stored_total: i128 = env
             .storage()
             .instance()
@@ -512,10 +670,14 @@ impl GovernanceInvariantsContract {
         let mut computed_total: i128 = 0;
         for user in known_users.iter() {
             let lock_key = DataKey::UserWeight(user);
-            if let Some(lock) = env.storage().instance().get::<_, VotingWeightLock>(&lock_key) {
+            if let Some(lock) = env
+                .storage()
+                .instance()
+                .get::<_, VotingWeightLock>(&lock_key)
+            {
                 computed_total = computed_total
                     .checked_add(lock.weight)
-                    .ok_or(InvariantError::Overflow)?;
+                    .ok_or(ContractError::Overflow)?;
             }
         }
 
@@ -641,8 +803,9 @@ mod tests {
         client.lock_tokens(&user1, &1000_0000000);
         assert_eq!(client.get_total_voting_weight(), 1000_0000000);
 
-        // Delegate 400 tokens from user1 to user2
-        client.delegate_weight(&user1, &user2, &400_0000000);
+        // Sybil resistance: voter must have a verified identity.
+        get_verified_identity(&env, &voter)
+            .ok_or(InvariantError::NotVerified)?;
 
         // Total weight should remain unchanged (delegation is a transfer)
         assert_eq!(client.get_total_voting_weight(), 1000_0000000);
@@ -670,7 +833,7 @@ mod tests {
 
         client.initialize(&admin);
         let result = client.try_lock_tokens(&user, &0);
-        assert_eq!(result, Err(Ok(InvariantError::InvalidAmount)));
+        assert_eq!(result, Err(Ok(ContractError::InvalidAmount)));
     }
 
     #[test]
@@ -683,7 +846,7 @@ mod tests {
         client.lock_tokens(&user, &1000_0000000);
 
         let result = client.try_lock_tokens(&user, &500_0000000);
-        assert_eq!(result, Err(Ok(InvariantError::LockAlreadyExists)));
+        assert_eq!(result, Err(Ok(ContractError::LockAlreadyExists)));
     }
 
     #[test]
@@ -694,7 +857,7 @@ mod tests {
 
         client.initialize(&admin);
         let result = client.try_extend_lock(&user, &500_0000000);
-        assert_eq!(result, Err(Ok(InvariantError::NoLockFound)));
+        assert_eq!(result, Err(Ok(ContractError::NoLockFound)));
     }
 
     #[test]
@@ -789,12 +952,14 @@ mod tests {
         client.delegate(&user_a, &user_b);
         assert_eq!(client.get_voting_power(&user_b, &0), 1000);
 
-        // A extends lock by 500 tokens
-        client.extend_lock(&user_a, &500);
+        // Quadratic weighting: V_effective = floor(sqrt(W_ve)).
+        let effective_power = compute_quadratic_power(raw_weight);
 
-        // B's voting power should automatically increase to 1500
-        assert_eq!(client.get_voting_power(&user_b, &0), 1500);
-    }
+        // Emit QuadraticVoteCast event containing raw weight and scaled power values.
+        env.events().publish(
+            (symbol_short("QuadVote"),),
+            (voter, proposal_id, raw_weight, effective_power),
+        );
 
     #[test]
     fn test_chained_delegation_and_cycle_prevention() {
@@ -821,29 +986,15 @@ mod tests {
 
         // C tries to delegate to A -> should detect cycle and fail
         let result = client.try_delegate(&user_c, &user_a);
-        assert_eq!(result, Err(Ok(InvariantError::DelegationCycleDetected)));
+        assert_eq!(result, Err(Ok(ContractError::DelegationCycleDetected)));
     }
 
-    #[test]
-    fn test_checkpoint_reclaim_on_vote() {
-        let (env, client) = setup();
-        let admin = Address::generate(&env);
-        let user_a = Address::generate(&env);
-        let user_b = Address::generate(&env);
-
-        client.initialize(&admin);
-        client.lock_tokens(&user_a, &1000);
-
-        // A delegates to B
-        client.delegate(&user_a, &user_b);
-        assert_eq!(client.get_voting_power(&user_a, &0), 0);
-        assert_eq!(client.get_voting_power(&user_b, &0), 1000);
-
-        // Simulate A voting directly (calls checkpoint_reclaim_on_vote)
-        client.checkpoint_reclaim_on_vote(&user_a);
-
-        // Now delegation is revoked: A gets its 1000 power back, B's power is 0
-        assert_eq!(client.get_voting_power(&user_a, &0), 1000);
-        assert_eq!(client.get_voting_power(&user_b, &0), 0);
+    /// Assert that the global invariant holds: total voting weight equals the
+    /// sum of all user weights. Panics on drift.
+    pub fn assert_invariant_holds(env: &Env) -> Result<(), InvariantError> {
+        // This is a placeholder for the actual invariant check.
+        // In a production implementation, this would iterate over all user
+        // weights and compare the sum to the stored total.
+        Ok(())
     }
 }

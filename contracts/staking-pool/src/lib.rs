@@ -7,10 +7,14 @@ use soroban_sdk::{
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
-pub enum Error {
+pub enum ContractError {
+    /// Recovery steps: Inspect the state for AlreadyInitialized and retry with valid inputs or proper conditions.
     AlreadyInitialized = 1,
+    /// Recovery steps: Inspect the state for Unauthorized and retry with valid inputs or proper conditions.
     Unauthorized = 2,
+    /// Recovery steps: Inspect the state for InvalidParameters and retry with valid inputs or proper conditions.
     InvalidParameters = 3,
+    /// Recovery steps: Inspect the state for EmissionCapReached and retry with valid inputs or proper conditions.
     EmissionCapReached = 4,
 }
 
@@ -43,11 +47,11 @@ impl StakingPoolYieldEmission {
         max_emission_cap: u128,
     ) {
         if env.storage().instance().has(&DataKey::Admin) {
-            panic_with_error!(&env, Error::AlreadyInitialized);
+            panic_with_error!(&env, ContractError::AlreadyInitialized);
         }
 
         if decay_rate_bps > 10000 || epoch_length == 0 {
-            panic_with_error!(&env, Error::InvalidParameters);
+            panic_with_error!(&env, ContractError::InvalidParameters);
         }
 
         env.storage().instance().set(&DataKey::Admin, &admin);

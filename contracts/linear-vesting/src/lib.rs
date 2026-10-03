@@ -1,19 +1,30 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, contracterror, token, Address, Env, Symbol, symbol_short};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env, Symbol,
+};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
-pub enum VestingError {
+pub enum ContractError {
+    /// Recovery steps: Inspect the state for AlreadyInitialized and retry with valid inputs or proper conditions.
     AlreadyInitialized = 1,
+    /// Recovery steps: Inspect the state for NotInitialized and retry with valid inputs or proper conditions.
     NotInitialized = 2,
+    /// Recovery steps: Inspect the state for NotAdmin and retry with valid inputs or proper conditions.
     NotAdmin = 3,
+    /// Recovery steps: Inspect the state for VestingNotFound and retry with valid inputs or proper conditions.
     VestingNotFound = 4,
+    /// Recovery steps: Inspect the state for CliffNotReached and retry with valid inputs or proper conditions.
     CliffNotReached = 5,
+    /// Recovery steps: Inspect the state for NothingToClaim and retry with valid inputs or proper conditions.
     NothingToClaim = 6,
+    /// Recovery steps: Inspect the state for InvalidAmount and retry with valid inputs or proper conditions.
     InvalidAmount = 7,
+    /// Recovery steps: Inspect the state for InvalidDuration and retry with valid inputs or proper conditions.
     InvalidDuration = 8,
+    /// Recovery steps: Inspect the state for VestingAlreadyExists and retry with valid inputs or proper conditions.
     VestingAlreadyExists = 9,
 }
 
@@ -41,9 +52,9 @@ pub struct LinearVestingContract;
 #[contractimpl]
 impl LinearVestingContract {
     /// Initialize the vesting contract with admin and token address.
-    pub fn initialize(env: Env, admin: Address, token: Address) -> Result<(), VestingError> {
+    pub fn initialize(env: Env, admin: Address, token: Address) -> Result<(), ContractError> {
         if env.storage().instance().has(&DataKey::Admin) {
-            return Err(VestingError::AlreadyInitialized);
+            return Err(ContractError::AlreadyInitialized);
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
@@ -67,23 +78,27 @@ impl LinearVestingContract {
         total_amount: i128,
         cliff_duration: u32,
         vesting_duration: u32,
-    ) -> Result<(), VestingError> {
-        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).ok_or(VestingError::NotInitialized)?;
+    ) -> Result<(), ContractError> {
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(ContractError::NotInitialized)?;
         if admin != stored_admin {
-            return Err(VestingError::NotAdmin);
+            return Err(ContractError::NotAdmin);
         }
         admin.require_auth();
 
         if total_amount <= 0 {
-            return Err(VestingError::InvalidAmount);
+            return Err(ContractError::InvalidAmount);
         }
         if vesting_duration <= cliff_duration {
-            return Err(VestingError::InvalidDuration);
+            return Err(ContractError::InvalidDuration);
         }
 
         let schedule_key = DataKey::Schedule(identifier.clone());
         if env.storage().instance().has(&schedule_key) {
-            return Err(VestingError::VestingAlreadyExists);
+            return Err(ContractError::VestingAlreadyExists);
         }
 
         let current_ledger = env.ledger().sequence();
@@ -97,7 +112,11 @@ impl LinearVestingContract {
         };
 
         // Transfer tokens from admin to this contract
-        let token_addr: Address = env.storage().instance().get(&DataKey::Token).ok_or(VestingError::NotInitialized)?;
+        let token_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
+            .ok_or(ContractError::NotInitialized)?;
         let token_client = token::Client::new(&env, &token_addr);
         token_client.transfer(&admin, &env.current_contract_address(), &total_amount);
 
@@ -106,7 +125,13 @@ impl LinearVestingContract {
         // Emit event
         env.events().publish(
             (symbol_short!("vest_new"),),
-            (identifier, beneficiary, total_amount, cliff_duration, vesting_duration),
+            (
+                identifier,
+                beneficiary,
+                total_amount,
+                cliff_duration,
+                vesting_duration,
+            ),
         );
 
         Ok(())
@@ -151,7 +176,7 @@ impl LinearVestingContract {
     /// Claim vested tokens for a given vesting schedule.
     ///
     /// Panics if cliff has not been reached or nothing is claimable.
-    pub fn claim_vested(env: Env, identifier: Symbol) -> Result<i128, VestingError> {
+    pub fn claim_vested(env: Env, identifier: Symbol) -> Result<i128, ContractError> {
         let beneficiary = env.invoker();
         beneficiary.require_auth();
 
@@ -160,11 +185,11 @@ impl LinearVestingContract {
             .storage()
             .instance()
             .get(&schedule_key)
-            .ok_or(VestingError::VestingNotFound)?;
+            .ok_or(ContractError::VestingNotFound)?;
 
         // Verify caller is the beneficiary
         if beneficiary != schedule.beneficiary {
-            return Err(VestingError::NotAdmin);
+            return Err(ContractError::NotAdmin);
         }
 
         let current_ledger = env.ledger().sequence();
@@ -172,21 +197,29 @@ impl LinearVestingContract {
 
         // Prevent claims before cliff
         if elapsed < schedule.cliff_duration {
-            return Err(VestingError::CliffNotReached);
+            return Err(ContractError::CliffNotReached);
         }
 
         let claimable = Self::get_claimable(env.clone(), identifier.clone());
         if claimable <= 0 {
-            return Err(VestingError::NothingToClaim);
+            return Err(ContractError::NothingToClaim);
         }
 
         schedule.claimed_amount += claimable;
         env.storage().instance().set(&schedule_key, &schedule);
 
         // Transfer tokens to beneficiary
-        let token_addr: Address = env.storage().instance().get(&DataKey::Token).ok_or(VestingError::NotInitialized)?;
+        let token_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Token)
+            .ok_or(ContractError::NotInitialized)?;
         let token_client = token::Client::new(&env, &token_addr);
-        token_client.transfer(&env.current_contract_address(), &schedule.beneficiary, &claimable);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &schedule.beneficiary,
+            &claimable,
+        );
 
         // Emit event
         env.events().publish(
@@ -284,14 +317,7 @@ mod tests {
         client.initialize(&admin, &token);
         let id = symbol_short!("team1");
 
-        client.create_vesting(
-            &admin,
-            &id,
-            &beneficiary,
-            &1000_0000000,
-            &100,
-            &1000,
-        );
+        client.create_vesting(&admin, &id, &beneficiary, &1000_0000000, &100, &1000);
 
         // Advance 50 ledgers (still within cliff)
         advance_ledgers(&env, 50);
@@ -308,14 +334,7 @@ mod tests {
         client.initialize(&admin, &token);
         let id = symbol_short!("team1");
 
-        client.create_vesting(
-            &admin,
-            &id,
-            &beneficiary,
-            &1000_0000000,
-            &100,
-            &1000,
-        );
+        client.create_vesting(&admin, &id, &beneficiary, &1000_0000000, &100, &1000);
 
         // Advance past cliff (100 ledgers) + halfway through vesting range (450 more = 550 total)
         // Post-cliff range = 900, elapsed post-cliff = 450
@@ -335,14 +354,7 @@ mod tests {
         client.initialize(&admin, &token);
         let id = symbol_short!("team1");
 
-        client.create_vesting(
-            &admin,
-            &id,
-            &beneficiary,
-            &1000_0000000,
-            &100,
-            &1000,
-        );
+        client.create_vesting(&admin, &id, &beneficiary, &1000_0000000, &100, &1000);
 
         // Advance fully past vesting
         advance_ledgers(&env, 1000);
@@ -363,17 +375,10 @@ mod tests {
         client.initialize(&admin, &token);
         let id = symbol_short!("team1");
 
-        client.create_vesting(
-            &admin,
-            &id,
-            &beneficiary,
-            &1000_0000000,
-            &100,
-            &1000,
-        );
+        client.create_vesting(&admin, &id, &beneficiary, &1000_0000000, &100, &1000);
 
         advance_ledgers(&env, 50);
         let result = client.try_claim_vested(&id);
-        assert_eq!(result, Err(Ok(VestingError::CliffNotReached)));
+        assert_eq!(result, Err(Ok(ContractError::CliffNotReached)));
     }
 }

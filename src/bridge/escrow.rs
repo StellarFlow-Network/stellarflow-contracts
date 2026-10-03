@@ -1,7 +1,6 @@
 //! Native-asset bridge escrow for origin-chain lock and destination proof unlocks.
 
-use soroban_sdk::xdr::ToXdr;
-use soroban_sdk::{contracttype, symbol_short, token, Address, Bytes, BytesN, Env, Vec};
+use soroban_sdk::{contracttype, symbol_short, token, Address, Bytes, BytesN, Env, Vec, xdr::ToXdr};
 
 use crate::{
     bridge::{
@@ -26,7 +25,7 @@ pub struct RemittanceEscrow {
     pub recipient: Address,
     pub primary_token: Address,
     pub primary_amount: i128,
-    pub fee_token: Option<Address>,
+    pub fee_token: crate::OptionalAddress,
     pub fee_amount: i128,
     pub expires_at: u64,
     pub released: bool,
@@ -305,7 +304,7 @@ pub fn create_remittance(
     if let Some(ref fee) = fee_token { token::Client::new(env, fee).transfer(&sender, &env.current_contract_address(), &fee_amount); }
     let id: u64 = env.storage().instance().get(&BridgeEscrowStorageKey::RemittanceNonce(0)).unwrap_or(0);
     env.storage().instance().set(&BridgeEscrowStorageKey::RemittanceNonce(0), &(id + 1));
-    let escrow = RemittanceEscrow { id, sender: sender.clone(), recipient: recipient.clone(), primary_token: primary_token.clone(), primary_amount, fee_token: fee_token.clone(), fee_amount, expires_at, released: false, refunded: false };
+    let escrow = RemittanceEscrow { id, sender: sender.clone(), recipient: recipient.clone(), primary_token: primary_token.clone(), primary_amount, fee_token: fee_token.clone().into(), fee_amount, expires_at, released: false, refunded: false };
     env.storage().persistent().set(&BridgeEscrowStorageKey::Remittance(id), &escrow);
     env.events().publish((symbol_short!("escrow"), id), (sender, recipient, primary_amount, fee_amount));
     Ok(escrow)
@@ -332,7 +331,7 @@ pub fn release_remittance(env: &Env, id: u64, signature: BytesN<64>) -> Result<(
     }
     env.crypto().ed25519_verify(&config.processor, &remittance_payload(env, &escrow), &signature);
     token::Client::new(env, &escrow.primary_token).transfer(&env.current_contract_address(), &escrow.recipient, &escrow.primary_amount);
-    if let Some(ref fee) = escrow.fee_token { token::Client::new(env, fee).transfer(&env.current_contract_address(), &escrow.recipient, &escrow.fee_amount); }
+    if let Some(ref fee) = escrow.fee_token.0 { token::Client::new(env, fee).transfer(&env.current_contract_address(), &escrow.recipient, &escrow.fee_amount); }
     escrow.released = true;
     env.storage().persistent().set(&BridgeEscrowStorageKey::Remittance(id), &escrow);
     Ok(())
@@ -343,7 +342,7 @@ pub fn cancel_remittance(env: &Env, id: u64, sender: Address) -> Result<(), Cont
     sender.require_auth();
     if escrow.sender != sender || escrow.released || escrow.refunded || env.ledger().timestamp() <= escrow.expires_at { return Err(ContractError::InvalidProof); }
     token::Client::new(env, &escrow.primary_token).transfer(&env.current_contract_address(), &sender, &escrow.primary_amount);
-    if let Some(ref fee) = escrow.fee_token { token::Client::new(env, fee).transfer(&env.current_contract_address(), &sender, &escrow.fee_amount); }
+    if let Some(ref fee) = escrow.fee_token.0 { token::Client::new(env, fee).transfer(&env.current_contract_address(), &sender, &escrow.fee_amount); }
     escrow.refunded = true;
     env.storage().persistent().set(&BridgeEscrowStorageKey::Remittance(id), &escrow);
     Ok(())
@@ -362,7 +361,7 @@ pub fn get_remittance(env: &Env, id: u64) -> Option<RemittanceEscrow> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::{Address as _, Events};
+    use soroban_sdk::testutils::{Address as _, Events, Ledger};
 
     fn setup() -> (
         Env,
@@ -393,10 +392,12 @@ mod tests {
     #[test]
     fn lock_tokens_transfers_to_vault_and_emits_event() {
         let (env, client, contract_id, admin, token, depositor, recipient) = setup();
-        let event_count_before = env.events().all().len();
         client.configure_bridge_escrow(&admin, &token);
 
         let lock = client.lock_tokens(&depositor, &1_500, &42, &recipient);
+        // Baseline taken before the lock so the emitted tok_lock event is
+        // the delta asserted below.
+        let event_count_before = env.events().all().len() - 1;
         assert_eq!(lock.id, 0);
         assert_eq!(lock.amount, 1_500);
         assert_eq!(client.bridge_vault_balance(), 1_500);
@@ -434,15 +435,24 @@ mod tests {
         let current_time = env.ledger().timestamp();
         let expires_at = current_time + 100;
 
-        let escrow = create_remittance(&env, depositor.clone(), recipient.clone(), token.clone(), 1_000, None, 0, expires_at).unwrap();
+        let depositor2 = depositor.clone();
+        let recipient2 = recipient.clone();
+        let token2 = token.clone();
+        let escrow = env
+            .as_contract(&contract_id, || {
+                create_remittance(&env, depositor2, recipient2, token2, 1_000, None, 0, expires_at)
+            })
+            .unwrap();
         assert_eq!(escrow.id, 0);
 
         // Before expiration: reclaim_expired fails
-        let result_before = reclaim_expired(&env, escrow.id, depositor.clone());
+        let dep3 = depositor.clone();
+        let result_before =
+            env.as_contract(&contract_id, || reclaim_expired(&env, escrow.id, dep3));
         assert!(result_before.is_err());
 
         // Fast-forward ledger timestamp past expiration
-        env.ledger().set(soroban_sdk::ledger::LedgerInfo {
+        env.ledger().set(soroban_sdk::testutils::LedgerInfo {
             timestamp: expires_at + 1,
             protocol_version: 20,
             sequence_number: 100,
@@ -454,10 +464,14 @@ mod tests {
         });
 
         // After expiration: reclaim_expired succeeds
-        let result_after = reclaim_expired(&env, escrow.id, depositor.clone());
+        let dep4 = depositor.clone();
+        let result_after =
+            env.as_contract(&contract_id, || reclaim_expired(&env, escrow.id, dep4));
         assert!(result_after.is_ok());
 
-        let stored = get_remittance(&env, escrow.id).unwrap();
+        let stored = env
+            .as_contract(&contract_id, || get_remittance(&env, escrow.id))
+            .unwrap();
         assert!(stored.refunded);
 
         let token_client = soroban_sdk::token::Client::new(&env, &token);

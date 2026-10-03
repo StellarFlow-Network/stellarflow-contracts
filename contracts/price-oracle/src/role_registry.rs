@@ -88,10 +88,10 @@ pub fn _has_role(env: &Env, role: Role, account: &Address) -> bool {
         .unwrap_or(false)
 }
 
-/// Panic with `Error::NotAuthorized` if `account` does not hold `role`.
+/// Panic with `ContractError::NotAuthorized` if `account` does not hold `role`.
 pub fn _require_role(env: &Env, role: Role, account: &Address) {
     if !_has_role(env, role, account) {
-        panic_with_error!(env, Error::NotAuthorized);
+        panic_with_error!(env, ContractError::NotAuthorized);
     }
 }
 
@@ -122,7 +122,7 @@ pub fn _role_can(env: &Env, role: Role, action: &Symbol) -> bool {
     actions.iter().any(|a| a == *action)
 }
 
-/// Convenience: panic with `Error::NotAuthorized` unless `account` holds
+/// Convenience: panic with `ContractError::NotAuthorized` unless `account` holds
 /// a role that is permitted to perform `action`. Checks all variants of
 /// `Role` and returns on the first matching grant.
 pub fn _require_can(env: &Env, account: &Address, action: &Symbol) {
@@ -137,7 +137,7 @@ pub fn _require_can(env: &Env, account: &Address, action: &Symbol) {
             return;
         }
     }
-    panic_with_error!(env, Error::NotAuthorized);
+    panic_with_error!(env, ContractError::NotAuthorized);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

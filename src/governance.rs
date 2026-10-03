@@ -9,11 +9,13 @@
 
 use soroban_sdk::{contracttype, symbol_short, Address, Bytes, BytesN, Env, Map, Symbol, Vec};
 
-use crate::{ContractData, ContractError, DATA_KEY, SIGNERS_KEY};
+pub(crate) use crate::governance_upgrade::*;
 
 pub(crate) const VALIDATORS_KEY: Symbol = symbol_short!("VALIDS");
 pub(crate) const VALIDATOR_SEQUENCE_KEY: Symbol = symbol_short!("VALSEQ");
-pub(crate) const BRIDGE_VALIDATORS_UPDATED_EVENT: Symbol = symbol_short!("vkeys");
+pub(crate) const BRIDGE_VALIDATORS_UPDATED_EVENT: Symbol = symbol_short!("BRVAL");
+
+use crate::{ContractData, ContractError, DATA_KEY, SIGNERS_KEY};
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -21,63 +23,8 @@ pub(crate) const BRIDGE_VALIDATORS_UPDATED_EVENT: Symbol = symbol_short!("vkeys"
 /// submission and eligible execution.
 pub const MIN_LEDGER_DELAY: u32 = 5000;
 
-/// Storage key for the active weighted multi-sig configuration.
-pub(crate) const QUORUM_WEIGHT_THRESHOLD_KEY: Symbol = symbol_short!("QWTH");
-/// Storage key for the per-signer weight map.
-pub(crate) const SIGNER_WEIGHTS_KEY: Symbol = symbol_short!("SIGWT");
-/// Storage key for the count-based governance configuration.
-pub(crate) const GOVERNANCE_CONFIG_KEY: Symbol = symbol_short!("GVNCFG");
-/// Storage key for a pending staged WASM upgrade proposal.
-pub(crate) const GOVERNANCE_UPGRADE_KEY: Symbol = symbol_short!("GOVUPG");
-
-const BALLOT_TTL_THRESHOLD: u32 = 5_000;
-const BALLOT_TTL_LEDGERS: u32 = 17_280;
-const PROPOSAL_TTL_SECONDS: u64 = 7 * 24 * 60 * 60;
-
-// ── Types ─────────────────────────────────────────────────────────────────
-
-#[contracttype]
-#[derive(Clone)]
-pub struct GovernanceConfig {
-    pub quorum_threshold: u32,
-}
-
-impl Default for GovernanceConfig {
-    fn default() -> Self {
-        Self { quorum_threshold: 2 }
-    }
-}
-
-#[contracttype]
-#[derive(Clone)]
-pub struct MultiSigConfig {
-    /// Total weight required for quorum (N in N-of-M).
-    pub required_weight: u32,
-    /// Maximum weight any single signer can hold.
-    pub max_signer_weight: u32,
-}
-
-impl Default for MultiSigConfig {
-    fn default() -> Self {
-        Self { required_weight: 1, max_signer_weight: 1 }
-    }
-}
-
-#[contracttype]
-pub enum BallotKey {
-    Proposal(Symbol),
-}
-
-#[contracttype]
-#[derive(Clone)]
-pub struct VotingBallot {
-    pub target: Address,
-    pub replacement: Address,
-    pub proposer: Address,
-    pub proposed_at: u64,
-    pub ipfs_cid: Bytes,
-    pub votes: Map<Address, ()>,
-}
+/// Approval window before an unapproved governance proposal expires: 7 days.
+pub const PROPOSAL_TTL_SECONDS: u64 = 7 * 24 * 60 * 60;
 
 /// Storage key for the active governance proposal (only one at a time).
 pub(crate) const GOVERNANCE_PROPOSAL_KEY: Symbol = symbol_short!("GOVPROP");
@@ -88,6 +35,11 @@ pub(crate) const GOV_PROPOSAL_COUNTER_KEY: Symbol = symbol_short!("GOVCNT");
 /// Storage key for the cancellation quorum threshold (number of votes required
 /// to cancel a proposal during the timelock window).
 pub(crate) const GOV_CANCEL_THRESHOLD_KEY: Symbol = symbol_short!("GOVTHRSH");
+
+/// Storage key for the designated emergency guardian address (Issue #927).
+/// The guardian may unilaterally nullify active administrative proposals and
+/// expunge their unexecuted hashes from persistent state.
+pub(crate) const EMERGENCY_GUARDIAN_KEY: Symbol = symbol_short!("EMRG_G");
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -129,6 +81,29 @@ pub struct GovernanceProposal {
 ///
 /// Only one governance proposal may be active at a time. Returns the
 /// assigned proposal ID.
+pub fn submit_governance_proposal(
+    env: &Env,
+    proposer: Address,
+    wasm_hash: BytesN<32>,
+) -> Result<u64, ContractError> {
+    // Only one active proposal at a time.
+    if env.storage().instance().has(&GOVERNANCE_PROPOSAL_KEY) {
+        let existing: GovernanceProposal = env
+            .storage()
+            .instance()
+            .get(&GOVERNANCE_PROPOSAL_KEY)
+            .unwrap();
+        if existing.status == ProposalStatus::Pending
+            || existing.status == ProposalStatus::Executable
+        {
+            return Err(ContractError::ProposalAlreadyActive);
+        }
+    }
+
+    if crate::veto::is_hash_vetoed(env, &wasm_hash) {
+        return Err(ContractError::ProposalAlreadyVetoed);
+    }
+
 /// Proposal state enumeration for governance lifecycle management.
 ///
 /// Proposals transition through states as they move through voting, approval,
@@ -150,6 +125,203 @@ pub enum ProposalState {
     Vetoed,
     /// Proposal expired because threshold approval was not reached within 7 days.
     Expired,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct GovernanceConfig {
+    pub quorum_threshold: u32,
+}
+
+impl Default for GovernanceConfig {
+    fn default() -> Self {
+        Self { quorum_threshold: 2 }
+    }
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct MultiSigConfig {
+    /// Total weight required for quorum (N in N-of-M)
+    pub required_weight: u32,
+    /// Maximum weight any single signer can hold
+    pub max_signer_weight: u32,
+}
+
+impl Default for MultiSigConfig {
+    fn default() -> Self {
+        Self {
+            required_weight: 1,
+            max_signer_weight: 1,
+        }
+    }
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct GovernanceUpgradeProposal {
+    pub new_wasm_hash: BytesN<32>,
+    pub proposer: Address,
+    pub staged_at: u64,
+    pub signers: Vec<Address>,
+}
+
+/// Get multi-signature weight configuration for WASM upgrade governance
+pub fn get_multisig_config(env: &Env) -> MultiSigConfig {
+    env.storage()
+        .instance()
+        .get(&QUORUM_WEIGHT_THRESHOLD_KEY)
+        .unwrap_or_default()
+}
+
+/// Set multi-signature weight configuration for WASM upgrade governance
+pub fn set_multisig_config(env: &Env, config: &MultiSigConfig) {
+    env.storage()
+        .instance()
+        .set(&QUORUM_WEIGHT_THRESHOLD_KEY, config);
+}
+
+/// Get the weight for a specific signer (returns 0 if signer not registered)
+pub fn get_signer_weight(env: &Env, signer: &Address) -> u32 {
+    let weights: Map<Address, u32> = env
+        .storage()
+        .instance()
+        .get(&SIGNER_WEIGHTS_KEY)
+        .unwrap_or_else(|| Map::new(env));
+    weights.get(signer.clone()).unwrap_or(0u32)
+}
+
+/// Register or update a signer's weight in multi-sig governance
+pub fn set_signer_weight(env: &Env, signer: &Address, weight: u32) {
+    let mut weights: Map<Address, u32> = env
+        .storage()
+        .instance()
+        .get(&SIGNER_WEIGHTS_KEY)
+        .unwrap_or_else(|| Map::new(env));
+    if weight == 0 {
+        weights.remove(signer.clone());
+    } else {
+        weights.set(signer.clone(), weight);
+    }
+    env.storage()
+        .instance()
+        .set(&SIGNER_WEIGHTS_KEY, &weights);
+}
+
+pub fn get_governance_config(env: &Env) -> GovernanceConfig {
+    env.storage()
+        .instance()
+        .get(&GOVERNANCE_CONFIG_KEY)
+        .unwrap_or_default()
+}
+
+pub fn set_governance_config(env: &Env, config: &GovernanceConfig) {
+    env.storage().instance().set(&GOVERNANCE_CONFIG_KEY, config);
+}
+
+pub fn verify_upgrade_quorum(env: &Env, signers: &Vec<Address>) -> Result<(), ContractError> {
+    let data: ContractData = env
+        .storage()
+        .instance()
+        .get(&DATA_KEY)
+        .ok_or(ContractError::NotInitialized)?;
+
+    let authorized_signers: Map<Address, ()> = env
+        .storage()
+        .instance()
+        .get(&SIGNERS_KEY)
+        .unwrap_or_else(|| Map::new(env));
+
+    let config = get_governance_config(env);
+    let multisig_config = get_multisig_config(env);
+
+    // Legacy count-based check
+    let mut valid_count: u32 = 0;
+    let mut collected_weight: u32 = 0;
+    let mut seen_signers: Map<Address, ()> = Map::new(env);
+
+    for signer in signers.iter() {
+        // Skip duplicate signers
+        if seen_signers.contains_key(signer.clone()) {
+            continue;
+        }
+        seen_signers.set(signer.clone(), ());
+
+        // Check if signer is authorized (admin or in authorized_signers)
+        let is_authorized = signer == data.admin || authorized_signers.contains_key(signer.clone());
+        if !is_authorized {
+            continue;
+        }
+
+        valid_count += 1;
+
+        // Get weight for this signer (admin gets weight 1 if not explicitly set)
+        let weight = if signer == data.admin {
+            get_signer_weight(env, &data.admin).max(1u32)
+        } else {
+            get_signer_weight(env, &signer)
+        };
+
+        collected_weight = collected_weight
+            .checked_add(weight)
+            .ok_or(ContractError::Overflow)?;
+    }
+
+    // Fail if count-based quorum not met
+    if valid_count < config.quorum_threshold {
+        return Err(ContractError::ThresholdNotReached);
+    }
+
+    // Fail if weight-based quorum not met
+    if collected_weight < multisig_config.required_weight {
+        return Err(ContractError::ThresholdNotReached);
+    }
+
+    Ok(())
+}
+
+/// Accumulate the voting weight of the given signers, skipping duplicates
+/// and unauthorized addresses.
+pub fn calculate_collected_weight(
+    env: &Env,
+    signers: &Vec<Address>,
+    data: &ContractData,
+) -> Result<u32, ContractError> {
+    let authorized_signers: Map<Address, ()> = env
+        .storage()
+        .instance()
+        .get(&SIGNERS_KEY)
+        .unwrap_or_else(|| Map::new(env));
+
+    let mut collected_weight: u32 = 0;
+    let mut seen_signers: Map<Address, ()> = Map::new(env);
+
+    for signer in signers.iter() {
+        // Skip duplicate signers
+        if seen_signers.contains_key(signer.clone()) {
+            continue;
+        }
+        seen_signers.set(signer.clone(), ());
+
+        // Check if signer is authorized
+        let is_authorized = signer == data.admin || authorized_signers.contains_key(signer.clone());
+        if !is_authorized {
+            continue;
+        }
+
+        // Get weight for this signer (admin gets weight 1 if not explicitly set)
+        let weight = if signer == data.admin {
+            get_signer_weight(env, &data.admin).max(1u32)
+        } else {
+            get_signer_weight(env, &signer)
+        };
+
+        collected_weight = collected_weight
+            .checked_add(weight)
+            .ok_or(ContractError::Overflow)?;
+    }
+
+    Ok(collected_weight)
 }
 
 /// Submit a governance proposal. The proposal enters a timelock period
@@ -177,6 +349,7 @@ pub fn submit_governance_proposal(
     }
 
     proposer.require_auth();
+
     let proposal_id = _next_proposal_id(env);
     let proposal = GovernanceProposal {
         proposal_id,
@@ -199,148 +372,20 @@ pub fn submit_governance_proposal(
     Ok(proposal_id)
 }
 
-/// Get multi-signature weight configuration for WASM upgrade governance
-pub fn get_multisig_config(env: &Env) -> MultiSigConfig {
-    env.storage()
-        .instance()
-        .get(&QUORUM_WEIGHT_THRESHOLD_KEY)
-        .unwrap_or_default()
-}
-
-/// Set multi-signature weight configuration for WASM upgrade governance
-pub fn set_multisig_config(env: &Env, config: &MultiSigConfig) {
-    env.storage()
-        .instance()
-        .set(&QUORUM_WEIGHT_THRESHOLD_KEY, config);
-}
-
-/// Get the count-based governance configuration.
-pub fn get_governance_config(env: &Env) -> GovernanceConfig {
-    env.storage()
-        .instance()
-        .get(&GOVERNANCE_CONFIG_KEY)
-        .unwrap_or_default()
-}
-
-/// Persist the count-based governance configuration.
-pub fn set_governance_config(env: &Env, config: &GovernanceConfig) {
-    env.storage().instance().set(&GOVERNANCE_CONFIG_KEY, config);
-}
-
-/// Get the weight for a specific signer (returns 0 if signer not registered).
-pub fn get_signer_weight(env: &Env, signer: &Address) -> u32 {
-    let weights: Map<Address, u32> = env
-        .storage()
-        .instance()
-        .get(&SIGNER_WEIGHTS_KEY)
-        .unwrap_or_else(|| Map::new(env));
-    weights.get(signer.clone()).unwrap_or(0u32)
-}
-
-/// Register or update a signer's weight in multi-sig governance.
-pub fn set_signer_weight(env: &Env, signer: &Address, weight: u32) {
-    let mut weights: Map<Address, u32> = env
-        .storage()
-        .instance()
-        .get(&SIGNER_WEIGHTS_KEY)
-        .unwrap_or_else(|| Map::new(env));
-    if weight == 0 {
-        weights.remove(signer.clone());
-    } else {
-        weights.set(signer.clone(), weight);
-    }
-    env.storage().instance().set(&SIGNER_WEIGHTS_KEY, &weights);
-}
-
-/// Verify that `signers` collectively satisfy the count- and weight-based
-/// quorum required to rotate admin keys or authorise an upgrade.
-pub fn verify_upgrade_quorum(env: &Env, signers: &Vec<Address>) -> Result<(), ContractError> {
-    let data: ContractData = env
-        .storage()
-        .instance()
-        .get(&DATA_KEY)
-        .ok_or(ContractError::NotInitialized)?;
-
-    let authorized_signers: Map<Address, ()> = env
-        .storage()
-        .instance()
-        .get(&SIGNERS_KEY)
-        .unwrap_or_else(|| Map::new(env));
-
-    let config = get_governance_config(env);
-    let multisig_config = get_multisig_config(env);
-
-    let mut valid_count: u32 = 0;
-    let mut collected_weight: u32 = 0;
-    let mut seen_signers: Map<Address, ()> = Map::new(env);
-
-    for signer in signers.iter() {
-        if seen_signers.contains_key(signer.clone()) {
-            continue;
-        }
-        seen_signers.set(signer.clone(), ());
-
-        let is_authorized = signer == data.admin || authorized_signers.contains_key(signer.clone());
-        if !is_authorized {
-            continue;
-        }
-
-        valid_count += 1;
-        let weight = if signer == data.admin {
-            get_signer_weight(env, &data.admin).max(1u32)
-        } else {
-            get_signer_weight(env, &signer)
-        };
-        collected_weight = collected_weight
-            .checked_add(weight)
-            .ok_or(ContractError::Overflow)?;
-    }
-
-    if valid_count < config.quorum_threshold {
-        return Err(ContractError::ThresholdNotReached);
-    }
-    if collected_weight < multisig_config.required_weight {
-        return Err(ContractError::ThresholdNotReached);
-    }
-    Ok(())
-}
-
-/// Sum the weights of the authorised signers in `signers`.
-pub fn calculate_collected_weight(
+/// Query a governance proposal by ID.
+pub fn get_governance_proposal(
     env: &Env,
-    signers: &Vec<Address>,
-    data: &ContractData,
-) -> Result<u32, ContractError> {
-    let authorized_signers: Map<Address, ()> = env
+    proposal_id: u64,
+) -> Result<GovernanceProposal, ContractError> {
+    let proposal: GovernanceProposal = env
         .storage()
         .instance()
-        .get(&SIGNERS_KEY)
-        .unwrap_or_else(|| Map::new(env));
-
-    let mut collected_weight: u32 = 0;
-    let mut seen_signers: Map<Address, ()> = Map::new(env);
-
-    for signer in signers.iter() {
-        if seen_signers.contains_key(signer.clone()) {
-            continue;
-        }
-        seen_signers.set(signer.clone(), ());
-
-        let is_authorized = signer == data.admin || authorized_signers.contains_key(signer.clone());
-        if !is_authorized {
-            continue;
-        }
-        let weight = if signer == data.admin {
-            get_signer_weight(env, &data.admin).max(1u32)
-        } else {
-            get_signer_weight(env, &signer)
-        };
-        collected_weight = collected_weight
-            .checked_add(weight)
-            .ok_or(ContractError::Overflow)?;
+        .get(&GOVERNANCE_PROPOSAL_KEY)
+        .ok_or(ContractError::NoActiveProposal)?;
+    if proposal.proposal_id != proposal_id {
+        return Err(ContractError::NoActiveProposal);
     }
-
-    Ok(collected_weight)
+    Ok(proposal)
 }
 
 /// Vote to cancel a governance proposal during its timelock window.
@@ -432,6 +477,101 @@ pub fn cancel_governance_proposal(
     Ok(())
 }
 
+// ── Emergency Guardian (Issue #927) ─────────────────────────────────────────
+
+/// Return the currently designated emergency guardian, if any.
+pub fn get_emergency_guardian(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&EMERGENCY_GUARDIAN_KEY)
+}
+
+/// Designate (or rotate) the emergency guardian address.
+///
+/// Only the contract admin may designate the guardian. The guardian is a
+/// high-privilege recovery address that can nullify active administrative
+/// proposals without waiting for a multi-sig quorum.
+pub fn designate_emergency_guardian(
+    env: &Env,
+    admin: Address,
+    guardian: Address,
+) -> Result<(), ContractError> {
+    admin.require_auth();
+
+    let data: crate::ContractData = env
+        .storage()
+        .instance()
+        .get(&crate::DATA_KEY)
+        .ok_or(ContractError::NotInitialized)?;
+
+    if data.admin != admin {
+        return Err(ContractError::NotAdmin);
+    }
+
+    env.storage().instance().set(&EMERGENCY_GUARDIAN_KEY, &guardian);
+
+    env.events().publish(
+        (symbol_short!("GovEmerG"),),
+        (guardian,),
+    );
+
+    Ok(())
+}
+
+/// Emergency-guardian nullification of an active administrative proposal.
+///
+/// Unlike [`vote_cancel_proposal`] (multi-sig quorum) and
+/// [`cancel_governance_proposal`] (admin-only), this entry point lets the
+/// designated emergency guardian unilaterally nullify a pending proposal and
+/// permanently **remove its unexecuted `wasm_hash` from persistent state** —
+/// before the timelock expires or at any point while it remains unexecuted.
+///
+/// # Errors
+///
+/// - [`ContractError::NotEmergencyGuardian`]             – caller is not the
+///   designated emergency guardian.
+/// - [`ContractError::NoActiveProposal`]                 – no active proposal
+///   with the given ID.
+/// - [`ContractError::ProposalAlreadyCancelledOrExecuted`] – proposal is no
+///   longer pending (already executed or cancelled).
+pub fn emergency_cancel_proposal(
+    env: &Env,
+    guardian: Address,
+    proposal_id: u64,
+) -> Result<(), ContractError> {
+    guardian.require_auth();
+
+    let designated = get_emergency_guardian(env)
+        .ok_or(ContractError::NotEmergencyGuardian)?;
+    if designated != guardian {
+        return Err(ContractError::NotEmergencyGuardian);
+    }
+
+    let mut proposal: GovernanceProposal = env
+        .storage()
+        .instance()
+        .get(&GOVERNANCE_PROPOSAL_KEY)
+        .ok_or(ContractError::NoActiveProposal)?;
+
+    if proposal.proposal_id != proposal_id {
+        return Err(ContractError::NoActiveProposal);
+    }
+
+    if proposal.status != ProposalStatus::Pending {
+        return Err(ContractError::ProposalAlreadyCancelledOrExecuted);
+    }
+
+    // Nullify the proposal and permanently free its storage slot (the
+    // `wasm_hash` and the cancellation-vote ledger live on that record).
+    proposal.status = ProposalStatus::Cancelled;
+    env.storage().instance().remove(&GOVERNANCE_PROPOSAL_KEY);
+
+    env.events().publish(
+        (symbol_short!("GovEmrCxl"), proposal_id),
+        (guardian,),
+    );
+
+    Ok(())
+}
+
 pub fn rotate_admin_keys(
     env: &Env,
     signers: &Vec<Address>,
@@ -446,7 +586,7 @@ pub fn rotate_admin_keys(
     }
 
     if new_threshold == 0 || new_threshold > signer_set.len() {
-        return Err(ContractError::InvalidThreshold);
+        return Err(ContractError::InvalidArgument);
     }
 
     let mut weights: Map<Address, u32> = Map::new(env);
@@ -461,7 +601,7 @@ pub fn rotate_admin_keys(
         .ok_or(ContractError::NotInitialized)?;
     data.admin = new_signers
         .get(0)
-        .ok_or(ContractError::InvalidThreshold)?
+        .ok_or(ContractError::InvalidArgument)?
         .clone();
 
     env.storage().instance().set(&DATA_KEY, &data);
@@ -482,16 +622,6 @@ pub fn rotate_admin_keys(
     );
 
     Ok(())
-}
-
-#[contracttype]
-#[derive(Clone)]
-pub struct StagedUpgrade {
-    pub new_wasm_hash: BytesN<32>,
-    pub proposer: Address,
-    pub staged_at: u64,
-    /// Earliest ledger timestamp at which the replacement may execute.
-    pub execute_at: u64,
 }
 
 /// Return the number of ledger sequences remaining before a governance
@@ -533,7 +663,6 @@ pub fn is_proposal_executable(env: &Env, proposal_id: u64) -> bool {
         _ => false,
     }
 }
-
 pub fn get_validator_set(env: &Env) -> Map<BytesN<32>, ()> {
     env.storage()
         .instance()
@@ -567,20 +696,11 @@ pub fn rotate_validators(
     env.storage().instance().set(&VALIDATORS_KEY, &validator_set);
     env.storage().instance().set(&VALIDATOR_SEQUENCE_KEY, &sequence);
     env.events().publish(
-        (BRIDGE_VALIDATORS_UPDATED_EVENT, sequence),
+        (Symbol::new(env, "BridgeValidatorsUpdated"), sequence),
         new_validators,
     );
 
     Ok(sequence)
-}
-
-#[contracttype]
-#[derive(Clone)]
-pub struct GovernanceUpgradeProposal {
-    pub new_wasm_hash: BytesN<32>,
-    pub proposer: Address,
-    pub staged_at: u64,
-    pub signers: Vec<Address>,
 }
 
 #[contracttype]
@@ -599,6 +719,26 @@ pub struct GovernanceUpgradeProposedEvent {
 /// since `staged_at`.
 pub fn verify_staged_delay(staged_at: u32, current_ledger: u32) -> bool {
     current_ledger.saturating_sub(staged_at) >= MIN_LEDGER_DELAY
+}
+
+#[contracttype]
+pub enum BallotKey {
+    Proposal(Symbol),
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct VotingBallot {
+    pub target: Address,
+    pub replacement: Address,
+    pub proposer: Address,
+    pub proposed_at: u64,
+    pub ipfs_cid: Bytes,
+    pub votes: Map<Address, ()>,
+}
+
+pub fn get_ballot(env: &Env, proposal_id: Symbol) -> Option<VotingBallot> {
+    env.storage().temporary().get(&BallotKey::Proposal(proposal_id))
 }
 
 pub fn open_ballot(
@@ -636,21 +776,15 @@ fn _next_proposal_id(env: &Env) -> u64 {
         .storage()
         .instance()
         .get(&GOV_PROPOSAL_COUNTER_KEY)
-        .unwrap_or(0);
-    let next = current.checked_add(1).unwrap_or(1);
-    env.storage().instance().set(&GOV_PROPOSAL_COUNTER_KEY, &next);
+        .unwrap_or(0u64);
+    let next = current.saturating_add(1);
+    env.storage()
+        .instance()
+        .set(&GOV_PROPOSAL_COUNTER_KEY, &next);
     next
 }
 
-/// Load the currently active governance proposal, if any.
-fn _load_proposal(env: &Env) -> Result<GovernanceProposal, ContractError> {
-    env.storage()
-        .instance()
-        .get(&GOVERNANCE_PROPOSAL_KEY)
-        .ok_or(ContractError::NoActiveProposal)
-}
-
-/// Read a governance proposal by its monotonic identifier.
+/// Query the current governance proposal, if one exists.
 pub fn get_governance_proposal(
     env: &Env,
     proposal_id: u64,
@@ -662,31 +796,11 @@ pub fn get_governance_proposal(
     Ok(proposal)
 }
 
-/// Cast a vote on an open ballot.
-pub fn cast_vote(
-    env: &Env,
-    proposal_id: Symbol,
-    voter: Address,
-) -> Result<VotingBallot, ContractError> {
-    let key = BallotKey::Proposal(proposal_id);
-    let mut ballot: VotingBallot = env
-        .storage()
-        .temporary()
-        .get(&key)
-        .ok_or(ContractError::NoActiveProposal)?;
-    if ballot.votes.contains_key(voter.clone()) {
-        return Err(ContractError::AlreadyVoted);
-    }
-    ballot.votes.set(voter, ());
-    env.storage().temporary().set(&key, &ballot);
-    env.storage().temporary().extend_ttl(&key, BALLOT_TTL_THRESHOLD, BALLOT_TTL_LEDGERS);
-    crate::instance::bump_instance_ttl(env);
-    Ok(ballot)
-}
-
-/// Fetch an open ballot without mutating it.
-pub fn get_ballot(env: &Env, proposal_id: Symbol) -> Option<VotingBallot> {
-    env.storage().temporary().get(&BallotKey::Proposal(proposal_id))
+fn _load_proposal(env: &Env) -> Result<GovernanceProposal, ContractError> {
+    env.storage()
+        .instance()
+        .get(&GOVERNANCE_PROPOSAL_KEY)
+        .ok_or(ContractError::NoActiveProposal)
 }
 
 /// The cancellation quorum is the number of distinct signer votes required
@@ -706,11 +820,11 @@ fn _cancellation_threshold(env: &Env) -> u32 {
     _cancellation_threshold_for_signers(env, &crate::SIGNERS_KEY)
 }
 
-fn _cancellation_threshold_for_signers(env: &Env, signers_key: &Symbol) -> u32 {
+fn _cancellation_threshold_for_signers(env: &Env, key: &Symbol) -> u32 {
     let signers: Map<Address, ()> = env
         .storage()
         .instance()
-        .get(signers_key)
+        .get(key)
         .unwrap_or_else(|| Map::new(env));
     cancellation_threshold(signers.len())
 }
@@ -800,7 +914,7 @@ pub fn set_fee_tier(
         && new_fee_tier_bps != config.medium_fee_tier_bps
         && new_fee_tier_bps != config.high_fee_tier_bps
     {
-        return Err(ContractError::InvalidThreshold);
+        return Err(ContractError::InvalidArgument);
     }
     env.storage().instance().set(&FEE_TIER_KEY, &FeeTierConfig {
         fee_tier_bps: new_fee_tier_bps,
@@ -824,7 +938,7 @@ pub fn set_fee_split_config(
 ) -> Result<(), ContractError> {
     verify_upgrade_quorum(env, signers)?;
     if lp_share_bps.checked_add(treasury_share_bps) != Some(10000) {
-        return Err(ContractError::InvalidThreshold);
+        return Err(ContractError::InvalidArgument);
     }
     env.storage().instance().set(&FEE_SPLIT_KEY, &FeeSplitConfig {
         lp_share_bps,
@@ -975,6 +1089,98 @@ mod tests {
             result,
             Err(Ok(ContractError::ProposalAlreadyCancelledOrExecuted))
         );
+    }
+
+    // ── Emergency Guardian (Issue #927) ───────────────────────────────────
+
+    #[test]
+    fn test_designate_emergency_guardian_by_admin() {
+        let (env, client) = setup();
+        let admin = soroban_sdk::Address::generate(&env);
+        let treasury = soroban_sdk::Address::generate(&env);
+        client.initialize(&admin, &treasury);
+
+        let guardian = soroban_sdk::Address::generate(&env);
+        client.designate_emergency_guardian(&admin, &guardian);
+
+        assert_eq!(client.get_emergency_guardian(), Some(guardian));
+    }
+
+    #[test]
+    fn test_non_admin_cannot_designate_guardian() {
+        let (env, client) = setup();
+        let admin = soroban_sdk::Address::generate(&env);
+        let treasury = soroban_sdk::Address::generate(&env);
+        client.initialize(&admin, &treasury);
+
+        let outsider = soroban_sdk::Address::generate(&env);
+        let guardian = soroban_sdk::Address::generate(&env);
+        let result = client.try_designate_emergency_guardian(&outsider, &guardian);
+        assert_eq!(result, Err(Ok(ContractError::NotAdmin)));
+    }
+
+    #[test]
+    fn test_emergency_guardian_cancels_proposal_and_removes_hash() {
+        let (env, client) = setup();
+        let admin = soroban_sdk::Address::generate(&env);
+        let treasury = soroban_sdk::Address::generate(&env);
+        client.initialize(&admin, &treasury);
+
+        let guardian = soroban_sdk::Address::generate(&env);
+        client.designate_emergency_guardian(&admin, &guardian);
+
+        let wasm_hash = make_wasm_hash(&env);
+        let proposal_id = client.submit_governance_proposal(&admin, &wasm_hash);
+
+        // The guardian nullifies the proposal before the timelock expires.
+        client.emergency_cancel_governance_proposal(&guardian, &proposal_id);
+
+        // The proposal (and with it the unexecuted wasm_hash) is fully
+        // expunged from persistent state.
+        let fetch = client.get_gov_proposal_tl(&proposal_id);
+        assert_eq!(fetch, None);
+
+        // A new proposal can be submitted immediately.
+        let id2 = client.submit_governance_proposal(&admin, &wasm_hash);
+        assert_eq!(id2, 2);
+    }
+
+    #[test]
+    fn test_emergency_cancel_by_undesignated_address_fails() {
+        let (env, client) = setup();
+        let admin = soroban_sdk::Address::generate(&env);
+        let treasury = soroban_sdk::Address::generate(&env);
+        client.initialize(&admin, &treasury);
+
+        let guardian = soroban_sdk::Address::generate(&env);
+        client.designate_emergency_guardian(&admin, &guardian);
+
+        let wasm_hash = make_wasm_hash(&env);
+        let proposal_id = client.submit_governance_proposal(&admin, &wasm_hash);
+
+        // An address that is not the guardian is rejected.
+        let impostor = soroban_sdk::Address::generate(&env);
+        let result = client.try_emergency_cancel_governance_proposal(&impostor, &proposal_id);
+        assert_eq!(result, Err(Ok(ContractError::NotEmergencyGuardian)));
+
+        // The proposal is untouched.
+        let remaining = client.get_gov_proposal_tl(&proposal_id);
+        assert_eq!(remaining, Some(MIN_LEDGER_DELAY));
+    }
+
+    #[test]
+    fn test_emergency_cancel_no_guardian_designated_fails() {
+        let (env, client) = setup();
+        let admin = soroban_sdk::Address::generate(&env);
+        let treasury = soroban_sdk::Address::generate(&env);
+        client.initialize(&admin, &treasury);
+
+        let wasm_hash = make_wasm_hash(&env);
+        let proposal_id = client.submit_governance_proposal(&admin, &wasm_hash);
+
+        let stranger = soroban_sdk::Address::generate(&env);
+        let result = client.try_emergency_cancel_governance_proposal(&stranger, &proposal_id);
+        assert_eq!(result, Err(Ok(ContractError::NotEmergencyGuardian)));
     }
 
     #[test]

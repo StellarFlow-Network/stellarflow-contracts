@@ -30,6 +30,7 @@ impl RouterContract {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use soroban_sdk::testutils::Address as _;
 
     #[test]
     fn test_quote_exact_input_view() {

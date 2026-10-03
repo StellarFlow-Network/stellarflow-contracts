@@ -32,12 +32,14 @@ pub struct LiquidityLockContract;
 impl LiquidityLockContract {
     pub fn initialize(env: Env, admin: Address, token: Address) {
         if env.storage().instance().has(&DataKey::Admin) {
-            panic!("already initialized");
+            return Err(ContractError::AlreadyInitialized);
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Token, &token);
         // TotalDeposited starts at zero; MaxTvlCap is absent (no cap) by default.
-        env.storage().instance().set(&DataKey::TotalDeposited, &0_i128);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalDeposited, &0_i128);
     }
 
     /// Build a time-locked distribution pipeline that releases accrued validator
@@ -48,15 +50,15 @@ impl LiquidityLockContract {
         admin.require_auth();
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if admin != stored_admin {
-            panic!("not admin");
+            return Err(ContractError::NotAdmin);
         }
         if amount <= 0 {
-            panic!("amount must be positive");
+            return Err(ContractError::AmountMustBePositive);
         }
 
         let stream_key = DataKey::Stream(recipient.clone());
         if env.storage().instance().has(&stream_key) {
-            panic!("stream already exists");
+            return Err(ContractError::StreamAlreadyExists);
         }
 
         // ── TVL cap enforcement ───────────────────────────────────────────────
@@ -66,9 +68,7 @@ impl LiquidityLockContract {
             .get(&DataKey::TotalDeposited)
             .unwrap_or(0);
 
-        let post_deposit_tvl = current_tvl
-            .checked_add(amount)
-            .expect("TVL overflow");
+        let post_deposit_tvl = current_tvl.checked_add(amount).expect("TVL overflow");
 
         if let Some(cap) = env
             .storage()
@@ -76,7 +76,7 @@ impl LiquidityLockContract {
             .get::<DataKey, i128>(&DataKey::MaxTvlCap)
         {
             if post_deposit_tvl > cap {
-                panic!("deposit exceeds TVL cap");
+                return Err(ContractError::DepositExceedsTvlCap);
             }
         }
         // ─────────────────────────────────────────────────────────────────────
@@ -139,11 +139,11 @@ impl LiquidityLockContract {
             .storage()
             .instance()
             .get(&stream_key)
-            .unwrap_or_else(|| panic!("no stream found"));
+            .unwrap_or_else(|| return Err(ContractError::NoStreamFound));
 
         let claimable = Self::get_claimable(env.clone(), recipient.clone());
         if claimable <= 0 {
-            panic!("nothing to claim");
+            return Err(ContractError::NothingToClaim);
         }
 
         stream.claimed_amount += claimable;
@@ -167,10 +167,10 @@ impl LiquidityLockContract {
         admin.require_auth();
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if admin != stored_admin {
-            panic!("not admin");
+            return Err(ContractError::NotAdmin);
         }
         if new_cap < 0 {
-            panic!("cap must be non-negative");
+            return Err(ContractError::CapMustBeNonNegative);
         }
 
         if new_cap == 0 {

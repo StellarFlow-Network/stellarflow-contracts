@@ -19,11 +19,19 @@ members = [
     "contracts/ledger-time-helper",
     "contracts/liquidity-lock",
     "contracts/linear-vesting",
+    "contracts/lp-pool",
     "contracts/price-oracle",
     "contracts/remittance-escrow",
     "contracts/reward-splitter",
+    "contracts/shielded-remittance-escrow",
+    "contracts/strategy-migrator",
     "contracts/gas-tank",
+    "contracts/governance_executer",
     "contracts/vault-health-monitor",
+    "contracts/vault-liquidation-inspector",
+    "contracts/multisig-weight-guard",
+    "contracts/yield-unwind",
+    "contracts/multisig-admin-rotation",
 ]
 # tests/fuzz/fuzz/ is the cargo-fuzz coverage-guided target subcrate.
 # It depends on libfuzzer-sys, which only builds on nightly Rust, so it
@@ -53,7 +61,11 @@ libm = "0.2.16"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 soroban-sdk = { version = "=20.0.0", default-features = false, features = ["testutils"] }
 
+[features]
+testutils = ["soroban-sdk/testutils"]
+
 [dev-dependencies]
+stellarflow-contracts = { path = ".", features = ["testutils"] }
 soroban-sdk = { version = "=20.0.0", default-features = false, features = ["testutils"] }
 ed25519-dalek = "2.0.0"
 

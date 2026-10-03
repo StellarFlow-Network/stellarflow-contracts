@@ -1,0 +1,25 @@
+[package]
+name = "governance-early-execution"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Self-contained workspace root: the module is deliberately standalone so it
+# can be built and tested in place (`cargo test`) without touching the root
+# workspace manifest or its lockfile.
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { version = "=20.0.0", default-features = false }
+
+[dev-dependencies]
+soroban-sdk = { version = "=20.0.0", default-features = false, features = ["testutils"] }
+
+# Same local patch the root workspace applies: ethnum 1.5.0 does not build on
+# this toolchain, and soroban-sdk depends on it transitively.
+[patch.crates-io]
+ethnum = { path = "../../ethnum-patched" }

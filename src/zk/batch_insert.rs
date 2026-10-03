@@ -234,7 +234,8 @@ mod tests {
     use crate::zk::merkle::{
         get_current_root, get_total_deposits, insert_deposit, is_root_valid,
     };
-    use soroban_sdk::testutils::Ledger;
+    use soroban_sdk::testutils::{Events, Ledger};
+    use soroban_sdk::TryFromVal;
 
     fn make_commitment(env: &Env, byte: u8) -> BytesN<32> {
         BytesN::from_array(env, &[byte; 32])
@@ -253,7 +254,7 @@ mod tests {
     #[test]
     fn rejects_empty_batch() {
         let env = Env::default();
-        env.ledger().set_timestamp(1_000_000);
+        env.ledger().with_mut(|li| li.timestamp = 1_000_000);
 
         let empty: Vec<BytesN<32>> = Vec::new(&env);
         let result = batch_insert_deposits(&env, &empty);
@@ -263,7 +264,7 @@ mod tests {
     #[test]
     fn rejects_batch_over_max_size() {
         let env = Env::default();
-        env.ledger().set_timestamp(1_000_000);
+        env.ledger().with_mut(|li| li.timestamp = 1_000_000);
 
         let mut over_max: Vec<BytesN<32>> = Vec::new(&env);
         for i in 0..=(MAX_BATCH_SIZE) {
@@ -277,15 +278,16 @@ mod tests {
 
     #[test]
     fn single_element_batch_matches_single_insert() {
+
         // Inserting a single commitment via batch must produce the identical
         // root as inserting via the scalar `insert_deposit` path.
         let env_single = Env::default();
-        env_single.ledger().set_timestamp(1_000_000);
-        env_single.ledger().set_sequence_number(100);
+        env_single.ledger().with_mut(|li| li.timestamp = 1_000_000);
+        env_single.ledger().with_mut(|li| li.sequence_number = 100);
 
         let env_batch = Env::default();
-        env_batch.ledger().set_timestamp(1_000_000);
-        env_batch.ledger().set_sequence_number(100);
+        env_batch.ledger().with_mut(|li| li.timestamp = 1_000_000);
+        env_batch.ledger().with_mut(|li| li.sequence_number = 100);
 
         let commitment = make_commitment(&env_single, 0xAB);
 
@@ -299,7 +301,8 @@ mod tests {
         assert_eq!(result.count, 1);
         assert_eq!(result.new_root, root_single,
             "batch(1) root must equal scalar insert root");
-    }
+    
+}
 
     // ── Multi-leaf batch correctness ──────────────────────────────────────
 
@@ -309,12 +312,12 @@ mod tests {
         // the root produced by four consecutive scalar inserts of the same
         // commitments, because the incremental algorithm is deterministic.
         let env_seq = Env::default();
-        env_seq.ledger().set_timestamp(2_000_000);
-        env_seq.ledger().set_sequence_number(200);
+        env_seq.ledger().with_mut(|li| li.timestamp = 2_000_000);
+        env_seq.ledger().with_mut(|li| li.sequence_number = 200);
 
         let env_batch = Env::default();
-        env_batch.ledger().set_timestamp(2_000_000);
-        env_batch.ledger().set_sequence_number(200);
+        env_batch.ledger().with_mut(|li| li.timestamp = 2_000_000);
+        env_batch.ledger().with_mut(|li| li.sequence_number = 200);
 
         let values = [0x01u8, 0x02, 0x03, 0x04];
 
@@ -342,8 +345,9 @@ mod tests {
     #[test]
     fn batch_advances_leaf_counter_correctly() {
         let env = Env::default();
-        env.ledger().set_timestamp(1_000_000);
-        env.ledger().set_sequence_number(100);
+
+        env.ledger().with_mut(|li| li.timestamp = 1_000_000);
+        env.ledger().with_mut(|li| li.sequence_number = 100);
 
         assert_eq!(get_total_deposits(&env), 0);
 
@@ -360,13 +364,15 @@ mod tests {
         assert_eq!(get_total_deposits(&env), 5);
         assert_eq!(r2.first_leaf_index, 3);
         assert_eq!(r2.last_leaf_index, 4);
-    }
+    
+}
 
     #[test]
     fn batch_root_is_recorded_and_valid() {
         let env = Env::default();
-        env.ledger().set_timestamp(1_000_000);
-        env.ledger().set_sequence_number(100);
+
+        env.ledger().with_mut(|li| li.timestamp = 1_000_000);
+        env.ledger().with_mut(|li| li.sequence_number = 100);
 
         let batch = make_commitments(&env, &[0xAA, 0xBB, 0xCC]);
         let result = batch_insert_deposits(&env, &batch).unwrap();
@@ -379,7 +385,8 @@ mod tests {
             is_root_valid(&env, &result.new_root),
             "batch root should be valid immediately after insertion"
         );
-    }
+    
+}
 
     // ── Incremental batch chaining ────────────────────────────────────────
 
@@ -387,12 +394,12 @@ mod tests {
     fn multiple_batches_produce_same_root_as_scalar_reference() {
         // Insert 6 leaves via two batches of 3; compare against 6 scalar inserts.
         let env_ref = Env::default();
-        env_ref.ledger().set_timestamp(3_000_000);
-        env_ref.ledger().set_sequence_number(300);
+        env_ref.ledger().with_mut(|li| li.timestamp = 3_000_000);
+        env_ref.ledger().with_mut(|li| li.sequence_number = 300);
 
         let env_batched = Env::default();
-        env_batched.ledger().set_timestamp(3_000_000);
-        env_batched.ledger().set_sequence_number(300);
+        env_batched.ledger().with_mut(|li| li.timestamp = 3_000_000);
+        env_batched.ledger().with_mut(|li| li.sequence_number = 300);
 
         let all_values = [0x01u8, 0x02, 0x03, 0x04, 0x05, 0x06];
 
@@ -421,7 +428,9 @@ mod tests {
     #[test]
     fn batch_at_exact_max_size_is_accepted() {
         let env = Env::default();
-        env.ledger().set_timestamp(1_000_000);
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
+        env.ledger().with_mut(|li| li.timestamp = 1_000_000);
 
         // MAX_BATCH_SIZE = 64 leaves — should succeed
         let mut commitments: Vec<BytesN<32>> = Vec::new(&env);
@@ -434,13 +443,15 @@ mod tests {
         assert_eq!(r.count, MAX_BATCH_SIZE);
         assert_eq!(r.first_leaf_index, 0);
         assert_eq!(r.last_leaf_index, MAX_BATCH_SIZE - 1);
-    }
+    });
+}
 
     #[test]
     fn rejects_batch_exceeding_tree_capacity() {
         let env = Env::default();
-        env.ledger().set_timestamp(1_000_000);
-        env.ledger().set_sequence_number(100);
+
+        env.ledger().with_mut(|li| li.timestamp = 1_000_000);
+        env.ledger().with_mut(|li| li.sequence_number = 100);
 
         // Fill the tree to (max_leaves - 1) using scalar inserts so we can
         // test overflow with a 2-element batch (only 1 slot remains).
@@ -457,15 +468,18 @@ mod tests {
         let batch = make_commitments(&env, &[0x01, 0x02]);
         let result = batch_insert_deposits(&env, &batch);
         assert_eq!(result, Err(ContractError::MerkleTreeFull));
-    }
+    
+}
 
     // ── Event emission ────────────────────────────────────────────────────
 
     #[test]
     fn batch_emits_zk_batch_commit_event() {
         let env = Env::default();
-        env.ledger().set_timestamp(1_000_000);
-        env.ledger().set_sequence_number(100);
+let cid = env.register_contract(None, crate::TimeLockedUpgradeContract);
+env.as_contract(&cid, || {
+        env.ledger().with_mut(|li| li.timestamp = 1_000_000);
+        env.ledger().with_mut(|li| li.sequence_number = 100);
 
         let batch = make_commitments(&env, &[0xDE, 0xAD]);
         let result = batch_insert_deposits(&env, &batch).unwrap();
@@ -476,10 +490,14 @@ mod tests {
         // matches EV_ZK_BATCH_COMMIT.
         let events = env.events().all();
         let found = events.iter().any(|(_contract_id, topics, _data)| {
-            topics.get(0).map(|t| t == EV_ZK_BATCH_COMMIT.to_val()).unwrap_or(false)
+            topics
+                .get(0)
+                .and_then(|v| soroban_sdk::Symbol::try_from_val(&env, &v).ok())
+                == Some(EV_ZK_BATCH_COMMIT)
         });
         assert!(found, "EV_ZK_BATCH_COMMIT event must be emitted");
         // Sanity: root was captured in event payload
         assert_ne!(result.new_root, BytesN::from_array(&env, &[0u8; 32]));
-    }
+    });
+}
 }

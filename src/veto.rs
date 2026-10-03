@@ -7,9 +7,9 @@
 //! ## Design
 //!
 //! - Only the designated `SecurityCouncil` address may invoke `veto_proposal()`
-//! - Upon veto, the proposal instantly transitions to `Vetoed` state
+//! - Upon veto, the queued proposal is removed and its hash is rejected on re-submission
 //! - All execution payloads are invalidated; execution becomes impossible
-//! - Audit trail recorded with reason hash for compliance logging
+//! - Audit trail recorded with the supplied reason string
 //! - Event emission with `ProposalVetoed` for transparency
 //!
 //! ## Emergency Timelock Override (Issue #2)
@@ -24,7 +24,7 @@
 //! - Records full audit trail with signer votes and reason
 //! - Emits `EmergencyOverrideExecuted` event for transparency
 
-use soroban_sdk::{contracttype, symbol_short, Address, Env, String, Symbol, Map, Vec};
+use soroban_sdk::{contracttype, symbol_short, Address, BytesN, Env, String, Symbol, Map, Vec};
 use crate::{ContractError, ContractData, DATA_KEY};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -34,8 +34,11 @@ use crate::{ContractError, ContractData, DATA_KEY};
 /// The designated Security Council multi-sig address authorized to veto proposals.
 pub(crate) const SECURITY_COUNCIL_KEY: Symbol = symbol_short!("SECCNC");
 
-/// Maps proposal_id → veto record (timestamp, vetoing authority, reason hash)
+/// Prefix for veto records, keyed by proposal ID so later vetoes cannot erase them.
 pub(crate) const VETO_RECORD_KEY: Symbol = symbol_short!("VETOREC");
+
+/// Prefix for permanently rejected proposal WASM hashes.
+pub(crate) const VETOED_HASH_KEY: Symbol = symbol_short!("VETOHASH");
 
 /// Emergency signers authorized to trigger timelock override.
 pub(crate) const EMERGENCY_SIGNERS_KEY: Symbol = symbol_short!("EMERSGN");
@@ -61,7 +64,7 @@ pub const MAX_EMERGENCY_OVERRIDE_THRESHOLD_BPS: u32 = 10000;
 
 /// Audit trail record for a vetoed proposal.
 #[contracttype]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProposalVeto {
     /// The proposal ID that was vetoed.
     pub proposal_id: u64,
@@ -69,7 +72,7 @@ pub struct ProposalVeto {
     pub vetoed_by: Address,
     /// Ledger timestamp at veto time.
     pub vetoed_at: u64,
-    /// Hash of the audit reason string (for compliance logging).
+    /// Audit reason string.
     pub reason_hash: String,
 }
 
@@ -83,16 +86,6 @@ pub struct EmergencyOverrideConfig {
     pub threshold_bps: u32,
     /// Whether the emergency override mechanism is enabled.
     pub enabled: bool,
-}
-
-impl Default for EmergencyOverrideConfig {
-    fn default() -> Self {
-        Self {
-            emergency_signers: Vec::new(&Env::default()),
-            threshold_bps: DEFAULT_EMERGENCY_OVERRIDE_THRESHOLD_BPS,
-            enabled: true,
-        }
-    }
 }
 
 /// Vote record for emergency timelock override.
@@ -160,24 +153,24 @@ pub fn get_security_council(env: &Env) -> Option<Address> {
 // Veto Enforcement
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Veto an active proposal, instantly transitioning it to `Vetoed` state.
+/// Veto a queued proposal during its timelock and permanently reject its hash.
 ///
 /// Only the designated Security Council may invoke this function. Upon veto:
-/// 1. The proposal is marked as vetoed
-/// 2. Execution payload is invalidated
-/// 3. Audit trail is recorded with reason hash
+/// 1. The queued proposal is removed
+/// 2. Its hash is rejected on future submissions
+/// 3. Audit trail is recorded with the reason string
 /// 4. `ProposalVetoed` event is emitted
 ///
 /// # Arguments
 /// * `env` - The contract environment
 /// * `caller` - The address attempting the veto (must be Security Council)
 /// * `proposal_id` - The ID of the proposal to veto
-/// * `reason` - Audit reason string (logged as hash for transparency)
+/// * `reason` - Audit reason string
 ///
 /// # Errors
 /// - `NotSecurityCouncil` if caller is not the Security Council
 /// - `ProposalNotFound` if the proposal does not exist
-/// - `ProposalAlreadyVetoed` if the proposal is already in vetoed state
+/// - `ProposalAlreadyVetoed` if the proposal was already vetoed
 pub fn veto_proposal(
     env: &Env,
     caller: Address,
@@ -194,14 +187,22 @@ pub fn veto_proposal(
 
     caller.require_auth();
 
-    // Check if proposal exists and can be vetoed
-    // This will be integrated with the main governance module
-    // For now, we verify the contract is initialized
-    let _data: ContractData = env
+    if get_veto_record(env, proposal_id).is_some() {
+        return Err(ContractError::ProposalAlreadyVetoed);
+    }
+    let proposal: crate::governance::GovernanceProposal = env
         .storage()
         .instance()
-        .get(&DATA_KEY)
-        .ok_or(ContractError::NotInitialized)?;
+        .get(&crate::governance::GOVERNANCE_PROPOSAL_KEY)
+        .ok_or(ContractError::ProposalNotFound)?;
+    if proposal.proposal_id != proposal_id {
+        return Err(ContractError::ProposalNotFound);
+    }
+    if proposal.status != crate::governance::ProposalStatus::Pending
+        || crate::governance::verify_staged_delay(proposal.staged_at, env.ledger().sequence())
+    {
+        return Err(ContractError::ProposalNotVetoable);
+    }
 
     // Create veto record
     let veto_record = ProposalVeto {
@@ -212,7 +213,23 @@ pub fn veto_proposal(
     };
 
     // Store veto record
-    env.storage().instance().set(&VETO_RECORD_KEY, &veto_record);
+    env.storage().instance().set(&(VETO_RECORD_KEY, proposal_id), &veto_record);
+    env.storage().instance().set(&(VETOED_HASH_KEY, proposal.wasm_hash), &true);
+    // The upgrade executor uses a separate queue. Clear that entry only when
+    // it contains the vetoed WASM hash.
+    if let Some(pending) = env
+        .storage()
+        .instance()
+        .get::<_, crate::governance::StagedUpgrade>(&crate::PENDING_UPGRADE_KEY)
+    {
+        if pending.new_wasm_hash == proposal.wasm_hash {
+            env.storage().instance().remove(&crate::PENDING_UPGRADE_KEY);
+        }
+    }
+    // Removing the queued proposal also prevents execution through the
+    // ordinary timelock path and the emergency override path.
+    env.storage().instance().remove(&crate::governance::GOVERNANCE_PROPOSAL_KEY);
+    env.storage().instance().remove(&(EMERGENCY_OVERRIDE_VOTES_KEY, proposal_id));
     crate::kernel::instance::bump_instance_ttl(env);
 
     // Emit veto event
@@ -223,10 +240,21 @@ pub fn veto_proposal(
 
 /// Retrieve the veto record for a proposal, if it has been vetoed.
 pub fn get_veto_record(env: &Env, proposal_id: u64) -> Option<ProposalVeto> {
-    let record: Option<ProposalVeto> = env.storage().instance().get(&VETO_RECORD_KEY);
-    
-    // Verify the veto record matches the requested proposal_id
-    record.filter(|r| r.proposal_id == proposal_id)
+    env.storage()
+        .instance()
+        .get(&(VETO_RECORD_KEY, proposal_id))
+        .or_else(|| {
+            // Preserve access to the single record written by earlier versions.
+            env.storage()
+                .instance()
+                .get::<_, ProposalVeto>(&VETO_RECORD_KEY)
+                .filter(|record| record.proposal_id == proposal_id)
+        })
+}
+
+/// A vetoed payload cannot be queued again under another proposal ID.
+pub fn is_hash_vetoed(env: &Env, wasm_hash: &BytesN<32>) -> bool {
+    env.storage().instance().has(&(VETOED_HASH_KEY, wasm_hash.clone()))
 }
 
 /// Check if a proposal has been vetoed.
@@ -244,7 +272,7 @@ fn load_emergency_override_config(env: &Env) -> EmergencyOverrideConfig {
         .instance()
         .get(&EMERGENCY_OVERRIDE_CONFIG_KEY)
         .unwrap_or_else(|| EmergencyOverrideConfig {
-            emergency_signers: Vec::new(&Env::default()),
+            emergency_signers: Vec::new(env),
             threshold_bps: DEFAULT_EMERGENCY_OVERRIDE_THRESHOLD_BPS,
             enabled: true,
         })
@@ -559,7 +587,89 @@ pub fn get_emergency_override_votes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::testutils::{Address as _, Events, Ledger};
+    use soroban_sdk::{IntoVal, TryFromVal};
+
+    fn queue_test_proposal(env: &Env, id: u64, hash: BytesN<32>) {
+        let proposal = crate::governance::GovernanceProposal {
+            proposal_id: id,
+            wasm_hash: hash,
+            proposer: Address::generate(env),
+            staged_at: env.ledger().sequence(),
+            status: crate::governance::ProposalStatus::Pending,
+            cancellation_votes: Map::new(env),
+        };
+        env.storage().instance().set(&crate::governance::GOVERNANCE_PROPOSAL_KEY, &proposal);
+    }
+
+    #[test]
+    fn veto_removes_queued_hash_and_keeps_audit_records() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let council = Address::generate(&env);
+        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&SECURITY_COUNCIL_KEY, &council);
+            let first_hash = BytesN::from_array(&env, &[1; 32]);
+            let second_hash = BytesN::from_array(&env, &[2; 32]);
+            let pending = crate::governance::StagedUpgrade {
+                new_wasm_hash: first_hash.clone(),
+                proposer: Address::generate(&env),
+                staged_at: env.ledger().timestamp(),
+                execute_at: env.ledger().timestamp() + crate::UPGRADE_DELAY_SECONDS,
+            };
+            env.storage().instance().set(&crate::PENDING_UPGRADE_KEY, &pending);
+            queue_test_proposal(&env, 1, first_hash.clone());
+            let reason = String::from_slice(&env, "unsafe upgrade");
+            assert_eq!(veto_proposal(&env, council.clone(), 1, reason.clone()), Ok(()));
+            assert!(!env.storage().instance().has(&crate::governance::GOVERNANCE_PROPOSAL_KEY));
+            assert!(!env.storage().instance().has(&crate::PENDING_UPGRADE_KEY));
+            assert!(is_hash_vetoed(&env, &first_hash));
+            assert!(!crate::governance::is_proposal_executable(&env, 1));
+            assert_eq!(
+                crate::governance::submit_governance_proposal(&env, Address::generate(&env), first_hash),
+                Err(ContractError::ProposalAlreadyVetoed),
+            );
+            assert_eq!(get_veto_record(&env, 1).unwrap().reason_hash, reason);
+            assert_eq!(veto_proposal(&env, council.clone(), 1, reason.clone()), Err(ContractError::ProposalAlreadyVetoed));
+
+            queue_test_proposal(&env, 2, second_hash.clone());
+            env.storage().instance().set(&crate::PENDING_UPGRADE_KEY, &pending);
+            assert_eq!(veto_proposal(&env, council.clone(), 2, reason), Ok(()));
+            assert!(env.storage().instance().has(&crate::PENDING_UPGRADE_KEY));
+            assert!(get_veto_record(&env, 1).is_some());
+            assert!(get_veto_record(&env, 2).is_some());
+            assert!(is_hash_vetoed(&env, &second_hash));
+            let events = env.events().all();
+            assert_eq!(events.len(), 2);
+            let (_, topics, payload) = events.get(0).unwrap();
+            assert_eq!(topics.get(0), Some(Symbol::new(&env, "ProposalVetoed").into_val(&env)));
+            let audit = crate::events::ProposalVetoedEvent::try_from_val(&env, &payload).unwrap();
+            assert_eq!(audit.proposal_id, 1);
+            assert_eq!(audit.reason, String::from_slice(&env, "unsafe upgrade"));
+        });
+    }
+
+    #[test]
+    fn veto_only_accepts_queued_proposals_within_timelock() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let council = Address::generate(&env);
+        let stranger = Address::generate(&env);
+        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
+        env.as_contract(&contract_id, || {
+            env.storage().instance().set(&SECURITY_COUNCIL_KEY, &council);
+            let hash = BytesN::from_array(&env, &[3; 32]);
+            queue_test_proposal(&env, 3, hash.clone());
+            let reason = String::from_slice(&env, "review");
+            assert_eq!(veto_proposal(&env, stranger, 3, reason.clone()), Err(ContractError::NotSecurityCouncil));
+            assert_eq!(veto_proposal(&env, council.clone(), 4, reason.clone()), Err(ContractError::ProposalNotFound));
+            env.ledger().with_mut(|ledger| ledger.sequence += crate::governance::MIN_LEDGER_DELAY);
+            assert_eq!(veto_proposal(&env, council, 3, reason), Err(ContractError::ProposalNotVetoable));
+            assert!(env.storage().instance().has(&crate::governance::GOVERNANCE_PROPOSAL_KEY));
+            assert!(!is_hash_vetoed(&env, &hash));
+        });
+    }
 
     #[test]
     fn test_set_and_get_security_council() {
@@ -639,7 +749,7 @@ mod tests {
                 vetoed_at: 1000u64,
                 reason_hash: String::from_slice(&env, "test"),
             };
-            env.storage().instance().set(&VETO_RECORD_KEY, &veto);
+            env.storage().instance().set(&(VETO_RECORD_KEY, proposal_id), &veto);
 
             // Verify retrieval
             assert_eq!(get_veto_record(&env, proposal_id), Some(veto.clone()));

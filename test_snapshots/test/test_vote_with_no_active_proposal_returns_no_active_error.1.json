@@ -99,6 +99,14 @@
                             },
                             {
                               "key": {
+                                "symbol": "max_fee_ceiling"
+                              },
+                              "val": {
+                                "u64": 10000
+                              }
+                            },
+                            {
+                              "key": {
                                 "symbol": "value"
                               },
                               "val": {
@@ -125,7 +133,7 @@
                       },
                       {
                         "key": {
-                          "symbol": "TREASUR"
+                          "symbol": "TREASURY"
                         },
                         "val": {
                           "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
@@ -138,7 +146,7 @@
             },
             "ext": "v0"
           },
-          6000
+          100000
         ]
       ],
       [
@@ -225,7 +233,7 @@
             },
             "ext": "v0"
           },
-          6000
+          100000
         ]
       ]
     ]
@@ -364,6 +372,9 @@
                 },
                 {
                   "u64": 18446744073709551615
+                },
+                {
+                  "u64": 0
                 }
               ]
             }
@@ -389,7 +400,7 @@
             ],
             "data": {
               "error": {
-                "contract": 31
+                "contract": 37
               }
             }
           }
@@ -410,7 +421,7 @@
               },
               {
                 "error": {
-                  "contract": 31
+                  "contract": 37
                 }
               }
             ],
@@ -435,7 +446,7 @@
               },
               {
                 "error": {
-                  "contract": 31
+                  "contract": 37
                 }
               }
             ],
@@ -454,6 +465,9 @@
                     },
                     {
                       "u64": 18446744073709551615
+                    },
+                    {
+                      "u64": 0
                     }
                   ]
                 }

@@ -27,7 +27,10 @@ fn within_threshold(price: i128, baseline: i128) -> bool {
     }
     let delta = (price - baseline).unsigned_abs() as i128;
     // deviation_bps = delta * 10_000 / baseline
-    match delta.checked_mul(10_000).and_then(|n| n.checked_div(baseline)) {
+    match delta
+        .checked_mul(10_000)
+        .and_then(|n| n.checked_div(baseline))
+    {
         Some(deviation_bps) => deviation_bps <= DEVIATION_THRESHOLD_BPS,
         None => false, // overflow means wildly out of range — reject
     }
@@ -42,11 +45,11 @@ fn within_threshold(price: i128, baseline: i128) -> bool {
 /// If the TWAP buffer is empty (no baseline established yet), all entries are
 /// kept so the oracle can bootstrap normally.
 pub fn filter_feeds_by_deviation(
-    twap_entries: &soroban_sdk::Vec<(u64, i128)>,
+    twap_ema: Option<i128>,
     feeds: soroban_sdk::Vec<crate::types::PriceBufferEntry>,
     env: &soroban_sdk::Env,
 ) -> soroban_sdk::Vec<crate::types::PriceBufferEntry> {
-    let baseline = match baseline_average(twap_entries) {
+    let baseline = match twap_ema {
         Some(b) => b,
         None => return feeds, // no history — pass all through
     };
@@ -64,15 +67,15 @@ pub fn filter_feeds_by_deviation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, Address, Env};
     use crate::types::PriceBufferEntry;
+    use soroban_sdk::{testutils::Address as _, Address, Env};
 
-    fn make_twap(env: &Env, prices: &[i128]) -> soroban_sdk::Vec<(u64, i128)> {
-        let mut v = soroban_sdk::Vec::new(env);
-        for (i, &p) in prices.iter().enumerate() {
-            v.push_back((i as u64, p));
+    fn make_twap(env: &Env, prices: &[i128]) -> Option<i128> {
+        if prices.is_empty() {
+            return None;
         }
-        v
+        let sum: i128 = prices.iter().sum();
+        Some(sum / (prices.len() as i128))
     }
 
     fn make_entry(env: &Env, price: i128) -> PriceBufferEntry {
@@ -90,7 +93,7 @@ mod tests {
         let mut feeds = soroban_sdk::Vec::new(&env);
         feeds.push_back(make_entry(&env, 999_999_999));
         feeds.push_back(make_entry(&env, 1));
-        let result = filter_feeds_by_deviation(&twap, feeds.clone(), &env);
+        let result = filter_feeds_by_deviation(twap, feeds.clone(), &env);
         assert_eq!(result.len(), 2);
     }
 
@@ -104,7 +107,7 @@ mod tests {
         feeds.push_back(make_entry(&env, 1_150_000_000));
         // exactly -15% => 850_000_000 — should be accepted
         feeds.push_back(make_entry(&env, 850_000_000));
-        let result = filter_feeds_by_deviation(&twap, feeds, &env);
+        let result = filter_feeds_by_deviation(twap, feeds, &env);
         assert_eq!(result.len(), 2);
     }
 
@@ -118,7 +121,7 @@ mod tests {
         feeds.push_back(make_entry(&env, 1_160_000_000));
         // -16% — should be dropped
         feeds.push_back(make_entry(&env, 840_000_000));
-        let result = filter_feeds_by_deviation(&twap, feeds, &env);
+        let result = filter_feeds_by_deviation(twap, feeds, &env);
         assert_eq!(result.len(), 0);
     }
 
@@ -131,7 +134,7 @@ mod tests {
         feeds.push_back(make_entry(&env, 1_050_000_000)); // +5% — keep
         feeds.push_back(make_entry(&env, 1_200_000_000)); // +20% — drop
         feeds.push_back(make_entry(&env, 950_000_000));   // -5% — keep
-        let result = filter_feeds_by_deviation(&twap, feeds, &env);
+        let result = filter_feeds_by_deviation(twap, feeds, &env);
         assert_eq!(result.len(), 2);
     }
 }
@@ -267,7 +270,10 @@ pub fn get_last_validation_timestamp(env: &Env, asset: &Symbol) -> Option<u64> {
 ///
 /// Returns `Err(ContractError::MinimumQuorumNotMet)` if fewer than 3 unique
 /// node operators have submitted data points during the current cycle window.
-pub fn validate_consensus_quorum(env: &Env, buffer: &crate::types::PriceBuffer) -> Result<(), ContractError> {
+pub fn validate_consensus_quorum(
+    env: &Env,
+    buffer: &crate::types::PriceBuffer,
+) -> Result<(), ContractError> {
     let mut unique_sources = soroban_sdk::Map::new(env);
 
     for entry in buffer.entries.iter() {

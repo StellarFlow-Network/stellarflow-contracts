@@ -1,37 +1,10 @@
 use soroban_sdk::{Address, Env, Map, Symbol, Vec};
 use crate::{ContractData, ContractError, DATA_KEY, VALIDATOR_STATE_KEY};
-use crate::storage::SignerKey;
+use crate::storage::{get_admin_signers, get_admin_threshold, set_admin_signers, set_admin_threshold, SignerKey};
 
 pub mod dispatcher;
 
 const ACTIVE: u32 = 1 << 1;
-
-const ADMIN_SIGNERS_KEY: Symbol = soroban_sdk::symbol_short!("ADMSIGS");
-const ADMIN_THRESHOLD_KEY: Symbol = soroban_sdk::symbol_short!("ADMTHLD");
-
-/// Read the registered multi-sig admin signer list. Empty when never rotated.
-fn get_admin_signers(env: &Env) -> Vec<Address> {
-    env.storage()
-        .instance()
-        .get(&ADMIN_SIGNERS_KEY)
-        .unwrap_or_else(|| Vec::new(env))
-}
-
-/// Read the multi-sig approval threshold (defaults to 1 signature).
-fn get_admin_threshold(env: &Env) -> u32 {
-    env.storage()
-        .instance()
-        .get(&ADMIN_THRESHOLD_KEY)
-        .unwrap_or(1)
-}
-
-fn set_admin_signers(env: &Env, signers: Vec<Address>) {
-    env.storage().instance().set(&ADMIN_SIGNERS_KEY, &signers);
-}
-
-fn set_admin_threshold(env: &Env, threshold: u32) {
-    env.storage().instance().set(&ADMIN_THRESHOLD_KEY, &threshold);
-}
 
 fn get_validator_state(env: &Env, addr: &Address) -> u32 {
     let states: Map<Address, u32> = env
@@ -172,7 +145,7 @@ pub fn rotate_admin_keys(
     set_admin_threshold(env, new_threshold);
 
     env.events().publish(
-        (soroban_sdk::symbol_short!("adm_rot"),),
+        (Symbol::new(env, "AdminKeysRotated"),),
         (unique_signers, new_threshold),
     );
 

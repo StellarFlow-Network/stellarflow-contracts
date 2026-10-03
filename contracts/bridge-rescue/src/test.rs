@@ -1,4 +1,4 @@
-#![cfg(test)]
+
 
 use super::*;
 use soroban_sdk::{
@@ -8,6 +8,7 @@ use soroban_sdk::{
 /// Test fixture: deploys the contract, a mock SAC token, and a 2-of-3 admin
 /// committee alongside a 2-of-3 validator set.
 ///
+#[allow(dead_code)]
 /// soroban-sdk 20.x splits the token interface across two clients: the
 /// admin-only `StellarAssetClient` (mint, etc.) used to fund test accounts,
 /// and the regular `token::Client` (balance, transfer) used to make
@@ -15,12 +16,14 @@ use soroban_sdk::{
 struct Fixture {
     env: Env,
     client: BridgeRescueClient<'static>,
+    #[allow(dead_code)]
     token_balance: token::Client<'static>,
     admins: Vec<Address>,
     validators: Vec<Address>,
     sender: Address,
 }
 
+#[allow(dead_code)]
 fn setup() -> Fixture {
     let env = Env::default();
     env.mock_all_auths();
@@ -58,12 +61,14 @@ fn setup() -> Fixture {
     }
 }
 
+#[allow(dead_code)]
 fn lock(fx: &Fixture, amount: i128) -> u64 {
     let dest_ref = String::from_str(&fx.env, "eth:0xdeadbeef");
     fx.client.lock_tokens(&fx.sender, &amount, &dest_ref)
 }
 
 #[test]
+#[allow(dead_code)]
 fn test_initialize_rejects_bad_thresholds() {
     let env = Env::default();
     env.mock_all_auths();
@@ -88,6 +93,7 @@ fn test_initialize_rejects_bad_thresholds() {
 }
 
 #[test]
+#[allow(dead_code)]
 fn test_initialize_rejects_duplicate_addresses() {
     let env = Env::default();
     env.mock_all_auths();
@@ -104,6 +110,7 @@ fn test_initialize_rejects_duplicate_addresses() {
 }
 
 #[test]
+#[allow(dead_code)]
 fn test_lock_tokens_transfers_in_and_creates_lock() {
     let fx = setup();
     let lock_id = lock(&fx, 500);
@@ -122,6 +129,7 @@ fn test_lock_tokens_transfers_in_and_creates_lock() {
 }
 
 #[test]
+#[allow(dead_code)]
 fn test_lock_tokens_rejects_zero_amount() {
     let fx = setup();
     let dest_ref = String::from_str(&fx.env, "eth:0xdeadbeef");
@@ -130,6 +138,7 @@ fn test_lock_tokens_rejects_zero_amount() {
 }
 
 #[test]
+#[allow(dead_code)]
 fn test_rescue_blocked_when_validator_consensus_not_reached() {
     let fx = setup();
     let lock_id = lock(&fx, 500);
@@ -154,6 +163,7 @@ fn test_rescue_blocked_when_validator_consensus_not_reached() {
 }
 
 #[test]
+#[allow(dead_code)]
 fn test_rescue_blocked_when_admin_threshold_not_reached() {
     let fx = setup();
     let lock_id = lock(&fx, 500);
@@ -181,6 +191,7 @@ fn test_rescue_blocked_when_admin_threshold_not_reached() {
 }
 
 #[test]
+#[allow(dead_code)]
 fn test_rescue_succeeds_and_emits_event_once_both_thresholds_met() {
     let fx = setup();
     let lock_id = lock(&fx, 777);
@@ -211,6 +222,7 @@ fn test_rescue_succeeds_and_emits_event_once_both_thresholds_met() {
 }
 
 #[test]
+#[allow(dead_code)]
 fn test_duplicate_validator_vote_does_not_double_count() {
     let fx = setup();
     let lock_id = lock(&fx, 500);
@@ -226,6 +238,7 @@ fn test_duplicate_validator_vote_does_not_double_count() {
 }
 
 #[test]
+#[allow(dead_code)]
 fn test_duplicate_admin_approval_does_not_double_count() {
     let fx = setup();
     let lock_id = lock(&fx, 500);
@@ -240,6 +253,7 @@ fn test_duplicate_admin_approval_does_not_double_count() {
 }
 
 #[test]
+#[allow(dead_code)]
 fn test_second_approve_after_rescue_is_rejected_and_does_not_transfer_again() {
     let fx = setup();
     let lock_id = lock(&fx, 900);
@@ -282,6 +296,7 @@ fn test_second_approve_after_rescue_is_rejected_and_does_not_transfer_again() {
 }
 
 #[test]
+#[allow(dead_code)]
 fn test_non_validator_cannot_vote() {
     let fx = setup();
     let lock_id = lock(&fx, 500);
@@ -293,6 +308,7 @@ fn test_non_validator_cannot_vote() {
 }
 
 #[test]
+#[allow(dead_code)]
 fn test_non_admin_cannot_approve() {
     let fx = setup();
     let lock_id = lock(&fx, 500);
@@ -303,6 +319,7 @@ fn test_non_admin_cannot_approve() {
 }
 
 #[test]
+#[allow(dead_code)]
 fn test_approve_rescue_on_unknown_lock_fails() {
     let fx = setup();
     let res = fx.client.try_approve_rescue(&fx.admins.get(0).unwrap(), &999);
@@ -310,6 +327,7 @@ fn test_approve_rescue_on_unknown_lock_fails() {
 }
 
 #[test]
+#[allow(dead_code)]
 fn test_getters_reflect_vote_state() {
     let fx = setup();
     let lock_id = lock(&fx, 500);

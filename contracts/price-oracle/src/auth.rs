@@ -102,8 +102,8 @@ pub fn _is_authorized(env: &Env, caller: &Address) -> bool {
     // Stack-local fixed buffer — avoids any BTreeMap / HashMap heap allocation.
     const CAP: usize = 16;
     let mut buf: [Option<Address>; CAP] = [
-        None, None, None, None, None, None, None, None,
-        None, None, None, None, None, None, None, None,
+        None, None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+        None,
     ];
     let len = (admins.len() as usize).min(CAP);
     for i in 0..len {
@@ -118,11 +118,7 @@ pub fn _is_authorized(env: &Env, caller: &Address) -> bool {
     false
 }
 
-pub fn _require_auth_for_args<T: soroban_sdk::IntoVal>(
-    env: &Env,
-    caller: &Address,
-    args: &[T],
-) {
+pub fn _require_auth_for_args<T: soroban_sdk::IntoVal>(env: &Env, caller: &Address, args: &[T]) {
     caller.require_auth_for_args(args);
     let _ = env;
 }
@@ -258,9 +254,13 @@ pub fn _is_revoked(env: &Env, addr: &Address) -> bool {
 
 pub fn _set_revoked(env: &Env, addr: &Address, revoked: bool) {
     if revoked {
-        env.storage().instance().set(&DataKey::Revoked(addr.clone()), &true);
+        env.storage()
+            .instance()
+            .set(&DataKey::Revoked(addr.clone()), &true);
     } else {
-        env.storage().instance().remove(&DataKey::Revoked(addr.clone()));
+        env.storage()
+            .instance()
+            .remove(&DataKey::Revoked(addr.clone()));
     }
 }
 
@@ -529,7 +529,7 @@ pub fn _set_halted(env: &Env, status: bool) {
 /// Panic if the emergency halt flag is active.
 pub fn _require_not_halted(env: &Env) {
     if _is_halted(env) {
-        panic!("Contract is emergency halted: rate reads are disabled");
+        return Err(ContractError::ContractIsEmergencyHaltedRateReadsAreDisabled);
     }
 }
 

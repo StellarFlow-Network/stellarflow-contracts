@@ -1,128 +1,92 @@
-//! Profiles oracle read entrypoints used before cross-currency swap execution.
+//! Profiles dynamic-router swap entrypoints (quote + execute).
 //!
-//! These tests report Soroban CPU instruction and memory usage for the oracle
-//! operations that make up the current swap price-read path. They also retain
-//! the existing safe-network-limit assertions for individual and repeated
-//! reads.
+//! Retains the safe-network-limit assertions for individual and repeated
+//! swap-path reads/writes. The 30%-of-block-budget acceptance check and the
+//! broader entrypoint coverage live in `budget_allocation_suite.rs`.
 
-use price_oracle::{ContractError as OracleError, PriceOracle, PriceOracleClient};
-use soroban_sdk::{symbol_short, vec, Env, Symbol};
-use stellarflow_benchmarks::profile::{
-    assert_swap_path_within_limits, measure_entrypoint, EntrypointUsage,
-};
+use stellarflow_benchmarks::limits::safe_cpu_instruction_ceiling;
+use stellarflow_benchmarks::profile::{measure_entrypoint, EntrypointUsage};
+use stellarflow_contracts::{router::dynamic::PoolEdge, TimeLockedUpgradeContractClient};
+use soroban_sdk::{testutils::Address as _, Address, Env};
+use std::vec::Vec;
 
-const PRICE_DECIMALS: u32 = 9;
-const PRICE_TTL_LEDGERS: u64 = 3_600;
+fn register_pools(env: &Env, client: &TimeLockedUpgradeContractClient, admin: &Address) {
+    let edge = |a: u32, b: u32| PoolEdge {
+        pool: Address::generate(env),
+        asset_in: a,
+        asset_out: b,
+        reserve_in: 1_000_000_000,
+        reserve_out: 1_000_000_000,
+        fee_bps: 30,
+    };
+    client.register_amm_pool(&admin, &edge(1, 2));
+    client.register_amm_pool(&admin, &edge(2, 3));
+}
 
-fn setup_oracle_with_swap_pair(env: &Env) -> (PriceOracleClient<'static>, Symbol, Symbol) {
+fn setup() -> (Env, TimeLockedUpgradeContractClient<'static>, Address) {
+    let env = Env::default();
     env.mock_all_auths();
-    let contract_id = env.register_contract(None, PriceOracle);
-    let client = PriceOracleClient::new(env, &contract_id);
-    let source = symbol_short!("NGN");
-    let destination = symbol_short!("GHS");
-    client.set_price(
-        &source,
-        &1_000_000_000_i128,
-        &PRICE_DECIMALS,
-        &PRICE_TTL_LEDGERS,
-    );
-    client.set_price(
-        &destination,
-        &50_000_000_i128,
-        &PRICE_DECIMALS,
-        &PRICE_TTL_LEDGERS,
-    );
-    (client, source, destination)
+    let contract_id = env.register_contract(None, stellarflow_contracts::TimeLockedUpgradeContract);
+    let client = TimeLockedUpgradeContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.initialize(&admin, &Address::generate(&env));
+    register_pools(&env, &client, &admin);
+    (env, client, admin)
 }
 
 #[test]
-fn swap_oracle_entrypoints_log_resources_and_stay_within_budget() {
-    let env = Env::default();
+fn swap_quote_and_execute_entrypoints_log_resources_and_stay_within_budget() {
+    let (env, client, admin) = setup();
     env.budget().reset_default();
-
-    let cpu_path_start = env.budget().cpu_instruction_cost();
-    let mem_path_start = env.budget().memory_bytes_cost();
-
-    let (client, source, destination) = setup_oracle_with_swap_pair(&env);
 
     let mut usages: Vec<EntrypointUsage> = Vec::new();
 
-    usages.push(measure_entrypoint(&env, "get_price:source", || {
-        let price = client
-            .try_get_price(&source, &true)
-            .expect("get_price should succeed")
-            .expect("price data should be present");
-        assert!(price.price > 0);
+    usages.push(measure_entrypoint(&env, "swap:quote_best_route", || {
+        let quote = client
+            .quote_best_swap_route(&1u32, &3u32, &10_000u64, &2u32);
+        assert_eq!(quote.hops.len(), 2);
     }));
 
-    usages.push(measure_entrypoint(&env, "get_price:destination", || {
-        let price = client
-            .try_get_price(&destination, &true)
-            .expect("get_price should succeed")
-            .expect("price data should be present");
-        assert!(price.price > 0);
+    usages.push(measure_entrypoint(&env, "swap:execute_dynamic_swap", || {
+        let trader = Address::generate(&env);
+        client
+            .execute_dynamic_swap(&trader, &1u32, &3u32, &10_000u64, &1u64, &500u32);
     }));
 
-    usages.push(measure_entrypoint(&env, "get_prices:batch", || {
-        let assets = vec![&env, source.clone(), destination.clone()];
-        let batch = client.get_prices(&assets);
-        assert_eq!(batch.len(), 2);
-    }));
-
-    usages.push(measure_entrypoint(
-        &env,
-        "get_price_with_status:source",
-        || {
-            let with_status = client.get_price_with_status(&source);
-            assert!(with_status.data.price > 0);
-        },
-    ));
-
-    let total_cpu = env
-        .budget()
-        .cpu_instruction_cost()
-        .saturating_sub(cpu_path_start);
-    let total_mem = env
-        .budget()
-        .memory_bytes_cost()
-        .saturating_sub(mem_path_start);
-    assert_swap_path_within_limits(&usages, total_cpu, total_mem);
+    let _ = admin;
+    for usage in usages.iter() {
+        usage.assert_within_safe_network_limits();
+    }
 }
 
 #[test]
-fn swap_price_reads_do_not_exhaust_default_cpu_meter() {
-    let env = Env::default();
+fn repeated_swap_quotes_do_not_exhaust_default_cpu_meter() {
+    let (env, client, _admin) = setup();
     env.budget().reset_default();
 
-    let (client, source, _) = setup_oracle_with_swap_pair(&env);
-
     for _ in 0..8 {
-        let result = client.try_get_price(&source, &true);
-        assert!(matches!(result, Ok(Ok(_))));
+        let _ = client
+            .quote_best_swap_route(&1u32, &3u32, &1_000u64, &2u32);
     }
 
     let cpu_used = env.budget().cpu_instruction_cost();
-    eprintln!("[resource-profile] repeated_get_price cpu_instructions={cpu_used}");
+    eprintln!("[resource-profile] repeated_swap_quotes cpu_instructions={cpu_used}");
     assert!(
-        cpu_used < stellarflow_benchmarks::limits::safe_cpu_instruction_ceiling(),
-        "repeated swap price reads exhausted the safe CPU budget"
+        cpu_used < safe_cpu_instruction_ceiling(),
+        "repeated swap quotes exhausted the safe CPU budget"
     );
 }
 
 #[test]
-fn missing_swap_asset_fails_without_budget_spike() {
-    let env = Env::default();
-    env.budget().reset_default();
+fn missing_route_fails_without_budget_spike() {
+    let (env, client, _admin) = setup();
 
-    let (client, _, _) = setup_oracle_with_swap_pair(&env);
-    let missing = symbol_short!("ZAR");
-
-    let usage = measure_entrypoint(&env, "get_price:missing_asset", || {
-        let err = client
-            .try_get_price(&missing, &true)
-            .expect("host should return a contract result")
-            .expect_err("missing asset should error");
-        assert_eq!(err, OracleError::AssetNotFound);
+    let usage = measure_entrypoint(&env, "swap:quote_missing_pair", || {
+        let res = client.try_quote_best_swap_route(&1u32, &99u32, &10_000u64, &2u32);
+        match res {
+            Err(Ok(stellarflow_contracts::ContractError::PoolNotFound)) => {}
+            other => panic!("missing pair should fail with PoolNotFound, got {:?}", other),
+        }
     });
 
     usage.assert_within_safe_network_limits();

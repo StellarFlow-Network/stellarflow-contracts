@@ -34,7 +34,7 @@ pub fn extend_asset_info_ttl(env: &Env, asset: &Symbol) {
 
 /// Extend the TTL of a TWAP buffer entry if below threshold.
 pub fn extend_twap_ttl(env: &Env, asset: &Symbol) {
-    env.storage().persistent().extend_ttl(
+    env.storage().temporary().extend_ttl(
         &DataKey::Twap(asset.clone()),
         PERSISTENT_THRESHOLD,
         PERSISTENT_BUMP_AMOUNT,

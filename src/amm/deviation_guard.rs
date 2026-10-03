@@ -253,6 +253,7 @@ mod tests {
             let data = ContractData {
                 admin: admin.clone(),
                 value: 0,
+                max_fee_ceiling: 0,
             };
             env.storage().instance().set(&crate::DATA_KEY, &data);
         });
@@ -268,7 +269,7 @@ mod tests {
             base_reserve: 10,
             min_temp_entry_ttl: 0,
             min_persistent_entry_ttl: 0,
-            max_entry_ttl: u32::MAX,
+            max_entry_ttl: 6_312_000,
         });
     }
 

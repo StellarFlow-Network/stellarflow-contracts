@@ -4,8 +4,7 @@ extern crate alloc;
 use alloc::format;
 
 use soroban_sdk::{
-    contract, contractclient, contracterror, contractimpl, token, Address, Env,
-    String, Symbol,
+    contract, contractclient, contracterror, contractimpl, token, Address, Env, String, Symbol,
 };
 
 use crate::types::{
@@ -73,7 +72,8 @@ pub trait StellarFlowTrait {
     /// Get the full price data with freshness status for a specific asset.
     ///
     /// Returns the last known price with `is_stale = true` when the price has expired.
-    fn get_price_with_status(env: Env, asset: Symbol) -> Result<PriceDataWithStatus, ContractError>;
+    fn get_price_with_status(env: Env, asset: Symbol)
+        -> Result<PriceDataWithStatus, ContractError>;
 
     /// Get the price data for a specific asset, or `None` if not found.
     ///
@@ -111,6 +111,20 @@ pub trait StellarFlowTrait {
     /// Returns the simple average of the last 10 price updates, or `None` if no data.
     fn get_twap(env: Env, asset: Symbol) -> Result<Option<i128>, ContractError>;
 
+    /// Get the 5-ledger moving-average price `P_ma` for an asset (issue #970).
+    ///
+    /// Returns the mean of the most recent per-ledger prices held in the rolling
+    /// window, or `None` when no window has been recorded yet.
+    fn get_price_moving_average(env: Env, asset: Symbol) -> Result<Option<i128>, ContractError>;
+
+    /// Single-ledger price-impact guard for borrow entrypoints (issue #970).
+    ///
+    /// Lending/vault contracts must call this before opening a borrow. It reverts
+    /// with `ContractError::PriceImpactGuardTriggered` while the instant price
+    /// differs from the 5-ledger moving average by more than 5%, and succeeds
+    /// again automatically once price volatility stabilises.
+    fn check_price_impact_guard(env: Env, asset: Symbol) -> Result<(), ContractError>;
+
     /// Add a new asset to the tracked asset list.
     ///
     /// The new asset is added to the internal asset list and initialized with a zero-price placeholder.
@@ -119,7 +133,12 @@ pub trait StellarFlowTrait {
     /// Set an absolute floor price for an asset.
     ///
     /// Any attempted price update below this value will be rejected.
-    fn set_price_floor(env: Env, admin: Address, asset: Symbol, price_floor: i128) -> Result<(), ContractError>;
+    fn set_price_floor(
+        env: Env,
+        admin: Address,
+        asset: Symbol,
+        price_floor: i128,
+    ) -> Result<(), ContractError>;
 
     /// Get the configured absolute floor price for an asset, if any.
     fn get_price_floor(env: Env, asset: Symbol) -> Option<i128>;
@@ -145,7 +164,11 @@ pub trait StellarFlowTrait {
     fn is_revoked(env: Env, target: Address) -> bool;
 
     /// Start an admin transfer by setting a pending admin and timestamp.
-    fn transfer_admin(env: Env, current_admin: Address, new_admin: Address) -> Result<(), ContractError>;
+    fn transfer_admin(
+        env: Env,
+        current_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), ContractError>;
 
     /// Finalize an admin transfer after the timelock has passed.
     fn accept_admin(env: Env, new_admin: Address) -> Result<(), ContractError>;
@@ -281,13 +304,18 @@ pub trait StellarFlowTrait {
     /// Set the governance weight for a specific admin (issue #264).
     ///
     /// Weight must be in the range 1–100. Only an authorized admin may call this.
-    fn set_admin_weight(env: Env, caller: Address, target_admin: Address, weight: u32) -> Result<(), Error>;
+    fn set_admin_weight(
+        env: Env,
+        caller: Address,
+        target_admin: Address,
+        weight: u32,
+    ) -> Result<(), ContractError>;
 
     /// Get the governance weight for a specific admin (issue #264).
     fn get_admin_weight(env: Env, admin: Address) -> u32;
 
     /// Set the minimum cumulative weight required for a governance proposal to execute (issue #264).
-    fn set_weight_threshold(env: Env, caller: Address, threshold: u32) -> Result<(), Error>;
+    fn set_weight_threshold(env: Env, caller: Address, threshold: u32) -> Result<(), ContractError>;
 
     /// Get the configured weight threshold, or None if not set (issue #264).
     fn get_weight_threshold(env: Env) -> Option<u32>;
@@ -594,7 +622,7 @@ pub trait StellarFlowTrait {
     /// Actual output amount if swap succeeds
     ///
     /// # Errors
-    /// Returns `Error::SlippageToleranceExceeded` if output is below acceptable minimum
+    /// Returns `ContractError::SlippageToleranceExceeded` if output is below acceptable minimum
     fn execute_swap_with_dynamic_slippage(
         env: Env,
         sender: Address,
@@ -671,133 +699,200 @@ const PROVIDER_TTL_EXTENSION_TARGET: u32 = 100_000;
 #[repr(u32)]
 pub enum ContractError {
     /// Asset does not exist in the price oracle.
+    /// Recovery steps: Inspect the state for AssetNotFound and retry with valid inputs or proper conditions.
     AssetNotFound = 1,
     /// Unauthorized caller - not a whitelisted provider or admin.
+    /// Recovery steps: Inspect the state for Unauthorized and retry with valid inputs or proper conditions.
     Unauthorized = 2,
     /// Asset symbol is not in the approved list (NGN, KES, GHS)
+    /// Recovery steps: Inspect the state for InvalidAssetSymbol and retry with valid inputs or proper conditions.
     InvalidAssetSymbol = 3,
     /// Stake withdrawal amount must be greater than zero.
+    /// Recovery steps: Inspect the state for InvalidStakeAmount and retry with valid inputs or proper conditions.
     InvalidStakeAmount = 4,
     /// Validator already has a pending unbonding request.
+    /// Recovery steps: Inspect the state for UnbondingAlreadyQueued and retry with valid inputs or proper conditions.
     UnbondingAlreadyQueued = 5,
     /// Validator does not have an unbonding request.
+    /// Recovery steps: Inspect the state for UnbondingRequestNotFound and retry with valid inputs or proper conditions.
     UnbondingRequestNotFound = 6,
     /// The minimum unbonding delay has not elapsed yet.
+    /// Recovery steps: Inspect the state for UnbondingDelayActive and retry with valid inputs or proper conditions.
     UnbondingDelayActive = 7,
     /// The queued unbonding request was already released.
+    /// Recovery steps: Inspect the state for UnbondingAlreadyReleased and retry with valid inputs or proper conditions.
     UnbondingAlreadyReleased = 8,
     /// The current ledger plus the unbonding delay overflowed.
+    /// Recovery steps: Inspect the state for LedgerSequenceOverflow and retry with valid inputs or proper conditions.
     LedgerSequenceOverflow = 9,
     /// Slippage tolerance exceeded - computed rate deviates too far from expected rate.
+    /// Recovery steps: Inspect the state for SlippageToleranceExceeded and retry with valid inputs or proper conditions.
     SlippageToleranceExceeded = 10,
     /// Invalid slippage tolerance - must be between 0 and 10000 basis points (0-100%).
+    /// Recovery steps: Inspect the state for InvalidSlippageTolerance and retry with valid inputs or proper conditions.
     InvalidSlippageTolerance = 11,
     /// Fewer than three independent node sources contributed to the current consensus pool.
+    /// Recovery steps: Inspect the state for MinimumQuorumNotMet and retry with valid inputs or proper conditions.
     MinimumQuorumNotMet = 12,
     /// The circuit-breaker is active — price reads for high-volatility assets are blocked.
+    /// Recovery steps: Inspect the state for CircuitBreakerActive and retry with valid inputs or proper conditions.
     CircuitBreakerActive = 13,
     /// The circuit-breaker is already active; cannot trip it again until it is reset.
+    /// Recovery steps: Inspect the state for CircuitBreakerAlreadyActive and retry with valid inputs or proper conditions.
     CircuitBreakerAlreadyActive = 14,
     /// The caller is not a registered coordinator node.
+    /// Recovery steps: Inspect the state for NotCoordinator and retry with valid inputs or proper conditions.
     NotCoordinator = 15,
     /// The circuit-breaker is not currently active; nothing to reset.
+    /// Recovery steps: Inspect the state for CircuitBreakerNotActive and retry with valid inputs or proper conditions.
     CircuitBreakerNotActive = 16,
     /// Submitted price value is negative, zero, or otherwise invalid.
+    /// Recovery steps: Inspect the state for InvalidPrice and retry with valid inputs or proper conditions.
     InvalidPrice = 17,
     /// Arithmetic overflow during price math (e.g. weighted-index calculation).
+    /// Recovery steps: Inspect the state for PriceMathOverflow and retry with valid inputs or proper conditions.
     PriceMathOverflow = 18,
     /// Asset weight is zero, which would produce a division-by-zero.
+    /// Recovery steps: Inspect the state for InvalidWeight and retry with valid inputs or proper conditions.
     InvalidWeight = 19,
     /// Batch operation exceeds the maximum allowed asset count.
+    /// Recovery steps: Inspect the state for TooManyAssets and retry with valid inputs or proper conditions.
     TooManyAssets = 20,
     /// Pool liquidity reported by the provider is below the configured threshold.
+    /// Recovery steps: Inspect the state for LiquidityBelowThreshold and retry with valid inputs or proper conditions.
     LiquidityBelowThreshold = 21,
     /// Liquidity value is negative or zero — cannot be used for validation.
+    /// Recovery steps: Inspect the state for InvalidLiquidity and retry with valid inputs or proper conditions.
     InvalidLiquidity = 22,
     /// Contract has been self-destructed and is permanently unusable.
+    /// Recovery steps: Inspect the state for ContractDestroyed and retry with valid inputs or proper conditions.
     ContractDestroyed = 23,
     /// Contract has not been initialized yet.
+    /// Recovery steps: Inspect the state for NotInitialized and retry with valid inputs or proper conditions.
     NotInitialized = 24,
     /// Price data exceeds the maximum allowed age.
+    /// Recovery steps: Inspect the state for StaleRateData and retry with valid inputs or proper conditions.
     StaleRateData = 25,
     /// Reentrancy detected — call stack already inside this contract.
+    /// Recovery steps: Inspect the state for ReentrancyDetected and retry with valid inputs or proper conditions.
     ReentrancyDetected = 26,
     /// Provider submitted another price update too soon (ledger gap too small).
+    /// Recovery steps: Inspect the state for LedgerGapTooSmall and retry with valid inputs or proper conditions.
     LedgerGapTooSmall = 27,
     /// Price is below the configured absolute floor.
+    /// Recovery steps: Inspect the state for PriceOutOfBounds and retry with valid inputs or proper conditions.
     PriceOutOfBounds = 28,
     /// Contract or admin is already initialized.
+    /// Recovery steps: Inspect the state for AlreadyInitialized and retry with valid inputs or proper conditions.
     AlreadyInitialized = 29,
     /// Emergency halt is active — all price reads are blocked.
+    /// Recovery steps: Inspect the state for EmergencyHalted and retry with valid inputs or proper conditions.
     EmergencyHalted = 30,
     /// No admin address has been set in storage.
+    /// Recovery steps: Inspect the state for AdminNotSet and retry with valid inputs or proper conditions.
     AdminNotSet = 31,
     /// No pending admin transfer found.
+    /// Recovery steps: Inspect the state for PendingAdminNotFound and retry with valid inputs or proper conditions.
     PendingAdminNotFound = 32,
     /// Caller is not the pending admin.
+    /// Recovery steps: Inspect the state for NotPendingAdmin and retry with valid inputs or proper conditions.
     NotPendingAdmin = 33,
     /// Pending admin timestamp is missing from storage.
+    /// Recovery steps: Inspect the state for PendingAdminTimestampMissing and retry with valid inputs or proper conditions.
     PendingAdminTimestampMissing = 34,
     /// Admin timelock period has not elapsed yet.
+    /// Recovery steps: Inspect the state for AdminTimelockNotExpired and retry with valid inputs or proper conditions.
     AdminTimelockNotExpired = 35,
     /// Fee token address has not been configured.
+    /// Recovery steps: Inspect the state for FeeTokenNotSet and retry with valid inputs or proper conditions.
     FeeTokenNotSet = 36,
     /// Query fee amount must be non-negative.
+    /// Recovery steps: Inspect the state for InvalidQueryFee and retry with valid inputs or proper conditions.
     InvalidQueryFee = 37,
     /// No reward balance available to claim.
+    /// Recovery steps: Inspect the state for NoRewards and retry with valid inputs or proper conditions.
     NoRewards = 38,
     /// Fee vault does not hold enough balance to cover the withdrawal.
+    /// Recovery steps: Inspect the state for InsufficientVaultBalance and retry with valid inputs or proper conditions.
     InsufficientVaultBalance = 39,
     /// Normalized price is zero or negative after decimal adjustment.
+    /// Recovery steps: Inspect the state for InvalidNormalizedPrice and retry with valid inputs or proper conditions.
     InvalidNormalizedPrice = 40,
     /// Caller is not an authorized admin.
+    /// Recovery steps: Inspect the state for NotAuthorized and retry with valid inputs or proper conditions.
     NotAuthorized = 41,
     /// Caller is not an authorized provider/relayer.
+    /// Recovery steps: Inspect the state for ProviderNotAuthorized and retry with valid inputs or proper conditions.
     ProviderNotAuthorized = 42,
     /// Caller is not the Community Council.
+    /// Recovery steps: Inspect the state for CouncilRequired and retry with valid inputs or proper conditions.
     CouncilRequired = 43,
     /// Contract is in emergency freeze state.
+    /// Recovery steps: Inspect the state for ContractFrozen and retry with valid inputs or proper conditions.
     ContractFrozen = 44,
     /// Price deviation exceeds the configured maximum (flash crash protection).
+    /// Recovery steps: Inspect the state for FlashCrashDetected and retry with valid inputs or proper conditions.
     FlashCrashDetected = 45,
     /// Price floor value is invalid (zero, negative, or above max bound).
+    /// Recovery steps: Inspect the state for InvalidPriceFloor and retry with valid inputs or proper conditions.
     InvalidPriceFloor = 46,
     /// No previous configuration snapshot to roll back to.
+    /// Recovery steps: Inspect the state for NoPreviousConfig and retry with valid inputs or proper conditions.
     NoPreviousConfig = 47,
     /// Price bounds are invalid (min >= max, zero, or negative).
+    /// Recovery steps: Inspect the state for InvalidPriceBounds and retry with valid inputs or proper conditions.
     InvalidPriceBounds = 48,
     /// Max deviation percentage is outside the valid governance range.
+    /// Recovery steps: Inspect the state for InvalidMaxDeviation and retry with valid inputs or proper conditions.
     InvalidMaxDeviation = 49,
     /// Multi-signature validation failed (duplicate admins, insufficient count, etc.).
+    /// Recovery steps: Inspect the state for MultiSigValidationFailed and retry with valid inputs or proper conditions.
     MultiSigValidationFailed = 50,
     /// Action type code is unrecognized or not supported in the current context.
+    /// Recovery steps: Inspect the state for InvalidActionType and retry with valid inputs or proper conditions.
     InvalidActionType = 51,
     /// The referenced proposed action does not exist.
+    /// Recovery steps: Inspect the state for ActionNotFound and retry with valid inputs or proper conditions.
     ActionNotFound = 52,
     /// The proposed action has already been executed.
+    /// Recovery steps: Inspect the state for ActionAlreadyExecuted and retry with valid inputs or proper conditions.
     ActionAlreadyExecuted = 53,
     /// The proposed action has been cancelled.
+    /// Recovery steps: Inspect the state for ActionCancelled and retry with valid inputs or proper conditions.
     ActionCancelled = 54,
     /// Governance vote quorum was not reached.
+    /// Recovery steps: Inspect the state for QuorumNotReached and retry with valid inputs or proper conditions.
     QuorumNotReached = 55,
     /// Delegate address must differ from the owner address.
+    /// Recovery steps: Inspect the state for InvalidDelegate and retry with valid inputs or proper conditions.
     InvalidDelegate = 56,
     /// Liquidity threshold is outside the valid range.
+    /// Recovery steps: Inspect the state for InvalidLiquidityThreshold and retry with valid inputs or proper conditions.
     InvalidLiquidityThreshold = 57,
     /// Slash or stake amount is zero or negative.
+    /// Recovery steps: Inspect the state for InvalidSlashAmount and retry with valid inputs or proper conditions.
     InvalidSlashAmount = 58,
     /// Slash token contract address has not been configured.
+    /// Recovery steps: Inspect the state for SlashTokenNotSet and retry with valid inputs or proper conditions.
     SlashTokenNotSet = 59,
     /// Provider's staked balance is insufficient for the requested operation.
+    /// Recovery steps: Inspect the state for InsufficientStake and retry with valid inputs or proper conditions.
     InsufficientStake = 60,
     /// Admin weight value is outside the allowed range (1–100).
+    /// Recovery steps: Inspect the state for InvalidAdminWeight and retry with valid inputs or proper conditions.
     InvalidAdminWeight = 61,
     /// Weight threshold value is invalid (below minimum or above maximum).
+    /// Recovery steps: Inspect the state for InvalidWeightThreshold and retry with valid inputs or proper conditions.
     InvalidWeightThreshold = 62,
     /// Cannot calculate deviation with zero expected/consensus rate.
+    /// Recovery steps: Inspect the state for DeviationConsensusZero and retry with valid inputs or proper conditions.
     DeviationConsensusZero = 63,
     /// Division by zero prevented - denominator must be non-zero.
+    /// Recovery steps: Inspect the state for InvalidDenominator and retry with valid inputs or proper conditions.
     InvalidDenominator = 64,
+    /// Instant price deviated from the 5-ledger moving average by more than the
+    /// single-ledger price-impact guard threshold (5%).
+    PriceImpactGuardTriggered = 65,
 }
 
 pub type Error = ContractError;
@@ -966,10 +1061,14 @@ pub fn is_stale(current_time: u64, stored_timestamp: u64, ttl: u64) -> bool {
 /// during a relayer connectivity outage.
 ///
 /// # Arguments
-/// * `env` - The contract environment 
+/// * `env` - The contract environment
 /// * `current_time` - The current ledger timestamp
 /// * `stored_timestamp` - The `timestamp` field of the `PriceData` entry
-pub fn enforce_rate_map_max_age(_env: &Env, current_time: u64, stored_timestamp: u64) -> Result<(), ContractError> {
+pub fn enforce_rate_map_max_age(
+    _env: &Env,
+    current_time: u64,
+    stored_timestamp: u64,
+) -> Result<(), ContractError> {
     if current_time > stored_timestamp.saturating_add(MAX_RATE_AGE_SECONDS) {
         Err(ContractError::StaleRateData)
     } else {
@@ -1070,11 +1169,11 @@ fn has_provider_submitted(buffer: &PriceBuffer, provider: &Address) -> bool {
 }
 
 /// Ensure the current ledger sequence has advanced since the last price write.
-fn require_ledger_sequence_advanced(env: &Env, previous: Option<&PriceData>) -> Result<u32, Error> {
+fn require_ledger_sequence_advanced(env: &Env, previous: Option<&PriceData>) -> Result<u32, ContractError> {
     let current_ledger: u32 = env.ledger().sequence().into();
     if let Some(prev) = previous {
         if current_ledger <= prev.ledger_sequence {
-            return Err(Error::LedgerGapTooSmall);
+            return Err(ContractError::LedgerGapTooSmall);
         }
     }
     Ok(current_ledger)
@@ -1245,40 +1344,40 @@ fn read_price_floor(env: &Env, asset: &Symbol) -> Option<i128> {
 }
 
 /// Enforce the 3-block minimum ledger gap between provider submissions.
-/// 
+///
 /// Prevents high-frequency automated scripts from flooding the network with
 /// consecutive price updates within the same or nearby ledger windows.
-/// 
+///
 /// # Arguments
 /// * `env` - The Soroban environment
 /// * `provider` - The address of the provider attempting to submit
-/// 
+///
 /// # Returns
 /// * `Ok(())` if the provider is allowed to submit (3+ blocks since last submission)
 /// * `Err(ContractError::LedgerGapTooSmall)` if the gap is less than 3 blocks
 fn enforce_ledger_gap(env: &Env, provider: &Address) -> Result<(), ContractError> {
     const MIN_LEDGER_GAP: u32 = 3;
-    
+
     let current_ledger = env.ledger().sequence();
     let last_seen = env
         .storage()
         .persistent()
         .get(&DataKey::ProviderLastSeenLedger(provider.clone()))
         .unwrap_or(0);
-    
+
     // If provider has never submitted before, allow the submission
     if last_seen == 0 {
         return Ok(());
     }
-    
+
     // Calculate the gap between current and last submission
     let gap = current_ledger.saturating_sub(last_seen);
-    
+
     // Reject if the gap is less than MIN_LEDGER_GAP blocks
     if gap < MIN_LEDGER_GAP {
         return Err(ContractError::LedgerGapTooSmall);
     }
-    
+
     Ok(())
 }
 
@@ -1292,10 +1391,18 @@ fn _extend_provider_ttl_if_needed(env: &Env, provider: &Address) {
     let stake_key = DataKey::ProviderStake(provider.clone());
     let last_seen_key = DataKey::ProviderLastSeenLedger(provider.clone());
     if storage.has(&stake_key) {
-        storage.extend_ttl(&stake_key, PROVIDER_TTL_EXTENSION_THRESHOLD, PROVIDER_TTL_EXTENSION_TARGET);
+        storage.extend_ttl(
+            &stake_key,
+            PROVIDER_TTL_EXTENSION_THRESHOLD,
+            PROVIDER_TTL_EXTENSION_TARGET,
+        );
     }
     if storage.has(&last_seen_key) {
-        storage.extend_ttl(&last_seen_key, PROVIDER_TTL_EXTENSION_THRESHOLD, PROVIDER_TTL_EXTENSION_TARGET);
+        storage.extend_ttl(
+            &last_seen_key,
+            PROVIDER_TTL_EXTENSION_THRESHOLD,
+            PROVIDER_TTL_EXTENSION_TARGET,
+        );
     }
 }
 
@@ -1309,28 +1416,43 @@ fn enforce_price_floor(env: &Env, asset: &Symbol, price: i128) -> Result<(), Con
     Ok(())
 }
 
-fn update_twap(env: &Env, asset: Symbol, price: i128, timestamp: u64) {
+fn update_twap(env: &Env, asset: Symbol, price: i128, _timestamp: u64) -> Result<(), ContractError> {
     let key = DataKey::Twap(asset);
-    let mut twap_buffer: soroban_sdk::Vec<(u64, i128)> = env
-        .storage()
-        .temporary()
-        .get(&key)
-        .unwrap_or_else(|| soroban_sdk::Vec::new(env));
+    let current_twap: Option<(i128, u32)> = env.storage().temporary().get(&key);
+    let current_ledger = env.ledger().sequence();
 
-    twap_buffer.push_back((timestamp, price));
+    let new_ema = match current_twap {
+        Some((prev_ema, prev_ledger)) => {
+            let term1 = price.checked_mul(15).ok_or(ContractError::PriceMathOverflow)?;
+            let term2 = prev_ema.checked_mul(85).ok_or(ContractError::PriceMathOverflow)?;
+            let new_ema = term1.checked_add(term2).ok_or(ContractError::PriceMathOverflow)?.checked_div(100).ok_or(ContractError::PriceMathOverflow)?;
 
-    if twap_buffer.len() > 10 {
-        twap_buffer.pop_front();
-    }
+            if current_ledger == prev_ledger {
+                let delta = if new_ema > prev_ema { new_ema - prev_ema } else { prev_ema - new_ema };
+                let max_delta = prev_ema.checked_mul(2).ok_or(ContractError::PriceMathOverflow)?.checked_div(100).unwrap_or(0);
 
-    env.storage().temporary().set(&key, &twap_buffer);
+                if delta > max_delta {
+                    return Err(ContractError::PriceOutOfBounds);
+                }
+            }
+            new_ema
+        },
+        None => price,
+    };
+
+    env.storage().temporary().set(&key, &(new_ema, current_ledger));
+    Ok(())
 }
 
 #[contractimpl]
 impl PriceOracle {
     /// Initialize the contract with admin and base currency pairs.
     /// Can only be called once.
-    pub fn initialize(env: Env, admin: Address, base_currency_pairs: soroban_sdk::Vec<Symbol>) -> Result<(), ContractError> {
+    pub fn initialize(
+        env: Env,
+        admin: Address,
+        base_currency_pairs: soroban_sdk::Vec<Symbol>,
+    ) -> Result<(), ContractError> {
         if env.storage().instance().has(&DataKey::Initialized) || crate::auth::_has_admin(&env) {
             return Err(ContractError::AlreadyInitialized);
         }
@@ -1396,9 +1518,13 @@ impl PriceOracle {
     pub fn add_asset(env: Env, admin: Address, asset: Symbol) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         _track_asset(&env, asset.clone());
 
@@ -1445,9 +1571,13 @@ impl PriceOracle {
         quote_decimals: u32,
     ) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         env.storage().persistent().set(
             &DataKey::AssetMeta(asset.clone()),
@@ -1481,9 +1611,13 @@ impl PriceOracle {
         quote_decimals: u32,
     ) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         let info = AssetInfo {
             name: name.clone(),
@@ -1511,9 +1645,13 @@ impl PriceOracle {
     ) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         validation::validate_asset_registration_configs(&configs, max_deviation_bps)?;
 
@@ -1562,16 +1700,14 @@ impl PriceOracle {
                     quote_decimals: config.quote_decimals,
                 },
             );
-            env.storage()
-                .persistent()
-                .set(
-                    &DataKey::AssetInfo(asset.clone()),
-                    &AssetInfo {
-                        name: config.name.clone(),
-                        base_decimals: config.base_decimals,
-                        quote_decimals: config.quote_decimals,
-                    },
-                );
+            env.storage().persistent().set(
+                &DataKey::AssetInfo(asset.clone()),
+                &AssetInfo {
+                    name: config.name.clone(),
+                    base_decimals: config.base_decimals,
+                    quote_decimals: config.quote_decimals,
+                },
+            );
             env.storage().persistent().set(
                 &DataKey::PriceBoundsEntry(asset.clone()),
                 &PriceBounds {
@@ -1585,7 +1721,8 @@ impl PriceOracle {
                     .set(&DataKey::PriceFloorEntry(asset.clone()), &price_floor);
             }
 
-            env.events().publish((Symbol::new(&env, "asset_added_event"),), (asset.clone(),));
+            env.events()
+                .publish((Symbol::new(&env, "asset_added_event"),), (asset.clone(),));
             log_event(&env, Symbol::new(&env, "asset_added"), asset, 0);
         }
 
@@ -1614,9 +1751,15 @@ impl PriceOracle {
     /// This is intended for the multi-sig coordinator/admin group to use in
     /// response to a suspected compromise. A successful revocation immediately
     /// removes the target from the admin/provider sets and marks it as revoked.
-    pub fn revoke_key(env: Env, coordinator: Address, target: Address) -> Result<bool, ContractError> {
+    pub fn revoke_key(
+        env: Env,
+        coordinator: Address,
+        target: Address,
+    ) -> Result<bool, ContractError> {
         coordinator.require_auth();
-        if !crate::auth::_is_authorized(&env, &coordinator) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &coordinator) {
+            return Err(ContractError::NotAuthorized);
+        }
         Ok(crate::auth::_revoke_key(&env, &target))
     }
 
@@ -1626,10 +1769,16 @@ impl PriceOracle {
     }
 
     /// Starts an admin transfer by storing the pending admin and timestamp.
-    pub fn transfer_admin(env: Env, current_admin: Address, new_admin: Address) -> Result<(), ContractError> {
+    pub fn transfer_admin(
+        env: Env,
+        current_admin: Address,
+        new_admin: Address,
+    ) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         current_admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &current_admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &current_admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         let now = env.ledger().timestamp();
 
@@ -1639,7 +1788,7 @@ impl PriceOracle {
         env.storage()
             .instance()
             .set(&DataKey::PendingAdminTimestamp, &now);
-            
+
         Ok(())
     }
 
@@ -1681,7 +1830,7 @@ impl PriceOracle {
         env.storage()
             .instance()
             .remove(&DataKey::PendingAdminTimestamp);
-            
+
         Ok(())
     }
 
@@ -1693,13 +1842,15 @@ impl PriceOracle {
     pub fn renounce_ownership(env: Env, admin: Address) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         crate::auth::_renounce_ownership(&env);
 
         env.events()
             .publish((Symbol::new(&env, "ownership_renounced_event"),), (admin,));
-            
+
         Ok(())
     }
 
@@ -1724,7 +1875,9 @@ impl PriceOracle {
             return Err(ContractError::EmergencyHalted);
         }
         // Circuit-breaker: drop reads for quarantined high-volatility pairs.
-        if crate::admin::is_circuit_breaker_active(&env) || crate::admin::is_asset_circuit_breaker_active(&env, &asset) {
+        if crate::admin::is_circuit_breaker_active(&env)
+            || crate::admin::is_asset_circuit_breaker_active(&env, &asset)
+        {
             return Err(ContractError::CircuitBreakerActive);
         }
         let key = if verified {
@@ -1750,7 +1903,11 @@ impl PriceOracle {
     }
 
     fn process_query_fee(env: &Env, provider: &Address) -> Result<(), ContractError> {
-        let fee: i128 = env.storage().persistent().get(&DataKey::QueryFee).unwrap_or(0);
+        let fee: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::QueryFee)
+            .unwrap_or(0);
         if fee <= 0 {
             return Ok(());
         }
@@ -1762,18 +1919,22 @@ impl PriceOracle {
             .ok_or(ContractError::FeeTokenNotSet)?;
 
         let payer = env.invoker();
-        
+
         // Acquire reentrancy lock before cross-contract call
         crate::reentrancy::acquire_lock(env)?;
-        
+
         let token_client = token::Client::new(env, &token_address);
         token_client.transfer(&payer, &env.current_contract_address(), &fee);
-        
+
         // Release reentrancy lock after cross-contract call
         crate::reentrancy::release_lock(env);
 
         let provider_reward_key = DataKey::ProviderRewardBalance(provider.clone());
-        let current_provider_rewards: i128 = env.storage().persistent().get(&provider_reward_key).unwrap_or(0);
+        let current_provider_rewards: i128 = env
+            .storage()
+            .persistent()
+            .get(&provider_reward_key)
+            .unwrap_or(0);
         let new_provider_rewards = current_provider_rewards
             .checked_add(fee)
             .ok_or(ContractError::PriceMathOverflow)?;
@@ -1797,16 +1958,18 @@ impl PriceOracle {
     pub fn set_fee_token(env: Env, admin: Address, token: Address) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         env.storage().persistent().set(&DataKey::FeeToken, &token);
 
-        env.events().publish(
-            (Symbol::new(&env, "fee_token_set"),),
-            (admin, token),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "fee_token_set"),), (admin, token));
 
         Ok(())
     }
@@ -1820,25 +1983,30 @@ impl PriceOracle {
     pub fn set_query_fee(env: Env, admin: Address, fee: i128) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         if fee < 0 {
             return Err(ContractError::InvalidQueryFee);
         }
 
         env.storage().persistent().set(&DataKey::QueryFee, &fee);
-        env.events().publish(
-            (Symbol::new(&env, "query_fee_set"),),
-            (admin, fee),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "query_fee_set"),), (admin, fee));
         Ok(())
     }
 
     /// Get the configured query fee amount.
     pub fn get_query_fee(env: Env) -> i128 {
-        env.storage().persistent().get(&DataKey::QueryFee).unwrap_or(0)
+        env.storage()
+            .persistent()
+            .get(&DataKey::QueryFee)
+            .unwrap_or(0)
     }
 
     /// Get the current accumulated fee vault balance for the configured fee token.
@@ -1892,7 +2060,11 @@ impl PriceOracle {
         env.storage().persistent().remove(&pending_rewards_key);
 
         let token_client = token::Client::new(&env, &token_address);
-        token_client.transfer(&env.current_contract_address(), &validator, &pending_rewards);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &validator,
+            &pending_rewards,
+        );
 
         env.events().publish(
             (Symbol::new(&env, "rewards_claimed_event"),),
@@ -1912,7 +2084,9 @@ impl PriceOracle {
             return Err(ContractError::EmergencyHalted);
         }
         // Circuit-breaker: drop reads for quarantined high-volatility pairs.
-        if crate::admin::is_circuit_breaker_active(&env) || crate::admin::is_asset_circuit_breaker_active(&env, &asset) {
+        if crate::admin::is_circuit_breaker_active(&env)
+            || crate::admin::is_asset_circuit_breaker_active(&env, &asset)
+        {
             return Err(ContractError::CircuitBreakerActive);
         }
         match env
@@ -1938,10 +2112,13 @@ impl PriceOracle {
             return Err(ContractError::EmergencyHalted);
         }
         // Circuit-breaker: drop reads for quarantined high-volatility pairs.
-        if crate::admin::is_circuit_breaker_active(&env) || crate::admin::is_asset_circuit_breaker_active(&env, &asset) {
+        if crate::admin::is_circuit_breaker_active(&env)
+            || crate::admin::is_asset_circuit_breaker_active(&env, &asset)
+        {
             return Err(ContractError::CircuitBreakerActive);
         }
-        Ok(env.storage()
+        Ok(env
+            .storage()
             .persistent()
             .get::<DataKey, PriceData>(&DataKey::VerifiedPrice(asset)))
     }
@@ -2048,7 +2225,9 @@ impl PriceOracle {
     ) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
         env.storage()
             .persistent()
             .set(&DataKey::AssetDescription(asset.clone()), &description);
@@ -2083,9 +2262,17 @@ impl PriceOracle {
     /// # Reentrancy Protection
     /// This function is protected against cross-function state manipulation
     /// using a reentrancy lock (DataKey::IsLocked).
-    pub fn set_price(env: Env, asset: Symbol, val: i128, decimals: u32, ttl: u64) -> Result<(), ContractError> {
+    pub fn set_price(
+        env: Env,
+        asset: Symbol,
+        val: i128,
+        decimals: u32,
+        ttl: u64,
+    ) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
 
         // Acquire reentrancy lock
         acquire_lock(&env)?;
@@ -2125,7 +2312,9 @@ impl PriceOracle {
                     current.timestamp = now;
                     current.ledger_sequence = current_ledger;
                     storage.set(&key, &current);
-                    update_twap(&env, asset.clone(), val, now);
+                    update_twap(&env, asset.clone(), val, now)?;
+                    // Issue #970: feed the rolling window / single-ledger guard.
+                    twap::record_and_evaluate(&env, &asset, val);
                     event_topics::publish_price_update(&env, asset.clone(), current.price, now);
                     env.events().publish(
                         (Symbol::new(&env, "price_updated_event"),),
@@ -2148,7 +2337,9 @@ impl PriceOracle {
             };
 
             storage.set(&key, &price_data);
-            update_twap(&env, asset.clone(), normalized, now);
+            update_twap(&env, asset.clone(), normalized, now)?;
+            // Issue #970: feed the rolling window / single-ledger guard.
+            twap::record_and_evaluate(&env, &asset, normalized);
 
             if is_new_asset {
                 env.events()
@@ -2181,7 +2372,12 @@ impl PriceOracle {
                     new_price: normalized,
                     variance_bps: variance_opt.unwrap_or(0),
                 });
-                log_event(&env, Symbol::new(&env, "price_variance"), asset.clone(), variance_opt.unwrap_or(0));
+                log_event(
+                    &env,
+                    Symbol::new(&env, "price_variance"),
+                    asset.clone(),
+                    variance_opt.unwrap_or(0),
+                );
             }
 
             // Notify subscribers of the price update
@@ -2218,7 +2414,9 @@ impl PriceOracle {
         decimals: u32,
         ttl: u64,
     ) -> Result<(), ContractError> {
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         source.require_auth();
 
         if !get_tracked_assets(&env).contains(&asset) {
@@ -2272,11 +2470,21 @@ impl PriceOracle {
     /// Rescue tokens accidentally sent to this contract.
     ///
     /// Admin-only function to move trapped XLM or other assets out of the contract.
-    pub fn rescue_tokens(env: Env, admin: Address, token: Address, to: Address, amount: i128) -> Result<(), ContractError> {
+    pub fn rescue_tokens(
+        env: Env,
+        admin: Address,
+        token: Address,
+        to: Address,
+        amount: i128,
+    ) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         if amount <= 0 {
             return Err(ContractError::InvalidPrice);
@@ -2284,10 +2492,10 @@ impl PriceOracle {
 
         // Acquire reentrancy lock before cross-contract call
         crate::reentrancy::acquire_lock(&env)?;
-        
+
         let token_client = token::Client::new(&env, &token);
         token_client.transfer(&env.current_contract_address(), &to, &amount);
-        
+
         // Release reentrancy lock after cross-contract call
         crate::reentrancy::release_lock(&env);
 
@@ -2302,12 +2510,20 @@ impl PriceOracle {
     ///
     /// Replaces the on-chain WASM bytecode with the provided hash while preserving
     /// all contract storage. Strictly restricted to the admin.
-    pub fn upgrade(env: Env, admin: Address, new_wasm_hash: soroban_sdk::BytesN<32>) -> Result<(), ContractError> {
+    pub fn upgrade(
+        env: Env,
+        admin: Address,
+        new_wasm_hash: soroban_sdk::BytesN<32>,
+    ) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
-        
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
+
         env.deployer().update_current_contract_wasm(new_wasm_hash);
         Ok(())
     }
@@ -2318,9 +2534,13 @@ impl PriceOracle {
     /// is not currently tracked.
     pub fn remove_asset(env: Env, admin: Address, asset: Symbol) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         let storage = env.storage().persistent();
 
@@ -2491,11 +2711,9 @@ impl PriceOracle {
         // Add the normalized price entry to the buffer, first checking it
         // falls within the ±15% deviation window against the rolling baseline.
         let twap_key = DataKey::Twap(asset.clone());
-        let twap_entries: soroban_sdk::Vec<(u64, i128)> = env
-            .storage()
-            .persistent()
-            .get(&twap_key)
-            .unwrap_or_else(|| soroban_sdk::Vec::new(&env));
+        let twap_ema: Option<(i128, u32)> = env.storage().temporary().get(&twap_key);
+        let twap_price_opt = twap_ema.map(|(p, _)| p);
+        
         let candidate = soroban_sdk::vec![
             &env,
             PriceBufferEntry {
@@ -2504,9 +2722,9 @@ impl PriceOracle {
                 timestamp: env.ledger().timestamp(),
             }
         ];
-        let accepted = validation::filter_feeds_by_deviation(&twap_entries, candidate, &env);
+        let accepted = validation::filter_feeds_by_deviation(twap_price_opt, candidate, &env);
         if accepted.is_empty() {
-            return Err(Error::FlashCrashDetected);
+            return Err(ContractError::FlashCrashDetected);
         }
         let _entry = accepted.get(0).unwrap();
         // ── Liquidity validation: flash loan manipulation prevention ────────────
@@ -2576,7 +2794,9 @@ impl PriceOracle {
 
         storage.set(&key, &price_data);
         storage.extend_ttl(&key, 10_000u32, 10_000u32);
-        update_twap(&env, asset.clone(), median_price, env.ledger().timestamp());
+        update_twap(&env, asset.clone(), median_price, env.ledger().timestamp())?;
+        // Issue #970: feed the rolling window / single-ledger guard.
+        twap::record_and_evaluate(&env, &asset, median_price);
 
         event_topics::publish_price_update(
             &env,
@@ -2617,13 +2837,13 @@ impl PriceOracle {
         {
             // Acquire reentrancy lock before cross-contract call
             crate::reentrancy::acquire_lock(&env)?;
-            
+
             // Call reimburse(relayer) on the Gas Tank contract.
             // We use env.invoke_contract so we stay no_std compatible.
             let reimburse_fn = Symbol::new(&env, "reimburse");
             let args = soroban_sdk::vec![&env, payload.provider.clone().to_val()];
             let _: () = env.invoke_contract(&gas_tank_addr, &reimburse_fn, args);
-            
+
             // Release reentrancy lock after cross-contract call
             crate::reentrancy::release_lock(&env);
         }
@@ -2632,12 +2852,21 @@ impl PriceOracle {
     }
 
     /// Set an absolute floor price for an asset.
-    pub fn set_price_floor(env: Env, admin: Address, asset: Symbol, price_floor: i128) -> Result<(), ContractError> {
+    pub fn set_price_floor(
+        env: Env,
+        admin: Address,
+        asset: Symbol,
+        price_floor: i128,
+    ) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         if price_floor <= 0 {
             return Err(ContractError::InvalidPriceFloor);
@@ -2674,9 +2903,13 @@ impl PriceOracle {
     ) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         let prev: i128 = env
             .storage()
@@ -2710,9 +2943,13 @@ impl PriceOracle {
     ) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         if min_price <= 0 || max_price <= 0 || min_price > max_price {
             return Err(ContractError::InvalidPriceBounds);
@@ -2756,9 +2993,13 @@ impl PriceOracle {
     ) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         let prev: PriceBounds = env
             .storage()
@@ -2787,12 +3028,20 @@ impl PriceOracle {
 
     /// Set the maximum allowed price deviation percentage (in basis points).
     /// This value is applied in `update_price` to reject single-ledger flash crash updates.
-    pub fn set_max_deviation_percentage(env: Env, admin: Address, max_deviation_bps: i128) -> Result<(), ContractError> {
+    pub fn set_max_deviation_percentage(
+        env: Env,
+        admin: Address,
+        max_deviation_bps: i128,
+    ) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         if max_deviation_bps < MIN_SAFE_MAX_DEVIATION_BPS || max_deviation_bps > 10_000 {
             return Err(ContractError::InvalidMaxDeviation);
@@ -2822,9 +3071,13 @@ impl PriceOracle {
     pub fn rollback_max_deviation_pct(env: Env, admin: Address) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         let prev: i128 = env
             .storage()
@@ -2886,9 +3139,13 @@ impl PriceOracle {
     ) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         // Validate and set the threshold using the validation module
         validation::set_liquidity_threshold_internal(&env, &asset, threshold)?;
@@ -2923,12 +3180,20 @@ impl PriceOracle {
     ///
     /// # Errors
     /// - `ContractError::NotAuthorized`: caller is not an authorized admin
-    pub fn remove_liquidity_threshold(env: Env, admin: Address, asset: Symbol) -> Result<(), ContractError> {
+    pub fn remove_liquidity_threshold(
+        env: Env,
+        admin: Address,
+        asset: Symbol,
+    ) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         validation::remove_liquidity_threshold_internal(&env, &asset);
         Ok(())
@@ -2977,8 +3242,8 @@ impl PriceOracle {
     /// - `base_slash_amount`: Base penalty before liquidity multiplier
     ///
     /// # Errors
-    /// - `Err(Error::InvalidLiquidityThreshold)`: No threshold configured for asset
-    /// - `Err(Error::InsufficientStake)`: Provider doesn't have enough stake
+    /// - `Err(ContractError::InvalidLiquidityThreshold)`: No threshold configured for asset
+    /// - `Err(ContractError::InsufficientStake)`: Provider doesn't have enough stake
     ///
     /// # Penalty Tiers
     /// - **≥ 100% of threshold**: No penalty (1× multiplier)
@@ -2996,9 +3261,13 @@ impl PriceOracle {
     ) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         executor.require_auth();
-        if !crate::auth::_is_authorized(&env, &executor) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &executor) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         validation::slash_for_low_liquidity(
             &env,
@@ -3059,7 +3328,9 @@ impl PriceOracle {
     /// # Returns
     /// The new pause state (true = paused, false = unpaused)
     pub fn toggle_pause(env: Env, admin1: Address, admin2: Address) -> Result<bool, ContractError> {
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         // Verify both are distinct addresses before requiring auth
         if admin1 == admin2 {
             return Err(ContractError::MultiSigValidationFailed);
@@ -3119,7 +3390,9 @@ impl PriceOracle {
         admin2: Address,
         new_admin: Address,
     ) -> Result<(), ContractError> {
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         // Verify both are distinct addresses before requiring auth
         if admin1 == admin2 {
             return Err(ContractError::MultiSigValidationFailed);
@@ -3172,7 +3445,9 @@ impl PriceOracle {
         admin2: Address,
         admin_to_remove: Address,
     ) -> Result<(), ContractError> {
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         // Verify both are distinct addresses before requiring auth
         if admin1 == admin2 {
             return Err(ContractError::MultiSigValidationFailed);
@@ -3222,7 +3497,9 @@ impl PriceOracle {
     /// can never be used again. All storage is wiped and a destroyed flag is set.
     pub fn self_destruct(env: Env, admin1: Address, admin2: Address) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin1.require_auth();
         admin2.require_auth();
 
@@ -3230,7 +3507,9 @@ impl PriceOracle {
             return Err(ContractError::MultiSigValidationFailed);
         }
 
-        if !crate::auth::_is_authorized(&env, &admin1) || !crate::auth::_is_authorized(&env, &admin2) {
+        if !crate::auth::_is_authorized(&env, &admin1)
+            || !crate::auth::_is_authorized(&env, &admin2)
+        {
             return Err(ContractError::NotAuthorized);
         }
 
@@ -3289,20 +3568,29 @@ impl PriceOracle {
     /// Weight must be in the range 1–100.  A weight of 0 is rejected because a
     /// zero-weight admin could never contribute to reaching the threshold.
     /// Only an authorized admin may call this.
-    pub fn set_admin_weight(env: Env, caller: Address, target_admin: Address, weight: u32) -> Result<(), Error> {
+    pub fn set_admin_weight(
+        env: Env,
+        caller: Address,
+        target_admin: Address,
+        weight: u32,
+    ) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         caller.require_auth();
-        if !crate::auth::_is_authorized(&env, &caller) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &caller) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         if weight == 0 || weight > 100 {
-            return Err(Error::InvalidAdminWeight);
+            return Err(ContractError::InvalidAdminWeight);
         }
 
         // The target must be a registered admin.
         if !crate::auth::_is_authorized(&env, &target_admin) {
-            return Err(Error::NotAuthorized);
+            return Err(ContractError::NotAuthorized);
         }
 
         crate::auth::_set_admin_weight(&env, &target_admin, weight);
@@ -3328,15 +3616,19 @@ impl PriceOracle {
     /// `threshold` must be ≥ 1.  Only an authorized admin may call this.
     /// Once set, `execute_proposed_action` will sum voter weights and compare
     /// against this value instead of using the simple vote-count threshold.
-    pub fn set_weight_threshold(env: Env, caller: Address, threshold: u32) -> Result<(), Error> {
+    pub fn set_weight_threshold(env: Env, caller: Address, threshold: u32) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         caller.require_auth();
-        if !crate::auth::_is_authorized(&env, &caller) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &caller) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         if threshold == 0 {
-            return Err(Error::MultiSigValidationFailed);
+            return Err(ContractError::MultiSigValidationFailed);
         }
 
         crate::auth::_set_weight_threshold(&env, threshold);
@@ -3430,9 +3722,13 @@ impl PriceOracle {
     ) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         if threshold < MIN_SAFE_QUORUM_THRESHOLD {
             return Err(ContractError::MultiSigValidationFailed);
@@ -3465,9 +3761,13 @@ impl PriceOracle {
         data: soroban_sdk::String,
     ) -> Result<u64, ContractError> {
         _require_not_destroyed(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         // Validate action type
         let admin_action = match action_type {
@@ -3560,11 +3860,8 @@ impl PriceOracle {
             .get(&crate::auth::DataKey::VeflowLockContract)
             .ok_or(ContractError::NotAuthorized)?;
         let args = soroban_sdk::vec![&env, voter.to_val(), proposed_at.into_val(env)];
-        let weight: i128 = env.invoke_contract(
-            &lock_contract,
-            &Symbol::new(env, "get_voting_power"),
-            args,
-        );
+        let weight: i128 =
+            env.invoke_contract(&lock_contract, &Symbol::new(env, "get_voting_power"), args);
         if weight <= 0 {
             return Err(ContractError::NotAuthorized);
         }
@@ -3631,7 +3928,9 @@ impl PriceOracle {
             crate::auth::DataKey::ActionNegativeWeight(action_id)
         };
         let total: i128 = env.storage().persistent().get(&total_key).unwrap_or(0);
-        env.storage().persistent().set(&total_key, &(total + weight));
+        env.storage()
+            .persistent()
+            .set(&total_key, &(total + weight));
         Ok(voters.len())
     }
 
@@ -3648,7 +3947,9 @@ impl PriceOracle {
     /// The current number of votes for this action
     pub fn vote_for_action(env: Env, voter: Address, action_id: u64) -> Result<u32, ContractError> {
         _require_not_destroyed(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         voter.require_auth();
 
         if env
@@ -3741,20 +4042,14 @@ impl PriceOracle {
         )
     }
 
-    pub fn get_action_affirmative_voters(
-        env: Env,
-        action_id: u64,
-    ) -> soroban_sdk::Vec<Address> {
+    pub fn get_action_affirmative_voters(env: Env, action_id: u64) -> soroban_sdk::Vec<Address> {
         env.storage()
             .instance()
             .get(&crate::auth::DataKey::ActionAffirmativeVotes(action_id))
             .unwrap_or_else(|| soroban_sdk::Vec::new(&env))
     }
 
-    pub fn get_action_negative_voters(
-        env: Env,
-        action_id: u64,
-    ) -> soroban_sdk::Vec<Address> {
+    pub fn get_action_negative_voters(env: Env, action_id: u64) -> soroban_sdk::Vec<Address> {
         env.storage()
             .instance()
             .get(&crate::auth::DataKey::ActionNegativeVotes(action_id))
@@ -3768,7 +4063,11 @@ impl PriceOracle {
     pub fn delegate_vote(env: Env, owner: Address, delegate: Address) -> Result<(), ContractError> {
         _require_not_destroyed(&env);
         crate::auth::_require_not_frozen(&env);
-        let auth_args = soroban_sdk::vec![&env, owner.clone().into_val(&env), delegate.clone().into_val(&env)];
+        let auth_args = soroban_sdk::vec![
+            &env,
+            owner.clone().into_val(&env),
+            delegate.clone().into_val(&env)
+        ];
         crate::auth::_require_auth_for_args(&env, &owner, &auth_args);
 
         if owner == delegate {
@@ -3808,7 +4107,11 @@ impl PriceOracle {
     ) -> Result<(), ContractError> {
         _require_not_destroyed(&env);
         crate::auth::_require_not_frozen(&env);
-        let auth_args = soroban_sdk::vec![&env, admin.clone().into_val(&env), delegate.clone().into_val(&env)];
+        let auth_args = soroban_sdk::vec![
+            &env,
+            admin.clone().into_val(&env),
+            delegate.clone().into_val(&env)
+        ];
         crate::auth::_require_auth_for_args(&env, &admin, &auth_args);
         crate::auth::_require_authorized(&env, &admin);
 
@@ -3872,9 +4175,13 @@ impl PriceOracle {
         action_id: u64,
     ) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         executor.require_auth();
-        if !crate::auth::_is_authorized(&env, &executor) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &executor) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         // Get the proposed action
         let mut proposed = match crate::auth::_get_proposed_action(&env, action_id) {
@@ -4004,30 +4311,39 @@ impl PriceOracle {
             }
             AdminAction::Upgrade => {
                 // Parse wasm hash from data (expected as hex string)
-                use soroban_sdk::BytesN;
                 use hex::decode;
-                
+                use soroban_sdk::BytesN;
+
                 let hex_str = proposed.data.to_string();
                 let decoded = decode(&hex_str).map_err(|_| ContractError::InvalidActionType)?;
                 if decoded.len() != 32 {
                     return Err(ContractError::InvalidActionType);
                 }
-                
-                let new_wasm_hash: BytesN<32> = BytesN::from_array(&env, &decoded.try_into().unwrap());
-                
+
+                let new_wasm_hash: BytesN<32> =
+                    BytesN::from_array(&env, &decoded.try_into().unwrap());
+
                 // Get current WASM hash before upgrading
-                let current_wasm: Option<BytesN<32>> = env.storage().instance().get(&crate::auth::DataKey::CurrentWasmHash);
-                
+                let current_wasm: Option<BytesN<32>> = env
+                    .storage()
+                    .instance()
+                    .get(&crate::auth::DataKey::CurrentWasmHash);
+
                 // Update the contract's WASM code
-                env.deployer().update_current_contract_wasm(new_wasm_hash.clone());
-                
+                env.deployer()
+                    .update_current_contract_wasm(new_wasm_hash.clone());
+
                 // Store previous hash if there was a current one
                 if let Some(prev_hash) = current_wasm.clone() {
-                    env.storage().instance().set(&crate::auth::DataKey::PreviousWasmHash, &prev_hash);
+                    env.storage()
+                        .instance()
+                        .set(&crate::auth::DataKey::PreviousWasmHash, &prev_hash);
                 }
                 // Update current hash to the new one
-                env.storage().instance().set(&crate::auth::DataKey::CurrentWasmHash, &new_wasm_hash);
-                
+                env.storage()
+                    .instance()
+                    .set(&crate::auth::DataKey::CurrentWasmHash, &new_wasm_hash);
+
                 proposed.executed = true;
                 _log_admin_action(
                     &env,
@@ -4035,7 +4351,7 @@ impl PriceOracle {
                     AdminAction::Upgrade,
                     Some(format!("Data: {}", proposed.data.to_string())),
                 );
-                
+
                 // Emit ContractUpgraded event with both previous and new hashes
                 env.events().publish(
                     (Symbol::new(&env, "contract_upgraded"),),
@@ -4119,9 +4435,13 @@ impl PriceOracle {
         action_id: u64,
     ) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         canceller.require_auth();
-        if !crate::auth::_is_authorized(&env, &canceller) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &canceller) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         // Get the proposed action
         let mut proposed = match crate::auth::_get_proposed_action(&env, action_id) {
@@ -4164,9 +4484,13 @@ impl PriceOracle {
     /// an emergency freeze if a majority of admins are compromised.
     pub fn set_council(env: Env, admin: Address, council: Address) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
         _log_admin_action(
             &env,
             &admin,
@@ -4245,7 +4569,9 @@ impl PriceOracle {
         }
         admin1.require_auth();
         admin2.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin1) || !crate::auth::_is_authorized(&env, &admin2) {
+        if !crate::auth::_is_authorized(&env, &admin1)
+            || !crate::auth::_is_authorized(&env, &admin2)
+        {
             return Err(ContractError::NotAuthorized);
         }
 
@@ -4298,7 +4624,15 @@ impl PriceOracle {
         // We clear these because the historical prices in the buffer are now stale.
         let assets = get_tracked_assets(env);
         for asset in assets.iter() {
-            env.storage().temporary().remove(&DataKey::Twap(asset));
+            env.storage().temporary().remove(&DataKey::Twap(asset.clone()));
+            // Issue #970: drop the rolling window and clear the trip flag so
+            // vaults resume cleanly after a governance-driven recovery.
+            env.storage()
+                .temporary()
+                .remove(&DataKey::PriceWindow(asset.clone()));
+            env.storage()
+                .persistent()
+                .remove(&DataKey::PriceImpactGuard(asset));
         }
     }
 
@@ -4335,22 +4669,45 @@ impl PriceOracle {
             return Err(ContractError::EmergencyHalted);
         }
         let key = DataKey::Twap(asset);
-        let twap_buffer: soroban_sdk::Vec<(u64, i128)> = match env.storage().temporary().get(&key) {
-            Some(buf) => buf,
-            None => return Ok(None),
-        };
+        let current_twap: Option<(i128, u32)> = env.storage().temporary().get(&key);
+        Ok(current_twap.map(|(price, _)| price))
+    }
 
-        let len = twap_buffer.len();
-        if len == 0 {
-            return Ok(None);
+    /// Get the 5-ledger moving-average price `P_ma` for an asset (issue #970).
+    ///
+    /// `P_ma` is the mean of the most recent per-ledger prices held in the
+    /// rolling window that every canonical price write maintains. Returns `None`
+    /// when the asset has no recorded window yet.
+    pub fn get_price_moving_average(
+        env: Env,
+        asset: Symbol,
+    ) -> Result<Option<i128>, ContractError> {
+        if crate::auth::_is_halted(&env) {
+            return Err(ContractError::EmergencyHalted);
         }
+        Ok(twap::moving_average(&twap::read_window(&env, &asset)))
+    }
 
-        let mut sum: i128 = 0;
-        for (_, price) in twap_buffer.iter() {
-            sum = sum.checked_add(price).ok_or(ContractError::PriceMathOverflow)?;
+    /// Single-ledger price-impact guard for borrow entrypoints (issue #970).
+    ///
+    /// Reverts with `ContractError::PriceImpactGuardTriggered` while the guard is
+    /// tripped for `asset`; otherwise returns `Ok(())` so the caller may proceed
+    /// with the borrow. The flag is maintained by `twap::record_and_evaluate` on
+    /// every price write and clears itself once the moving-average deviation
+    /// falls back within 5%, resuming normal vault operations.
+    pub fn check_price_impact_guard(env: Env, asset: Symbol) -> Result<(), ContractError> {
+        if crate::auth::_is_halted(&env) {
+            return Err(ContractError::EmergencyHalted);
         }
+        twap::enforce_price_impact_guard(&env, &asset)
+    }
 
-        Ok(sum.checked_div(len as i128))
+    /// Whether the single-ledger price-impact guard is currently tripped.
+    ///
+    /// Non-reverting companion to [`Self::check_price_impact_guard`] for
+    /// dashboards and pre-flight checks.
+    pub fn is_price_impact_guard_tripped(env: Env, asset: Symbol) -> bool {
+        twap::is_tripped(&env, &asset)
     }
 
     /// Subscribe a contract to receive price update callbacks.
@@ -4401,9 +4758,13 @@ impl PriceOracle {
     /// timestamp so callers can log or display when the window closes.
     pub fn enable_bypass_safety_checks(env: Env, admin: Address) -> Result<u64, ContractError> {
         _require_not_destroyed(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         let expiry = env.ledger().timestamp() + 3_600;
         crate::auth::_set_bypass_safety_checks(&env, expiry);
@@ -4427,7 +4788,9 @@ impl PriceOracle {
     pub fn disable_bypass_safety_checks(env: Env, admin: Address) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         crate::auth::_remove_bypass_safety_checks(&env);
 
@@ -4457,9 +4820,13 @@ impl PriceOracle {
     pub fn set_slash_token(env: Env, admin: Address, token: Address) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         env.storage().persistent().set(&DataKey::SlashToken, &token);
 
@@ -4492,9 +4859,13 @@ impl PriceOracle {
     ) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         env.storage()
             .persistent()
@@ -4532,9 +4903,13 @@ impl PriceOracle {
     pub fn set_gas_tank(env: Env, admin: Address, gas_tank: Address) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         env.storage().persistent().set(&DataKey::GasTank, &gas_tank);
 
@@ -4561,7 +4936,9 @@ impl PriceOracle {
     pub fn stake_tokens(env: Env, relayer: Address, amount: i128) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         relayer.require_auth();
 
         if amount <= 0 {
@@ -4577,10 +4954,10 @@ impl PriceOracle {
         // Transfer tokens from the relayer into the contract.
         // Acquire reentrancy lock before cross-contract call
         crate::reentrancy::acquire_lock(&env);
-        
+
         let token_client = token::Client::new(&env, &token_address);
         token_client.transfer(&relayer, &env.current_contract_address(), &amount);
-        
+
         // Release reentrancy lock after cross-contract call
         crate::reentrancy::release_lock(&env);
 
@@ -4615,7 +4992,9 @@ impl PriceOracle {
     pub fn unstake_tokens(env: Env, relayer: Address, amount: i128) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         relayer.require_auth();
 
         if amount <= 0 {
@@ -4646,10 +5025,10 @@ impl PriceOracle {
         // Return tokens to the relayer.
         // Acquire reentrancy lock before cross-contract call
         crate::reentrancy::acquire_lock(&env);
-        
+
         let token_client = token::Client::new(&env, &token_address);
         token_client.transfer(&env.current_contract_address(), &relayer, &amount);
-        
+
         // Release reentrancy lock after cross-contract call
         crate::reentrancy::release_lock(&env);
 
@@ -4679,12 +5058,16 @@ impl PriceOracle {
         admin: Address,
         relayer: Address,
         missed_blocks: u32,
-    ) -> Result<i128, Error> {
+    ) -> Result<i128, ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         crate::slashing::report_missed_blocks(&env, &relayer, missed_blocks)
     }
@@ -4697,12 +5080,16 @@ impl PriceOracle {
         env: Env,
         admin: Address,
         relayer: Address,
-    ) -> Result<bool, Error> {
+    ) -> Result<bool, ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         admin.require_auth();
-        if !crate::auth::_is_authorized(&env, &admin) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &admin) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         crate::slashing::report_successful_uptime(&env, &relayer)
     }
@@ -4714,7 +5101,7 @@ impl PriceOracle {
 
     /// Get the current multiplier that will scale future slash amounts for the
     /// relayer's consecutive missed blocks.
-    pub fn get_slashing_multiplier(env: Env, relayer: Address) -> Result<i128, Error> {
+    pub fn get_slashing_multiplier(env: Env, relayer: Address) -> Result<i128, ContractError> {
         crate::slashing::get_slash_multiplier(&env, &relayer)
     }
 
@@ -4746,9 +5133,13 @@ impl PriceOracle {
     ) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         _require_initialized(&env)?;
-        if crate::auth::_is_frozen(&env) { return Err(ContractError::ContractFrozen); }
+        if crate::auth::_is_frozen(&env) {
+            return Err(ContractError::ContractFrozen);
+        }
         executor.require_auth();
-        if !crate::auth::_is_authorized(&env, &executor) { return Err(ContractError::NotAuthorized); }
+        if !crate::auth::_is_authorized(&env, &executor) {
+            return Err(ContractError::NotAuthorized);
+        }
 
         crate::slashing::execute_slash_internal(&env, &executor, &bad_relayer, amount)
     }
@@ -4774,12 +5165,12 @@ impl PriceOracle {
         env: Env,
         validator: Address,
         amount: i128,
-    ) -> Result<slashing::UnbondingRequest, Error> {
+    ) -> Result<slashing::UnbondingRequest, ContractError> {
         slashing::request_unbonding(&env, &validator, amount)
     }
 
     /// Release a queued validator stake withdrawal after the delay expires.
-    pub fn release_unbonded_stake(env: Env, validator: Address) -> Result<i128, Error> {
+    pub fn release_unbonded_stake(env: Env, validator: Address) -> Result<i128, ContractError> {
         slashing::release_unbonded_stake(&env, &validator)
     }
 
@@ -4825,19 +5216,13 @@ impl PriceOracle {
     }
 
     /// Trip the global circuit-breaker, instantly dropping all price reads.
-    pub fn trip_circuit_breaker(
-        env: Env,
-        coordinator: Address,
-    ) -> Result<(), ContractError> {
+    pub fn trip_circuit_breaker(env: Env, coordinator: Address) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         crate::admin::trip_circuit_breaker(&env, &coordinator)
     }
 
     /// Reset (lift) the global circuit-breaker, re-enabling price reads.
-    pub fn reset_circuit_breaker(
-        env: Env,
-        coordinator: Address,
-    ) -> Result<(), ContractError> {
+    pub fn reset_circuit_breaker(env: Env, coordinator: Address) -> Result<(), ContractError> {
         _require_not_destroyed(&env)?;
         crate::admin::reset_circuit_breaker(&env, &coordinator)
     }
@@ -4939,7 +5324,7 @@ impl PriceOracle {
         // Get current prices for both assets
         let from_price = Self::get_last_price(env.clone(), from_asset.clone())?;
         let to_price = Self::get_last_price(env.clone(), to_asset.clone())?;
-        
+
         crate::slippage::execute_swap_with_dynamic_slippage(
             &env,
             from_asset,
@@ -4963,7 +5348,7 @@ impl PriceOracle {
         // Get current prices for both assets
         let from_price = Self::get_last_price(env.clone(), from_asset.clone())?;
         let to_price = Self::get_last_price(env.clone(), to_asset.clone())?;
-        
+
         crate::slippage::execute_swap_with_manual_slippage(
             &env,
             from_asset,
@@ -4976,10 +5361,10 @@ impl PriceOracle {
     }
 }
 
+pub mod admin;
 mod asset_symbol;
 mod auth;
 mod callbacks;
-pub mod admin;
 #[cfg(test)]
 mod delegate_tests;
 pub mod math;
@@ -4987,5 +5372,6 @@ mod median;
 pub mod slashing;
 pub mod slippage;
 mod test;
+mod twap;
 mod types;
 mod validation;

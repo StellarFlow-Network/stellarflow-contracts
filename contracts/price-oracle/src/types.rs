@@ -30,6 +30,18 @@ pub enum DataKey {
     Initialized,
     /// TWAP Buffer: Stores last 10 (Timestamp, Price) updates.
     Twap(Symbol),
+    /// Rolling window of the most recent per-ledger prices for an asset.
+    ///
+    /// Backs the single-ledger price-impact guard (issue #970): at most
+    /// `twap::PRICE_WINDOW_LEDGERS` [`PriceWindowEntry`] samples, oldest first.
+    PriceWindow(Symbol),
+    /// Whether the single-ledger price-impact guard is currently tripped for an
+    /// asset.
+    ///
+    /// While `true`, lending/vault contracts must refuse new borrows via
+    /// `PriceOracle::check_price_impact_guard`. The flag clears automatically
+    /// once the moving-average deviation falls back inside the 5% threshold.
+    PriceImpactGuard(Symbol),
     /// Verified price bucket: written only by whitelisted providers / admins.
     /// Internal math and `get_price` default to this bucket.
     VerifiedPrice(Symbol),
@@ -292,6 +304,30 @@ pub struct PriceBuffer {
     pub decimals: u32,
     /// Time-to-live in seconds for this buffer.
     pub ttl: u64,
+}
+
+/// A single per-ledger price sample in the rolling price-impact window.
+///
+/// See [`crate::twap`] and [`DataKey::PriceWindow`].
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PriceWindowEntry {
+    /// Ledger sequence at which `price` was observed.
+    pub ledger_sequence: u32,
+    /// Canonical (verified) price recorded for that ledger.
+    pub price: i128,
+}
+
+/// Rolling window of the most recent per-ledger prices for one asset.
+///
+/// The window holds at most `twap::PRICE_WINDOW_LEDGERS` samples and is the
+/// basis for the 5-ledger moving average `P_ma` used by the single-ledger
+/// price-impact guard.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PriceWindow {
+    /// Samples ordered oldest → newest, capped at `twap::PRICE_WINDOW_LEDGERS`.
+    pub entries: soroban_sdk::Vec<PriceWindowEntry>,
 }
 
 /// Health status of the oracle for the Admin Dashboard.

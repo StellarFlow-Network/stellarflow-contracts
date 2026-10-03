@@ -12,7 +12,7 @@
 //! test-friendly while still exercising the same storage-access patterns a
 //! full pool would use.
 //!
-//! ## TTL extension (the actual deliverable of #768)
+//! ## TTL extension (the actual deliverable of #768, completed by #904)
 //!
 //! Soroban persistent storage entries are subject to expiration: if an entry's
 //! time-to-live (TTL) is not periodically extended, it can enter the
@@ -22,83 +22,89 @@
 //! stretch) could silently expire and then reject its next `swap`/`deposit`/
 //! `withdraw` outright.
 //!
-//! To prevent that, every one of `swap`, `deposit`, and `withdraw` calls
-//! [`bump_pool_ttl`] and [`bump_user_ttl`] *before* reading any pool or user
-//! state, via the shared helpers below. Both helpers are no-ops when the
-//! remaining TTL is still comfortably above [`BUMP_THRESHOLD`], so healthy
-//! pools pay no extra cost; only entries approaching expiration are extended,
-//! out to [`BUMP_AMOUNT`] ledgers.
+//! *Every* entry the pool depends on must be covered, not just the reserves:
+//! the two token addresses and the initialized flag are written once by
+//! `initialize` and only ever read afterwards, so they would archive well
+//! before the reserves that every call rewrites. The contract instance itself
+//! is a persistent entry too. All of those are extended through the shared
+//! [`ttl`] module — [`ttl::extend_instance`] for the instance and
+//! [`ttl::extend_if_present`] for each persistent key — from
+//! [`bump_pool_ttl`]/[`bump_user_ttl`], which run at the top of `initialize`,
+//! `swap`, `deposit`, and `withdraw` *before* any pool or user state is read.
+//! The helpers are no-ops when an entry's remaining TTL is still comfortably
+//! above [`BUMP_THRESHOLD`], so healthy pools pay no extra cost; only entries
+//! approaching expiration are extended, out to [`BUMP_AMOUNT`] ledgers.
 
 use soroban_sdk::{contract, contracterror, contractimpl, panic_with_error, Address, Env};
 
+mod ttl;
 mod types;
 pub use types::{DataKey, PoolReserves};
 
+/// Backwards-compatible aliases for the shared TTL constants in [`ttl`].
+pub use ttl::{BUMP_AMOUNT, BUMP_THRESHOLD};
+
 #[cfg(test)]
 mod test;
-
-/// Number of ledgers below which a persistent entry's TTL is proactively
-/// extended. At roughly 5 seconds/ledger, `518_400` ledgers is ~30 days —
-/// comfortably inside Soroban's minimum persistent TTL window, so any pool or
-/// user record that is touched at least once a month never approaches
-/// archival.
-pub const BUMP_THRESHOLD: u32 = 518_400;
-
-/// Number of ledgers a bumped entry's TTL is extended *to* (from the current
-/// ledger), when the remaining TTL falls below [`BUMP_THRESHOLD`]. At ~5
-/// seconds/ledger, `1_036_800` ledgers is ~60 days, giving a wide safety
-/// margin before the next bump is strictly required.
-pub const BUMP_AMOUNT: u32 = 1_036_800;
 
 /// Error types for the LP pool contract.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
-pub enum Error {
+pub enum ContractError {
     /// The contract has not been initialized yet.
+    /// Recovery steps: Inspect the state for NotInitialized and retry with valid inputs or proper conditions.
     NotInitialized = 1,
     /// The contract has already been initialized.
+    /// Recovery steps: Inspect the state for AlreadyInitialized and retry with valid inputs or proper conditions.
     AlreadyInitialized = 2,
     /// An amount argument was zero or negative where a positive value is required.
+    /// Recovery steps: Inspect the state for ZeroAmount and retry with valid inputs or proper conditions.
     ZeroAmount = 3,
     /// The caller does not hold enough LP shares for this withdrawal.
+    /// Recovery steps: Inspect the state for InsufficientShares and retry with valid inputs or proper conditions.
     InsufficientShares = 4,
     /// The pool does not hold enough reserves to satisfy this operation.
+    /// Recovery steps: Inspect the state for InsufficientLiquidity and retry with valid inputs or proper conditions.
     InsufficientLiquidity = 5,
     /// `token_in` does not match either pooled asset.
+    /// Recovery steps: Inspect the state for InvalidToken and retry with valid inputs or proper conditions.
     InvalidToken = 6,
     /// Resulting swap output is below the caller's `min_amount_out` (slippage guard).
+    /// Recovery steps: Inspect the state for SlippageExceeded and retry with valid inputs or proper conditions.
     SlippageExceeded = 7,
     /// An arithmetic operation would overflow or underflow.
+    /// Recovery steps: Inspect the state for Overflow and retry with valid inputs or proper conditions.
     Overflow = 8,
 }
 
-/// Guard: `Err(Error::NotInitialized)` unless `initialize` has run.
+/// Guard: `Err(ContractError::NotInitialized)` unless `initialize` has run.
 ///
 /// Returns a `Result` (rather than panicking) so that entrypoints calling
 /// this via `?` surface the failure through the SDK's normal
-/// `Result<T, Error>` dispatch path instead of an actual Rust panic —
+/// `Result<T, ContractError>` dispatch path instead of an actual Rust panic —
 /// avoiding a panic/unwind round trip through the host for a routine,
 /// fully-expected validation failure.
-fn require_initialized(env: &Env) -> Result<(), Error> {
+fn require_initialized(env: &Env) -> Result<(), ContractError> {
     if !env.storage().persistent().has(&DataKey::Initialized) {
-        return Err(Error::NotInitialized);
+        return Err(ContractError::NotInitialized);
     }
     Ok(())
 }
 
-/// Extend the pool reserves entry's TTL if it is running low.
+/// Extend every pool-level entry a state-changing call depends on.
 ///
-/// Called at the top of every state-changing entrypoint, before any pool
-/// state is read, so an actively-used pool's reserves record never drifts
-/// into the archived state. A no-op if the entry does not exist yet (i.e.
-/// before `initialize`) or if its remaining TTL is still above
-/// [`BUMP_THRESHOLD`].
+/// Covers the contract instance, the reserves, both token addresses, and the
+/// initialized flag. Called at the top of `initialize` and of every
+/// state-changing entrypoint, before any pool state is read, so an
+/// actively-used pool never lets them drift into the archived state. Each
+/// individual extension is a no-op while the entry is still healthy.
 fn bump_pool_ttl(env: &Env) {
-    let storage = env.storage().persistent();
-    if storage.has(&DataKey::Reserves) {
-        storage.extend_ttl(&DataKey::Reserves, BUMP_THRESHOLD, BUMP_AMOUNT);
-    }
+    ttl::extend_instance(env);
+    ttl::extend_if_present(env, &DataKey::Reserves);
+    ttl::extend_if_present(env, &DataKey::TokenA);
+    ttl::extend_if_present(env, &DataKey::TokenB);
+    ttl::extend_if_present(env, &DataKey::Initialized);
 }
 
 /// Extend a user's share-record TTL if it is running low.
@@ -108,11 +114,7 @@ fn bump_pool_ttl(env: &Env) {
 /// ever `deposit`) or if its remaining TTL is still above
 /// [`BUMP_THRESHOLD`].
 fn bump_user_ttl(env: &Env, user: &Address) {
-    let storage = env.storage().persistent();
-    let key = DataKey::UserShares(user.clone());
-    if storage.has(&key) {
-        storage.extend_ttl(&key, BUMP_THRESHOLD, BUMP_AMOUNT);
-    }
+    ttl::extend_if_present(env, &DataKey::UserShares(user.clone()));
 }
 
 /// Read the current pool reserves, panicking if the pool has not been initialized.
@@ -120,7 +122,7 @@ fn read_reserves(env: &Env) -> PoolReserves {
     env.storage()
         .persistent()
         .get(&DataKey::Reserves)
-        .unwrap_or_else(|| panic_with_error!(env, Error::NotInitialized))
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::NotInitialized))
 }
 
 fn write_reserves(env: &Env, reserves: &PoolReserves) {
@@ -165,9 +167,9 @@ impl LpPool {
     /// Initialize the pool with the two pooled asset addresses.
     ///
     /// Can only be called once. Sets both reserves and total shares to zero.
-    pub fn initialize(env: Env, token_a: Address, token_b: Address) -> Result<(), Error> {
+    pub fn initialize(env: Env, token_a: Address, token_b: Address) -> Result<(), ContractError> {
         if env.storage().persistent().has(&DataKey::Initialized) {
-            return Err(Error::AlreadyInitialized);
+            return Err(ContractError::AlreadyInitialized);
         }
 
         env.storage().persistent().set(&DataKey::TokenA, &token_a);
@@ -182,6 +184,11 @@ impl LpPool {
         );
         env.storage().persistent().set(&DataKey::Initialized, &true);
 
+        // Seal in the freshly written entries — and the contract instance
+        // itself — for a full TTL window, so an initialized pool that is not
+        // used immediately does not archive before its first deposit.
+        bump_pool_ttl(&env);
+
         Ok(())
     }
 
@@ -195,7 +202,7 @@ impl LpPool {
     /// their fair share.
     ///
     /// Requires `user.require_auth()`.
-    pub fn deposit(env: Env, user: Address, amount_a: i128, amount_b: i128) -> Result<i128, Error> {
+    pub fn deposit(env: Env, user: Address, amount_a: i128, amount_b: i128) -> Result<i128, ContractError> {
         // TTL extension MUST happen before any pool/user state is read.
         bump_pool_ttl(&env);
         bump_user_ttl(&env, &user);
@@ -203,51 +210,51 @@ impl LpPool {
         user.require_auth();
 
         if amount_a <= 0 || amount_b <= 0 {
-            return Err(Error::ZeroAmount);
+            return Err(ContractError::ZeroAmount);
         }
 
         require_initialized(&env)?;
         let mut reserves = read_reserves(&env);
 
         let minted_shares = if reserves.total_shares == 0 {
-            let product = amount_a.checked_mul(amount_b).ok_or(Error::Overflow)?;
+            let product = amount_a.checked_mul(amount_b).ok_or(ContractError::Overflow)?;
             isqrt(product)
         } else {
             let shares_from_a = amount_a
                 .checked_mul(reserves.total_shares)
-                .ok_or(Error::Overflow)?
+                .ok_or(ContractError::Overflow)?
                 .checked_div(reserves.reserve_a)
-                .ok_or(Error::Overflow)?;
+                .ok_or(ContractError::Overflow)?;
             let shares_from_b = amount_b
                 .checked_mul(reserves.total_shares)
-                .ok_or(Error::Overflow)?
+                .ok_or(ContractError::Overflow)?
                 .checked_div(reserves.reserve_b)
-                .ok_or(Error::Overflow)?;
+                .ok_or(ContractError::Overflow)?;
             shares_from_a.min(shares_from_b)
         };
 
         if minted_shares <= 0 {
-            return Err(Error::ZeroAmount);
+            return Err(ContractError::ZeroAmount);
         }
 
         reserves.reserve_a = reserves
             .reserve_a
             .checked_add(amount_a)
-            .ok_or(Error::Overflow)?;
+            .ok_or(ContractError::Overflow)?;
         reserves.reserve_b = reserves
             .reserve_b
             .checked_add(amount_b)
-            .ok_or(Error::Overflow)?;
+            .ok_or(ContractError::Overflow)?;
         reserves.total_shares = reserves
             .total_shares
             .checked_add(minted_shares)
-            .ok_or(Error::Overflow)?;
+            .ok_or(ContractError::Overflow)?;
         write_reserves(&env, &reserves);
 
         let prior_shares = read_user_shares(&env, &user);
         let new_shares = prior_shares
             .checked_add(minted_shares)
-            .ok_or(Error::Overflow)?;
+            .ok_or(ContractError::Overflow)?;
         write_user_shares(&env, &user, new_shares);
 
         Ok(minted_shares)
@@ -265,7 +272,7 @@ impl LpPool {
         user.require_auth();
 
         if shares <= 0 {
-            return Err(Error::ZeroAmount);
+            return Err(ContractError::ZeroAmount);
         }
 
         require_initialized(&env)?;
@@ -273,44 +280,44 @@ impl LpPool {
 
         let user_shares = read_user_shares(&env, &user);
         if shares > user_shares {
-            return Err(Error::InsufficientShares);
+            return Err(ContractError::InsufficientShares);
         }
 
         let amount_a = reserves
             .reserve_a
             .checked_mul(shares)
-            .ok_or(Error::Overflow)?
+            .ok_or(ContractError::Overflow)?
             .checked_div(reserves.total_shares)
-            .ok_or(Error::Overflow)?;
+            .ok_or(ContractError::Overflow)?;
         let amount_b = reserves
             .reserve_b
             .checked_mul(shares)
-            .ok_or(Error::Overflow)?
+            .ok_or(ContractError::Overflow)?
             .checked_div(reserves.total_shares)
-            .ok_or(Error::Overflow)?;
+            .ok_or(ContractError::Overflow)?;
 
         if amount_a <= 0 || amount_b <= 0 {
-            return Err(Error::ZeroAmount);
+            return Err(ContractError::ZeroAmount);
         }
         if amount_a > reserves.reserve_a || amount_b > reserves.reserve_b {
-            return Err(Error::InsufficientLiquidity);
+            return Err(ContractError::InsufficientLiquidity);
         }
 
         reserves.reserve_a = reserves
             .reserve_a
             .checked_sub(amount_a)
-            .ok_or(Error::Overflow)?;
+            .ok_or(ContractError::Overflow)?;
         reserves.reserve_b = reserves
             .reserve_b
             .checked_sub(amount_b)
-            .ok_or(Error::Overflow)?;
+            .ok_or(ContractError::Overflow)?;
         reserves.total_shares = reserves
             .total_shares
             .checked_sub(shares)
-            .ok_or(Error::Overflow)?;
+            .ok_or(ContractError::Overflow)?;
         write_reserves(&env, &reserves);
 
-        let remaining_shares = user_shares.checked_sub(shares).ok_or(Error::Overflow)?;
+        let remaining_shares = user_shares.checked_sub(shares).ok_or(ContractError::Overflow)?;
         write_user_shares(&env, &user, remaining_shares);
 
         Ok((amount_a, amount_b))
@@ -319,7 +326,7 @@ impl LpPool {
     /// Swap `amount_in` of `token_in` (must be either pooled asset) for the
     /// other asset, using the constant-product `x*y=k` formula with no fee.
     ///
-    /// Reverts with `Error::SlippageExceeded` if the computed output is below
+    /// Reverts with `ContractError::SlippageExceeded` if the computed output is below
     /// `min_amount_out`.
     ///
     /// Requires `user.require_auth()`.
@@ -329,7 +336,7 @@ impl LpPool {
         token_in: Address,
         amount_in: i128,
         min_amount_out: i128,
-    ) -> Result<i128, Error> {
+    ) -> Result<i128, ContractError> {
         // TTL extension MUST happen before any pool/user state is read.
         bump_pool_ttl(&env);
         bump_user_ttl(&env, &user);
@@ -337,7 +344,7 @@ impl LpPool {
         user.require_auth();
 
         if amount_in <= 0 {
-            return Err(Error::ZeroAmount);
+            return Err(ContractError::ZeroAmount);
         }
 
         require_initialized(&env)?;
@@ -347,43 +354,43 @@ impl LpPool {
             .storage()
             .persistent()
             .get(&DataKey::TokenA)
-            .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized));
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
         let token_b: Address = env
             .storage()
             .persistent()
             .get(&DataKey::TokenB)
-            .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized));
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
 
         let (reserve_in, reserve_out, a_in) = if token_in == token_a {
             (reserves.reserve_a, reserves.reserve_b, true)
         } else if token_in == token_b {
             (reserves.reserve_b, reserves.reserve_a, false)
         } else {
-            return Err(Error::InvalidToken);
+            return Err(ContractError::InvalidToken);
         };
 
         if reserve_in <= 0 || reserve_out <= 0 {
-            return Err(Error::InsufficientLiquidity);
+            return Err(ContractError::InsufficientLiquidity);
         }
 
         // amount_out = reserve_out * amount_in / (reserve_in + amount_in)
         // Integer division always rounds the output down, so the pool's
         // constant product k can only stay the same or grow — it never
         // decreases from a swap.
-        let new_reserve_in = reserve_in.checked_add(amount_in).ok_or(Error::Overflow)?;
-        let numerator = reserve_out.checked_mul(amount_in).ok_or(Error::Overflow)?;
+        let new_reserve_in = reserve_in.checked_add(amount_in).ok_or(ContractError::Overflow)?;
+        let numerator = reserve_out.checked_mul(amount_in).ok_or(ContractError::Overflow)?;
         let amount_out = numerator
             .checked_div(new_reserve_in)
-            .ok_or(Error::Overflow)?;
+            .ok_or(ContractError::Overflow)?;
 
         if amount_out <= 0 {
-            return Err(Error::ZeroAmount);
+            return Err(ContractError::ZeroAmount);
         }
         if amount_out < min_amount_out {
-            return Err(Error::SlippageExceeded);
+            return Err(ContractError::SlippageExceeded);
         }
         if amount_out > reserve_out {
-            return Err(Error::InsufficientLiquidity);
+            return Err(ContractError::InsufficientLiquidity);
         }
 
         if a_in {
@@ -391,13 +398,13 @@ impl LpPool {
             reserves.reserve_b = reserves
                 .reserve_b
                 .checked_sub(amount_out)
-                .ok_or(Error::Overflow)?;
+                .ok_or(ContractError::Overflow)?;
         } else {
             reserves.reserve_b = new_reserve_in;
             reserves.reserve_a = reserves
                 .reserve_a
                 .checked_sub(amount_out)
-                .ok_or(Error::Overflow)?;
+                .ok_or(ContractError::Overflow)?;
         }
         write_reserves(&env, &reserves);
 
@@ -426,12 +433,12 @@ impl LpPool {
             .storage()
             .persistent()
             .get(&DataKey::TokenA)
-            .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized));
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
         let token_b = env
             .storage()
             .persistent()
             .get(&DataKey::TokenB)
-            .unwrap_or_else(|| panic_with_error!(&env, Error::NotInitialized));
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotInitialized));
         (token_a, token_b)
     }
 }

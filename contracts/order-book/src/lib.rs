@@ -26,10 +26,15 @@ enum DataKey {
 #[derive(Copy, Clone, PartialEq, Eq)]
 #[repr(u32)]
 pub enum ContractError {
+    /// Recovery steps: Inspect the state for InvalidAmount and retry with valid inputs or proper conditions.
     InvalidAmount = 1,
+    /// Recovery steps: Inspect the state for OrderNotFound and retry with valid inputs or proper conditions.
     OrderNotFound = 2,
+    /// Recovery steps: Inspect the state for NotOrderMaker and retry with valid inputs or proper conditions.
     NotOrderMaker = 3,
+    /// Recovery steps: Inspect the state for NoHeartbeat and retry with valid inputs or proper conditions.
     NoHeartbeat = 4,
+    /// Recovery steps: Inspect the state for HeartbeatStillFresh and retry with valid inputs or proper conditions.
     HeartbeatStillFresh = 5,
 }
 

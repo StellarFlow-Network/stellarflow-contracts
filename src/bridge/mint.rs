@@ -150,18 +150,56 @@ pub fn mint(
     to: Address,
     amount: i128,
 ) -> Result<i128, ContractError> {
-    let _guard = crate::security::reentrancy::ReentrancyGuard::new(env)?;
+    mint_impl(env, &controller, &asset_code, &to, amount, true, false)
+}
+
+/// Mint variant used by the cross-chain attestation guard (Issue #910).
+///
+/// Identical supply-cap and rate-limit enforcement as [`mint`], but the
+/// controller's `require_auth` is satisfied by the validator quorum that
+/// authenticated the bridge attestation rather than a direct controller
+/// signature — so the mint cannot be blocked by a missing controller auth
+/// entry while the same caps still apply.
+pub fn mint_for_bridge(
+    env: &Env,
+    controller: &Address,
+    asset_code: &Symbol,
+    to: &Address,
+    amount: i128,
+) -> Result<i128, ContractError> {
+    mint_impl(env, controller, asset_code, to, amount, false, true)
+}
+
+fn mint_impl(
+    env: &Env,
+    controller: &Address,
+    asset_code: &Symbol,
+    to: &Address,
+    amount: i128,
+    require_controller_auth: bool,
+    acquire_reentrancy_guard: bool,
+) -> Result<i128, ContractError> {
+    // The public `mint_wrapped` entrypoint already holds the reentrancy
+    // guard (instance-storage flag), so internal callers must NOT acquire
+    // it a second time — the flag is not re-entrant.
+    let _guard = if acquire_reentrancy_guard {
+        Some(crate::security::reentrancy::ReentrancyGuard::new(env)?)
+    } else {
+        None
+    };
     if amount <= 0 {
         return Err(ContractError::BridgeInvalidAmount);
     }
-    let mut config = load_config(env, &asset_code)?;
-    if config.controller != controller {
+    let mut config = load_config(env, asset_code)?;
+    if config.controller != *controller {
         return Err(ContractError::BridgeNotController);
     }
-    controller.require_auth();
+    if require_controller_auth {
+        controller.require_auth();
+    }
 
     // Invariant check: verify balance consistency before state change
-    assert_balance_invariant(env, &asset_code)?;
+    assert_balance_invariant(env, asset_code)?;
 
     let new_total_supply = config
         .total_supply
@@ -177,7 +215,7 @@ pub fn mint(
         config.max_supply,
     )?;
 
-    let key = balance_key(&asset_code, &to);
+    let key = balance_key(asset_code, to);
     let balance: i128 = env.storage().persistent().get(&key).unwrap_or(0);
     let new_balance = balance.checked_add(amount).ok_or(ContractError::MathOverflow)?;
     env.storage().persistent().set(&key, &new_balance);
@@ -196,7 +234,7 @@ pub fn mint(
     );
 
     // Invariant check: verify balance consistency after state change
-    assert_balance_invariant(env, &asset_code)?;
+    assert_balance_invariant(env, asset_code)?;
 
     Ok(new_total_supply)
 }
@@ -210,9 +248,9 @@ pub fn burn(
     from: Address,
     amount: i128,
 ) -> Result<i128, ContractError> {
-    let _guard = crate::security::reentrancy::ReentrancyGuard::new(env)?;
+    // NOTE: no reentrancy guard here — the public `burn_wrapped`
+    // entrypoint already holds the non-reentrant instance-storage flag.
     if amount <= 0 {
-
         return Err(ContractError::BridgeInvalidAmount);
     }
     let mut config = load_config(env, &asset_code)?;

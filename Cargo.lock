@@ -731,6 +731,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "multisig-weight-guard"
+version = "0.0.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "num-bigint"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1055,6 +1062,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "shielded-remittance-escrow"
+version = "0.0.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1318,6 +1332,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "stellarflow-benchmarks"
+version = "0.0.0"
+dependencies = [
+ "soroban-sdk",
+ "stellarflow-contracts",
+]
+
+[[package]]
 name = "stellarflow-contracts"
 version = "0.1.0"
 dependencies = [
@@ -1326,6 +1348,7 @@ dependencies = [
  "libm",
  "soroban-sdk",
  "soroban-token-sdk",
+ "stellarflow-contracts",
 ]
 
 [[package]]
@@ -1417,6 +1440,13 @@ checksum = "d245f478577f809a851594d02313b640fb437e0bb33866753cff937863096954"
 [[package]]
 name = "vault-health-monitor"
 version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "vault-liquidation-inspector"
+version = "0.0.0"
 dependencies = [
  "soroban-sdk",
 ]
@@ -1571,6 +1601,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7837d08f69c77cf6b07689544538e017c1bfcf57e34b4c0ff58e6c2cd3b37091"
 dependencies = [
  "windows-link",
+]
+
+[[package]]
+name = "yield-unwind"
+version = "0.0.0"
+dependencies = [
+ "soroban-sdk",
 ]
 
 [[package]]

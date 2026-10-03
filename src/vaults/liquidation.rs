@@ -6,8 +6,17 @@ use crate::ContractError;
 pub const BPS_DENOMINATOR: u128 = 10_000;
 /// A vault is eligible for liquidation below 110% collateralization.
 pub const DEFAULT_LIQUIDATION_THRESHOLD_BPS: u32 = 11_000;
-/// Liquidators receive 5% of the confiscated collateral.
+/// Floor bonus: a liquidator receives at least this share of the confiscated
+/// collateral, even for a position sitting just below the threshold.
 pub const LIQUIDATOR_BONUS_BPS: u32 = 500;
+
+/// Extra bonus that scales in as the position degrades, reached in full at a
+/// health factor of zero.
+pub const MAX_LIQUIDATOR_DEGRADATION_BPS: u32 = 2_000;
+
+/// Hard ceiling on the liquidator's total share, so a bonus can never consume
+/// the whole position and leave the protocol reserve empty.
+pub const MAX_TOTAL_LIQUIDATOR_BPS: u32 = 5_000;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -52,6 +61,28 @@ fn threshold(position: &VaultPosition) -> u128 {
     }
 }
 
+/// Liquidator share for a position, in basis points (#932).
+///
+/// `P_liq = P_base + (1 - H) * P_bonus`
+///
+/// `health_factor_bps` is the ratio scaled by [`BPS_DENOMINATOR`], so 10_000 is
+/// 100% health. The degradation term is guarded rather than computed blindly:
+/// health can exceed 10_000 bps and still be liquidatable, because a position
+/// at 109% is under a 110% threshold, and an unsigned subtraction there would
+/// wrap to an enormous number.
+pub fn scaled_liquidator_bonus_bps(health_factor_bps: u128) -> u128 {
+    let base = LIQUIDATOR_BONUS_BPS as u128;
+
+    let degraded = if health_factor_bps >= BPS_DENOMINATOR {
+        0
+    } else {
+        ((BPS_DENOMINATOR - health_factor_bps) * MAX_LIQUIDATOR_DEGRADATION_BPS as u128)
+            / BPS_DENOMINATOR
+    };
+
+    core::cmp::min(base + degraded, MAX_TOTAL_LIQUIDATOR_BPS as u128)
+}
+
 pub fn liquidate(
     _env: &Env,
     position: &VaultPosition,
@@ -67,8 +98,12 @@ pub fn liquidate(
         });
     }
 
+    // The deeper underwater the position is, the larger the incentive a
+    // liquidator gets for taking it off the books.
+    let bonus_bps = scaled_liquidator_bonus_bps(hf);
+
     let reward = purchase_collateral
-        .checked_mul(LIQUIDATOR_BONUS_BPS as u128)
+        .checked_mul(bonus_bps)
         .ok_or(ContractError::MathOverflow)?
         .checked_div(BPS_DENOMINATOR)
         .ok_or(ContractError::DivisionByZero)?;
@@ -82,6 +117,24 @@ pub fn liquidate(
         liquidator_reward: reward,
         protocol_reserve,
     })
+}
+
+/// Zero-loss invariant for the liquidation ledger (#925).
+///
+/// Confiscated collateral is only ever split, never created or destroyed, so
+/// the liquidator reward plus the protocol reserve must equal exactly the
+/// collateral that entered the split. A non-liquidation must move nothing at
+/// all, otherwise a rejected liquidation would still book a transfer.
+pub fn conserves_collateral(result: &LiquidationResult, purchase_collateral: u128) -> bool {
+    if !result.liquidated {
+        return result.liquidator_reward == 0 && result.protocol_reserve == 0;
+    }
+
+    result
+        .liquidator_reward
+        .checked_add(result.protocol_reserve)
+        .map(|sum| sum == purchase_collateral)
+        .unwrap_or(false)
 }
 
 /// Price a vault using the oracle's verified `get_twap(Symbol)` feed before
@@ -130,6 +183,127 @@ fn read_twap(env: &Env, oracle: &Address, asset: &Symbol) -> Result<i128, Contra
     }
 }
 
+/// Health factor threshold below which a vault position is considered distressed (H < 1.05 or 10,500 bps).
+pub const DISTRESSED_THRESHOLD_BPS: u128 = 10_500;
+
+/// Discounted swap fee in basis points applied during auto-deleveraging (e.g. 0.10% = 10 bps).
+pub const DISCOUNTED_SWAP_FEE_BPS: u32 = 10;
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AutoDeleverageResult {
+    pub deleveraged: bool,
+    pub initial_health_factor: u128,
+    pub updated_health_factor: u128,
+    pub collateral_converted: u128,
+    pub debt_cleared: u128,
+    pub fee_applied_bps: u32,
+    pub remaining_collateral_value: u128,
+    pub remaining_borrowed_value: u128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct VaultDeleveragedEvent {
+    pub owner: Address,
+    pub initial_health_factor: u128,
+    pub updated_health_factor: u128,
+    pub collateral_converted: u128,
+    pub debt_cleared: u128,
+}
+
+/// Automatically convert collateral assets to pay off outstanding debt shares
+/// when health factor H < 1.05 (10,500 bps).
+/// Applies discounted swap fee to encourage rapid debt clearance,
+/// updates position collateral/borrowed values, and emits VaultDeleveraged event.
+pub fn auto_deleverage(
+    env: &Env,
+    position: &mut VaultPosition,
+    collateral_conversion_target: u128,
+) -> Result<AutoDeleverageResult, ContractError> {
+    let initial_hf = health_factor(position)?;
+
+    if initial_hf >= DISTRESSED_THRESHOLD_BPS || position.borrowed_value == 0 {
+        return Ok(AutoDeleverageResult {
+            deleveraged: false,
+            initial_health_factor: initial_hf,
+            updated_health_factor: initial_hf,
+            collateral_converted: 0,
+            debt_cleared: 0,
+            fee_applied_bps: 0,
+            remaining_collateral_value: position.collateral_value,
+            remaining_borrowed_value: position.borrowed_value,
+        });
+    }
+
+    let collateral_to_convert = if collateral_conversion_target > 0 {
+        core::cmp::min(collateral_conversion_target, position.collateral_value)
+    } else {
+        position.collateral_value
+    };
+
+    let fee = collateral_to_convert
+        .checked_mul(DISCOUNTED_SWAP_FEE_BPS as u128)
+        .ok_or(ContractError::MathOverflow)?
+        .checked_div(BPS_DENOMINATOR)
+        .ok_or(ContractError::DivisionByZero)?;
+
+    let net_proceeds = collateral_to_convert
+        .checked_sub(fee)
+        .ok_or(ContractError::MathOverflow)?;
+
+    let debt_cleared = core::cmp::min(net_proceeds, position.borrowed_value);
+
+    let actual_collateral_converted = if debt_cleared == net_proceeds {
+        collateral_to_convert
+    } else {
+        debt_cleared
+            .checked_mul(BPS_DENOMINATOR)
+            .ok_or(ContractError::MathOverflow)?
+            .checked_div(
+                BPS_DENOMINATOR
+                    .checked_sub(DISCOUNTED_SWAP_FEE_BPS as u128)
+                    .ok_or(ContractError::MathOverflow)?,
+            )
+            .ok_or(ContractError::DivisionByZero)?
+    };
+
+    let actual_collateral_converted = core::cmp::min(actual_collateral_converted, position.collateral_value);
+
+    position.collateral_value = position
+        .collateral_value
+        .checked_sub(actual_collateral_converted)
+        .ok_or(ContractError::MathOverflow)?;
+
+    position.borrowed_value = position
+        .borrowed_value
+        .checked_sub(debt_cleared)
+        .ok_or(ContractError::MathOverflow)?;
+
+    let updated_hf = health_factor(position)?;
+
+    let event = VaultDeleveragedEvent {
+        owner: position.owner.clone(),
+        initial_health_factor: initial_hf,
+        updated_health_factor: updated_hf,
+        collateral_converted: actual_collateral_converted,
+        debt_cleared,
+    };
+
+    crate::events::emit_vault_deleveraged(env, event);
+
+    Ok(AutoDeleverageResult {
+        deleveraged: true,
+        initial_health_factor: initial_hf,
+        updated_health_factor: updated_hf,
+        collateral_converted: actual_collateral_converted,
+        debt_cleared,
+        fee_applied_bps: DISCOUNTED_SWAP_FEE_BPS,
+        remaining_collateral_value: position.collateral_value,
+        remaining_borrowed_value: position.borrowed_value,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,5 +341,32 @@ mod tests {
         let result = liquidate(&env, &position(&env, 110, 100), 100).unwrap();
         assert!(!result.liquidated);
         assert_eq!(result.liquidator_reward, 0);
+    }
+
+    #[test]
+    fn auto_deleverage_triggers_when_health_factor_below_105_percent() {
+        let env = Env::default();
+        let mut pos = position(&env, 104, 100);
+        assert_eq!(health_factor(&pos).unwrap(), 10_400);
+
+        let res = auto_deleverage(&env, &mut pos, 50).unwrap();
+        assert!(res.deleveraged);
+        assert_eq!(res.initial_health_factor, 10_400);
+        assert!(res.updated_health_factor > res.initial_health_factor);
+        assert!(res.collateral_converted > 0);
+        assert!(res.debt_cleared > 0);
+        assert_eq!(res.fee_applied_bps, DISCOUNTED_SWAP_FEE_BPS);
+    }
+
+    #[test]
+    fn auto_deleverage_skips_when_healthy() {
+        let env = Env::default();
+        let mut pos = position(&env, 105, 100);
+        assert_eq!(health_factor(&pos).unwrap(), 10_500);
+
+        let res = auto_deleverage(&env, &mut pos, 50).unwrap();
+        assert!(!res.deleveraged);
+        assert_eq!(res.collateral_converted, 0);
+        assert_eq!(res.debt_cleared, 0);
     }
 }
