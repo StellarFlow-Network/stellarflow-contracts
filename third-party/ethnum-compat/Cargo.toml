@@ -1,0 +1,25 @@
+# Compatibility shim for `ethnum`.
+#
+# `soroban-env-common 20.0.0` pins `ethnum = "=1.5.0"`. ethnum 1.5.0's
+# `tfie()` returned a `TryFromIntError` via `mem::transmute(())`, which stopped
+# compiling when `TryFromIntError` became non-zero-sized on current stable Rust
+# (hard error E0512). Upstream fixed this in ethnum 1.5.3, but the `=1.5.0` pin
+# means Cargo can never select it.
+#
+# This crate advertises the pinned `1.5.0` version (so the pin is satisfied) and
+# re-exports the fixed upstream implementation. It is wired up in the workspace
+# root via `[patch.crates-io]`. See README.md for the full rationale.
+[package]
+name = "ethnum"
+version = "1.5.0"
+edition = "2021"
+publish = false
+description = "Compatibility shim that re-exports upstream ethnum for the =1.5.0 pin in soroban-env-common 20.0.0"
+
+[lib]
+# Same shape as upstream: `no_std`, no crate-type overrides.
+path = "src/lib.rs"
+
+[dependencies]
+# The fixed upstream release (first version with the safe error constructors).
+ethnum_upstream = { package = "ethnum", git = "https://github.com/nlordell/ethnum-rs", tag = "v1.5.3" }

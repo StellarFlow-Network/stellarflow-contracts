@@ -7,19 +7,6 @@ pub enum ProposalError {
     ProposalExpired,
 }
 
-impl core::fmt::Display for ProposalError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            ProposalError::ProposalExpired => write!(
-                f,
-                "Proposal expired before reaching the approval threshold"
-            ),
-        }
-    }
-}
-
-impl core::error::Error for ProposalError {}
-
 /// Maximum time (in seconds) a proposal can remain active
 /// after its creation before it expires.
 pub const PROPOSAL_EXPIRY_SECONDS: i64 = 7 * 24 * 60 * 60;

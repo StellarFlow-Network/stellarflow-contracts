@@ -14,6 +14,10 @@ pub enum ProposalStatus {
     Approved,
     /// Proposal expired before reaching the threshold.
     Expired,
+    /// Proposal was executed (alias / governance variant).
+    Executed,
+    /// Proposal was rejected.
+    Rejected,
 }
 
 /// Persistent approval state tracked for a multi-sig proposal.
@@ -36,4 +40,6 @@ pub struct ProposalState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProposalStorageKey {
     Proposal(Address),
+    /// Votes/approvals sub-record for a proposal.
+    Votes(Address),
 }

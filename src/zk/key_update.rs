@@ -114,7 +114,7 @@ pub fn queue_verification_key_update(
     schema: ProvingKeySchema,
 ) -> Result<ZKVerificationKeyUpdate, ContractError> {
     // ── Structural integrity: reject malformed material up-front. ─────────
-    verifier::validate_verification_key(&vkey)?;
+    verifier::register_verification_key(env, &vkey)?;
     proving_key::validate_proving_key(&proving_key, &schema)?;
 
     // ── One in-flight update per circuit. ────────────────────────────────
@@ -201,7 +201,7 @@ pub fn execute_verification_key_update(
     }
 
     // ── Re-validate structural integrity before committing. ──────────────
-    verifier::validate_verification_key(&update.vkey)?;
+    verifier::register_verification_key(env, &update.vkey)?;
     proving_key::validate_proving_key(&update.proving_key, &update.schema)?;
 
     // ── Commit to the on-chain verification-key registry. ────────────────
