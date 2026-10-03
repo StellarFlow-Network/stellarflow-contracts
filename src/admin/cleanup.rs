@@ -16,6 +16,7 @@ use crate::{
     storage::FeedStakeValue,
     AssetId, ContractData, ContractError, StakingStorageKey, DATA_KEY,
 };
+use crate::proposal::{ProposalState, ProposalStatus, ProposalStorageKey};
 
 // ---------------------------------------------------------------------------
 // Public key descriptor — tells cleanup which storage slot to inspect

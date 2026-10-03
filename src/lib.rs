@@ -8,6 +8,35 @@ use soroban_sdk::{
 /// Replaces heavy Symbol identifiers in high-frequency paths.
 pub type AssetId = u32;
 
+/// A nullable Address wrapper used in AMM circuit-breaker state to record
+/// which address (if any) triggered the freeze. Stored as a `#[contracttype]`
+/// enum so it round-trips through Soroban ledger storage.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub enum OptionalAddress {
+    /// No address is set.
+    None,
+    /// An address is set.
+    Some(Address),
+}
+
+impl OptionalAddress {
+    /// Construct from a Rust `Option<Address>`.
+    pub fn from_option(opt: Option<Address>) -> Self {
+        match opt {
+            None => OptionalAddress::None,
+            Some(a) => OptionalAddress::Some(a),
+        }
+    }
+    /// Convert back to a Rust `Option<Address>`.
+    pub fn into_option(self) -> Option<Address> {
+        match self {
+            OptionalAddress::None => None,
+            OptionalAddress::Some(a) => Some(a),
+        }
+    }
+}
+
 /// Convert a currency Symbol to a numeric AssetId using FNV-1a hash.
 /// This provides deterministic mapping while minimizing gas costs.
 pub fn symbol_to_asset_id(symbol: &Symbol) -> AssetId {
@@ -73,6 +102,7 @@ pub mod escrow;
 pub mod config;
 pub mod consensus;
 pub mod kernel;
+pub mod proposal;
 pub use kernel::instance;
 pub mod errors;
 pub mod events;
@@ -303,6 +333,44 @@ pub enum ContractError {
     TooManyActiveHtlcs = 140,
     UpgradeHealthCheckFailed = 141,
     ZeroSwapAmount = 142,
+    /// A liquidity position was not found for the given tick range.
+    PositionNotFound = 143,
+    /// The tick range provided is invalid (lower >= upper, or out of bounds).
+    InvalidTickRange = 144,
+    /// A liquidity position already exists for this owner/tick-range pair.
+    PositionAlreadyExists = 145,
+    /// The caller does not own the liquidity position being modified.
+    PositionNotOwned = 146,
+    /// A position cannot be transferred to its current owner.
+    PositionTransferToSelf = 147,
+    /// Position collateral is locked and cannot be transferred.
+    PositionCollateralLocked = 148,
+    /// Caller is not the designated emergency guardian.
+    NotEmergencyGuardian = 149,
+    /// Bridge cap: collateral token is not valid for this cap configuration.
+    BridgeCapInvalidCollateral = 150,
+    /// Bridge cap: cap configuration is structurally invalid.
+    BridgeCapInvalidConfig = 151,
+    /// Bridge cap: amount is zero or otherwise invalid.
+    BridgeCapInvalidAmount = 152,
+    /// Bridge cap: the requested mint/transfer would exceed the bridge cap.
+    BridgeCapExceeded = 153,
+    /// Bridge cap: insufficient collateral to satisfy the cap requirement.
+    BridgeCapInsufficientCollateral = 154,
+    /// Bridge cap: position is under-collateralized relative to the cap.
+    BridgeCapUndercollateralized = 155,
+    /// Protocol fee would exceed the hard cap governance limit.
+    ProtocolFeeCapExceeded = 156,
+    /// Anchor assignments are currently paused by governance.
+    AnchorAssignmentsPaused = 157,
+    /// Anchor position is under-collateralized.
+    AnchorUndercollateralized = 158,
+    /// Escrow is in an unexpected state for this operation.
+    InvalidEscrowState = 159,
+    /// Proving key is missing or structurally invalid.
+    InvalidProvingKey = 160,
+    /// ZK public inputs are missing, malformed, or out of range.
+    InvalidZKPublicInputs = 161,
 }
 
 impl ContractError {

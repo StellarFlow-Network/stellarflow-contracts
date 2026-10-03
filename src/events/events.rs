@@ -200,6 +200,15 @@ pub const EV_ANCHOR_PAYOUT: Symbol = symbol_short!("anc_paid");
 /// automatic refund of locked funds to the sender.
 pub const EV_PAYOUT_TIMEOUT: Symbol = symbol_short!("pay_tmout");
 
+/// Fees: the protocol fee range was changed by governance.
+pub const EV_PROTOCOL_FEE_CHANGED: Symbol = symbol_short!("fee_chg");
+
+/// Fees: the protocol fee was clamped to the floor during recalculation.
+pub const EV_PROTOCOL_FEE_FLOOR_ENFORCED: Symbol = symbol_short!("fee_flr");
+
+/// Treasury: a diversification plan was triggered for an asset.
+pub const EV_TREASURY_DIVERSIFICATION_TRIGGERED: Symbol = symbol_short!("trs_div");
+
 // ---------------------------------------------------------------------------
 // Core publishing function
 // ---------------------------------------------------------------------------
@@ -427,6 +436,22 @@ pub fn emit_proposal_created(
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+/// Vault: a position was auto-deleveraged by the liquidation engine.
+pub const EV_VAULT_DELEVERAGED: Symbol = symbol_short!("vlt_dlvg");
+
+/// Emit a vault-deleveraged event.
+pub fn emit_vault_deleveraged(
+    env: &Env,
+    event: crate::vaults::liquidation::VaultDeleveragedEvent,
+) {
+    let _ = emit_event(
+        env,
+        EV_VAULT_DELEVERAGED,
+        &[],
+        event,
+    );
+}
 
 #[cfg(test)]
 mod tests {

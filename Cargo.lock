@@ -510,6 +510,22 @@ checksum = "4271d37baee1b8c7e4b708028c57d816cf9d2434acb33a549475f78c181f6253"
 name = "governance-invariants"
 version = "0.0.0"
 dependencies = [
+ "num-integer",
+ "num-traits",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "governance-vote-archive"
+version = "0.0.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "governance_executer"
+version = "0.0.0"
+dependencies = [
  "soroban-sdk",
 ]
 
@@ -716,6 +732,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
+name = "lp-pool"
+version = "0.0.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -728,6 +751,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8a240ddb74feaf34a79a7add65a741f3167852fba007066dcac1ca548d89c08"
 dependencies = [
  "adler",
+]
+
+[[package]]
+name = "multisig-admin-rotation"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "multisig-weight-guard"
+version = "0.0.0"
+dependencies = [
+ "soroban-sdk",
 ]
 
 [[package]]
@@ -1055,6 +1092,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "shielded-remittance-escrow"
+version = "0.0.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1326,6 +1370,14 @@ dependencies = [
  "libm",
  "soroban-sdk",
  "soroban-token-sdk",
+ "stellarflow-contracts",
+]
+
+[[package]]
+name = "strategy-migrator"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
 ]
 
 [[package]]
@@ -1417,6 +1469,13 @@ checksum = "d245f478577f809a851594d02313b640fb437e0bb33866753cff937863096954"
 [[package]]
 name = "vault-health-monitor"
 version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "vault-liquidation-inspector"
+version = "0.0.0"
 dependencies = [
  "soroban-sdk",
 ]
@@ -1571,6 +1630,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7837d08f69c77cf6b07689544538e017c1bfcf57e34b4c0ff58e6c2cd3b37091"
 dependencies = [
  "windows-link",
+]
+
+[[package]]
+name = "yield-unwind"
+version = "0.0.0"
+dependencies = [
+ "soroban-sdk",
 ]
 
 [[package]]
