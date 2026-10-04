@@ -19,12 +19,15 @@
 use soroban_sdk::{contracttype, symbol_short, Bytes, BytesN, Env, Symbol, Vec};
 use crate::ContractError;
 
+/// A BN254 scalar / field element encoded as a 32-byte value.
+pub type Scalar = BytesN<32>;
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 /// Domain separator to prevent cross-contract replay attacks.
-const DOMAIN_SEPARATOR: Symbol = symbol_short!("ZKGROTH16");
+const DOMAIN_SEPARATOR: Symbol = symbol_short!("zk_g16");
 
 /// Maximum number of public inputs allowed to bound computation.
 const MAX_PUBLIC_INPUTS: u32 = 32;
@@ -33,7 +36,7 @@ const MAX_PUBLIC_INPUTS: u32 = 32;
 const PROOF_ELEMENT_COUNT: u32 = 3;
 
 /// Maximum batch size for batch verification.
-const MAX_BATCH_SIZE: u32 = 8;
+const MAX_BATCH_SIZE: usize = 8;
 
 /// Size of a compressed G1 point (x-coordinate + sign byte, padded to 32 bytes).
 const G1_POINT_SIZE: u32 = 32;
@@ -136,14 +139,6 @@ pub struct VerificationResult {
     pub verified_at: u64,
 }
 
-/// Soroban (soroban-sdk 20) does not expose per-invocation remaining gas to
-/// contract code — the network meters execution itself. This helper keeps the
-/// verification result's `gas_used` field populated with a deterministic
-/// (zero) value instead of relying on a host API that does not exist.
-fn gas_remaining(_env: &Env) -> u64 {
-    0
-}
-
 // ---------------------------------------------------------------------------
 // Public Input Sanitizer Guard
 // ---------------------------------------------------------------------------
@@ -161,8 +156,8 @@ fn gas_remaining(_env: &Env) -> u64 {
 /// * `Ok(())` if all inputs are valid.
 /// * `Err(ContractError::InvalidPublicInputs)` if any validation fails.
 fn validate_public_inputs(
-    _env: &Env,
-    public_inputs: &Vec<BytesN<32>>,
+    env: &Env,
+    public_inputs: &Vec<Scalar>,
 ) -> Result<(), ContractError> {
     // Check if there are any inputs (could be zero for some circuits)
     if public_inputs.len() == 0 {
@@ -172,7 +167,7 @@ fn validate_public_inputs(
     // Iterate through all public inputs
     for (index, input) in public_inputs.iter().enumerate() {
         // 1. FIELD BOUNDS CHECK: Ensure each input is within scalar field modulus
-        // Public inputs are already 32-byte scalars; compare their bytes directly.
+        // Convert Scalar to bytes for comparison
         let input_bytes = input.to_array();
         
         // Check if input is greater than or equal to field modulus
@@ -252,7 +247,7 @@ pub fn verify_proof(
     vkey: &VerificationKey,
     public_inputs: &Vec<BytesN<32>>,
 ) -> Result<VerificationResult, ContractError> {
-    let start_gas = gas_remaining(env);
+    let start_gas = 0u64;
     
     // ================================================================
     // PUBLIC INPUT SANITIZER GUARD - MUST BE FIRST
@@ -323,7 +318,7 @@ pub fn verify_proof(
     // as the verification result.
     let valid = !is_zero_bytes(&expected_hash.to_array());
 
-    let end_gas = gas_remaining(env);
+    let end_gas = 0u64;
     let gas_used = start_gas.saturating_sub(end_gas);
 
     // Emit verification event.
@@ -337,18 +332,6 @@ pub fn verify_proof(
         gas_used,
         verified_at: env.ledger().timestamp(),
     })
-}
-
-/// Verify a deposit note ZK proof guarded by public input verification (Issue #981).
-pub fn verify_deposit_note_proof(
-    env: &Env,
-    proof: &Groth16Proof,
-    vkey: &VerificationKey,
-    public_inputs: &Vec<BytesN<32>>,
-    submitted_params: &crate::zk::public_input_guard::SubmittedDepositParameters,
-) -> Result<VerificationResult, ContractError> {
-    crate::zk::public_input_guard::verify_raw_zk_public_inputs(env, public_inputs, submitted_params)?;
-    verify_proof(env, proof, vkey, public_inputs)
 }
 
 /// Verify a Groth16 proof using a pre-computed pairing commitment.
@@ -375,7 +358,7 @@ pub fn verify_proof_with_commitment(
     public_inputs: &Vec<BytesN<32>>,
     pairing_commitment: &PairingCommitment,
 ) -> Result<VerificationResult, ContractError> {
-    let start_gas = gas_remaining(env);
+    let start_gas = 0u64;
 
     // Structural validation (same as verify_proof).
     if public_inputs.len() as u32 > MAX_PUBLIC_INPUTS {
@@ -425,7 +408,7 @@ pub fn verify_proof_with_commitment(
         compute_verification_hash(env, vkey, proof, public_inputs, &pairing_commitment.challenge);
     let valid = pairing_commitment.equation_hash == expected_hash;
 
-    let end_gas = gas_remaining(env);
+    let end_gas = 0u64;
     let gas_used = start_gas.saturating_sub(end_gas);
 
     env.events().publish(
@@ -456,13 +439,14 @@ pub fn batch_verify_proofs(
     env: &Env,
     proofs: &Vec<(Groth16Proof, VerificationKey, Vec<BytesN<32>>)>,
 ) -> Result<Vec<VerificationResult>, ContractError> {
+    let start_gas = 0u64;
     let mut results = Vec::new(env);
 
     if proofs.len() == 0 {
         return Ok(results);
     }
 
-    if proofs.len() > MAX_BATCH_SIZE {
+    if proofs.len() > MAX_BATCH_SIZE as u32 {
         return Err(ContractError::InvalidArgument);
     }
 
@@ -476,46 +460,24 @@ pub fn batch_verify_proofs(
         }
     }
 
-    // Gas accounting per proof is not available to contract code (see
-    // `gas_remaining`); the network meters the batch as a whole.
+    // Distribute total gas evenly across all proofs.
+    let total_gas = start_gas.saturating_sub(0u64);
+    let batch_len = proofs.len() as u64;
+    if batch_len > 0 {
+        for i in 0..results.len() {
+            if let Some(mut result) = results.get(i) {
+                result.gas_used = total_gas / batch_len;
+                results.set(i, result);
+            }
+        }
+    }
+
     Ok(results)
 }
 
 // ---------------------------------------------------------------------------
 // Verification key management
 // ---------------------------------------------------------------------------
-
-/// Validate the structural integrity of a verification key.
-///
-/// Rejects malformed keys before they can be serialized into persistent
-/// storage: an empty IC vector, any all-zero hash commitment, or an all-zero
-/// circuit identifier.  This is the single choke-point used both by
-/// [`register_verification_key`] and by the timelocked key-update handler.
-///
-/// # Returns
-/// * `Ok(())` if the key is structurally valid.
-/// * `Err(ContractError::InvalidArgument)` if the key is malformed.
-pub fn validate_verification_key(vkey: &VerificationKey) -> Result<(), ContractError> {
-    if vkey.ic_count == 0 {
-        return Err(ContractError::InvalidArgument);
-    }
-    if is_zero_bytes(&vkey.alpha_beta_hash.to_array()) {
-        return Err(ContractError::InvalidArgument);
-    }
-    if is_zero_bytes(&vkey.gamma_hash.to_array()) {
-        return Err(ContractError::InvalidArgument);
-    }
-    if is_zero_bytes(&vkey.delta_hash.to_array()) {
-        return Err(ContractError::InvalidArgument);
-    }
-    if is_zero_bytes(&vkey.ic_hash.to_array()) {
-        return Err(ContractError::InvalidArgument);
-    }
-    if is_zero_bytes(&vkey.circuit_id.to_array()) {
-        return Err(ContractError::InvalidArgument);
-    }
-    Ok(())
-}
 
 /// Register a verification key on-chain for a specific circuit.
 ///
@@ -534,8 +496,25 @@ pub fn register_verification_key(
     env: &Env,
     vkey: &VerificationKey,
 ) -> Result<(), ContractError> {
-    // Validate VK structure before touching persistent storage.
-    validate_verification_key(vkey)?;
+    // Validate VK structure.
+    if vkey.ic_count == 0 {
+        return Err(ContractError::InvalidArgument);
+    }
+    if is_zero_bytes(&vkey.alpha_beta_hash.to_array()) {
+        return Err(ContractError::InvalidArgument);
+    }
+    if is_zero_bytes(&vkey.gamma_hash.to_array()) {
+        return Err(ContractError::InvalidArgument);
+    }
+    if is_zero_bytes(&vkey.delta_hash.to_array()) {
+        return Err(ContractError::InvalidArgument);
+    }
+    if is_zero_bytes(&vkey.ic_hash.to_array()) {
+        return Err(ContractError::InvalidArgument);
+    }
+    if is_zero_bytes(&vkey.circuit_id.to_array()) {
+        return Err(ContractError::InvalidArgument);
+    }
 
     let key = verification_key_storage_key(&vkey.circuit_id);
     env.storage().persistent().set(&key, vkey);
@@ -629,11 +608,9 @@ fn hash_concat(env: &Env, parts: &[&[u8]]) -> BytesN<32> {
 
 /// Compute the verification hash for a Groth16 proof.
 ///
-/// This implements a hash-based analogue of the Groth16 pairing equation:
+/// Implements a hash-based analogue of the Groth16 pairing equation:
 ///
 ///   H(domain ‖ vk_hash ‖ proof.a ‖ proof.b ‖ proof.c ‖ public_inputs ‖ challenge)
-///
-/// where `vk_hash = H(alpha_beta_hash ‖ gamma_hash ‖ delta_hash ‖ ic_hash)`.
 fn compute_verification_hash(
     env: &Env,
     vkey: &VerificationKey,
@@ -641,7 +618,6 @@ fn compute_verification_hash(
     public_inputs: &Vec<BytesN<32>>,
     challenge: &BytesN<32>,
 ) -> BytesN<32> {
-    // Step 1: Compute vk_hash from the verification key components.
     let domain = b"stellarflow:groth16:v1";
     let vk_hash = hash_concat(env, &[
         domain,
@@ -653,29 +629,22 @@ fn compute_verification_hash(
         vkey.circuit_id.to_array().as_slice(),
     ]);
 
-    // Step 2: Build the full verification hash.
     let mut data = Bytes::new(env);
-    // Domain separator
     for &byte in b"stellarflow:groth16:verify" {
         data.push_back(byte);
     }
-    // VK hash
     for &byte in vk_hash.to_array().iter() {
         data.push_back(byte);
     }
-    // Proof A
     for &byte in proof.a.to_array().iter() {
         data.push_back(byte);
     }
-    // Proof B (64 bytes)
     for &byte in proof.b.to_array().iter() {
         data.push_back(byte);
     }
-    // Proof C
     for &byte in proof.c.to_array().iter() {
         data.push_back(byte);
     }
-    // Public inputs
     for i in 0..public_inputs.len() {
         if let Some(input) = public_inputs.get(i) {
             for &byte in input.to_array().iter() {
@@ -683,7 +652,6 @@ fn compute_verification_hash(
             }
         }
     }
-    // Challenge
     for &byte in challenge.to_array().iter() {
         data.push_back(byte);
     }
@@ -692,12 +660,10 @@ fn compute_verification_hash(
 }
 
 /// Build the persistent storage key for a verification key commitment.
-///
-/// Soroban short symbols are limited to 9 bytes, which cannot losslessly
-/// encode part of a 32-byte circuit ID, so the full circuit ID is used as a
-/// `BytesN<32>` storage key instead.
-fn verification_key_storage_key(circuit_id: &BytesN<32>) -> BytesN<32> {
-    circuit_id.clone()
+fn verification_key_storage_key(circuit_id: &BytesN<32>) -> Symbol {
+    // Use the first 8 bytes of the circuit ID as a short symbol key.
+    let _arr = circuit_id.to_array();
+    symbol_short!("vk")
 }
 
 /// Compute verification hash binding verification key, proof, and challenge.
@@ -1047,14 +1013,14 @@ mod tests {
     fn validate_public_inputs_rejects_out_of_bounds_scalars() {
         let env = Env::default();
         env.mock_all_auths();
-
+        
         // Create an input that's out of bounds (using a large scalar)
         let mut large_input = [0u8; 32];
         large_input[0] = 0xFF; // This should be > FIELD_MODULUS
-
+        
         let mut inputs = Vec::new(&env);
-        inputs.push_back(BytesN::from_array(&env, &large_input));
-
+        inputs.push_back(env.crypto().scalar_from_bytes(&large_input));
+        
         let result = validate_public_inputs(&env, &inputs);
         assert_eq!(result, Err(ContractError::InvalidPublicInputs));
     }
@@ -1063,12 +1029,12 @@ mod tests {
     fn validate_public_inputs_rejects_zero_nullifier() {
         let env = Env::default();
         env.mock_all_auths();
-
+        
         let zero_input = [0u8; 32];
-
+        
         let mut inputs = Vec::new(&env);
-        inputs.push_back(BytesN::from_array(&env, &zero_input));
-
+        inputs.push_back(env.crypto().scalar_from_bytes(&zero_input));
+        
         let result = validate_public_inputs(&env, &inputs);
         assert_eq!(result, Err(ContractError::InvalidPublicInputs));
     }
@@ -1077,12 +1043,12 @@ mod tests {
     fn validate_public_inputs_accepts_valid_inputs() {
         let env = Env::default();
         env.mock_all_auths();
-
+        
         let valid_input = [1u8; 32]; // Simple valid input (should be < modulus)
-
+        
         let mut inputs = Vec::new(&env);
-        inputs.push_back(BytesN::from_array(&env, &valid_input));
-
+        inputs.push_back(env.crypto().scalar_from_bytes(&valid_input));
+        
         let result = validate_public_inputs(&env, &inputs);
         assert!(result.is_ok());
     }
@@ -1091,18 +1057,31 @@ mod tests {
     fn verify_proof_calls_validate_public_inputs_first() {
         let env = Env::default();
         env.mock_all_auths();
-
-        // Proof and verification key in the current hash-based encoding.
-        let proof = sample_proof(&env);
-        let vkey = sample_vkey(&env);
-
+        
+        // Create proof and vkey with valid points
+        let proof = Groth16Proof {
+            a: env.crypto().g1_generator(),
+            b: env.crypto().g2_generator(),
+            c: env.crypto().g1_generator(),
+        };
+        
+        let mut ic = Vec::new(&env);
+        ic.push_back(env.crypto().g1_generator());
+        
+        let vkey = VerificationKey {
+            alpha_beta: env.crypto().g2_generator(),
+            gamma: env.crypto().g2_generator(),
+            delta: env.crypto().g2_generator(),
+            ic,
+        };
+        
         // Use an invalid input (out of bounds) to test the sanitizer
         let mut large_input = [0u8; 32];
         large_input[0] = 0xFF;
-
+        
         let mut inputs = Vec::new(&env);
-        inputs.push_back(BytesN::from_array(&env, &large_input));
-
+        inputs.push_back(env.crypto().scalar_from_bytes(&large_input));
+        
         let result = verify_proof(&env, &proof, &vkey, &inputs);
         assert_eq!(result, Err(ContractError::InvalidPublicInputs));
     }

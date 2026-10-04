@@ -16,6 +16,7 @@ use crate::{
     storage::FeedStakeValue,
     AssetId, ContractData, ContractError, StakingStorageKey, DATA_KEY,
 };
+use crate::proposal::{ProposalState, ProposalStatus, ProposalStorageKey};
 
 // ---------------------------------------------------------------------------
 // Public key descriptor — tells cleanup which storage slot to inspect
@@ -104,7 +105,10 @@ pub fn cleanup_zero_balances(
     for target in targets.iter() {
         match target {
             CleanupTarget::FeedStake(node, asset_id) => {
-                let key = StakingStorageKey::FeedStake(node.clone(), asset_id);
+                let key = StakingStorageKey::FeedStake(
+                    node.clone(),
+                    crate::asset_id_to_symbol(env, asset_id),
+                );
                 if let Some(val) = env
                     .storage()
                     .persistent()

@@ -208,6 +208,18 @@ pub fn validate_price_variance_config(cfg: &PriceVarianceConfig) -> Result<(), C
 
     Ok(())
 }
+/// Returns `true` when `addrs` contains any address more than once.
+pub fn has_duplicate_addresses(addrs: &Vec<Address>) -> bool {
+    let mut seen: Vec<Address> = Vec::new(addrs.env());
+    for addr in addrs.iter() {
+        if seen.contains(&addr) {
+            return true;
+        }
+        seen.push_back(addr);
+    }
+    false
+}
+
 /// Verify that a proposed admin key set satisfies multi-sig sanity rules.
 pub fn validate_admin_key_set(keys: &AdminKeySet) -> Result<(), ContractError> {
     if keys.signers.len() == 0 || keys.threshold == 0 || keys.threshold > keys.signers.len() {
@@ -217,27 +229,6 @@ pub fn validate_admin_key_set(keys: &AdminKeySet) -> Result<(), ContractError> {
         return Err(ContractError::InvalidVarianceConfig);
     }
     Ok(())
-}
-
-/// Return true when the address list contains at least one duplicate entry.
-///
-/// Uses an O(n²) scan so no environment handle (and therefore no `Map`)
-/// is required.
-fn has_duplicate_addresses(signers: &Vec<Address>) -> bool {
-    let len = signers.len();
-    for i in 0..len {
-        let Some(a) = signers.get(i) else {
-            continue;
-        };
-        for j in (i + 1)..len {
-            if let Some(b) = signers.get(j) {
-                if a == b {
-                    return true;
-                }
-            }
-        }
-    }
-    false
 }
 
 /// Read the current governing admin key set.
@@ -293,14 +284,13 @@ pub fn rotate_admin_keys(
         .instance()
         .get(&DATA_KEY)
         .ok_or(ContractError::NotInitialized)?;
+    data.admin = new_signers
+        .get(0)
+        .ok_or(ContractError::NotAdmin)?
+        .clone();
+    env.storage().instance().set(&DATA_KEY, &data);
 
-    // Keep the legacy single-admin field aligned with the newly rotated key
-    // set so downstream `data.admin` checks keep authorizing the primary
-    // signer. `new_signers` is validated above to be non-empty.
-    if let Some(primary_signer) = new_signers.get(0) {
-        data.admin = primary_signer;
-        env.storage().instance().set(&DATA_KEY, &data);
-    }
+    env.events().publish((symbol_short!("adm_rot"),), new_signers);
 
     Ok(())
 }
@@ -386,7 +376,6 @@ pub fn vote_fee_tier_change(
     env.storage().instance().set(&FEE_TIER_CONFIG_KEY, &cfg);
     Ok(())
 }
-
 // ── Storage accessors ─────────────────────────────────────────────────────────
 
 /// Write the complete variance configuration to instance storage, replacing

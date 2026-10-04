@@ -1,7 +1,8 @@
 use soroban_sdk::{contracttype, Address, Env, Map, Symbol};
 
 use crate::storage::{HeartbeatKey, NodeProfileKey, SignerKey, StakeKey};
-use crate::{AssetFeedMetrics, ContractError, NodeProfile};
+use crate::staking_tiers::AssetFeedMetrics;
+use crate::{ContractError, NodeProfile};
 
 pub const SCHEMA_VERSION: u32 = 2;
 

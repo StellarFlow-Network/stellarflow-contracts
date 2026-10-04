@@ -510,6 +510,22 @@ checksum = "4271d37baee1b8c7e4b708028c57d816cf9d2434acb33a549475f78c181f6253"
 name = "governance-invariants"
 version = "0.0.0"
 dependencies = [
+ "num-integer",
+ "num-traits",
+ "soroban-sdk",
+]
+
+[[package]]
+name = "governance-vote-archive"
+version = "0.0.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "governance_executer"
+version = "0.0.0"
+dependencies = [
  "soroban-sdk",
 ]
 
@@ -714,6 +730,13 @@ name = "log"
 version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
+
+[[package]]
+name = "lp-pool"
+version = "0.0.0"
+dependencies = [
+ "soroban-sdk",
+]
 
 [[package]]
 name = "memchr"
@@ -1347,6 +1370,13 @@ dependencies = [
  "libm",
  "soroban-sdk",
  "soroban-token-sdk",
+]
+
+[[package]]
+name = "strategy-migrator"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
 ]
 
 [[package]]
