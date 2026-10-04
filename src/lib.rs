@@ -427,6 +427,99 @@ impl ContractError {
 
     /// Canonical alias: operation failed due to insufficient token balance.
     pub const InsufficientBalance: Self = Self::InsufficientReserveBalance;
+
+    // ── Aliases recovered from prior feature commits whose const-alias
+    // additions to this enum were lost in a later merge.
+    pub const CommitmentExpired: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const CommitmentHashMismatch: Self = Self::InvalidSaltSignature;
+    pub const CommitmentNotActive: Self = Self::Unauthorized;
+    pub const CommitmentNotExpired: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const CommitmentNotFound: Self = Self::NotRegistered;
+    pub const CommitmentNotRevealWindow: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const CommitmentWindowTooLong: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const CommitmentWindowTooShort: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const DeadlineNotReached: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const DeadlineReached: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const DeadlineTooFar: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const DeadlineTooSoon: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const EventTopicLimitExceeded: Self = Self::Overflow;
+    pub const HtlcNotActive: Self = Self::Unauthorized;
+    pub const HtlcNotFound: Self = Self::NotRegistered;
+    pub const InvalidArgument: Self = Self::NotInitialized;
+    pub const InvalidPreImage: Self = Self::InvalidSaltSignature;
+    pub const NoPreviousUpgrade: Self = Self::NotRegistered;
+    pub const NotEmergencyAdmin: Self = Self::NotAdmin;
+    pub const NotRecoveryKey: Self = Self::Unauthorized;
+    pub const PoolNotFound: Self = Self::NotRegistered;
+    pub const RecoveryKeyNotConfigured: Self = Self::NotInitialized;
+    pub const RecoveryNotAvailableYet: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const RollbackWindowExpired: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const RouteExecutionFailed: Self = Self::Unauthorized;
+    pub const TooManyActiveCommitments: Self = Self::Overflow;
+    pub const TooManyActiveHtlcs: Self = Self::Overflow;
+    pub const UpgradeHealthCheckFailed: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const ZeroSwapAmount: Self = Self::AmountTooLow;
+
+    // ── Aliases for error names referenced by feature code with no spare
+    // discriminant slot (ScSpecUdtErrorEnumV0 caps `#[contracterror]` enums at
+    // 50 cases). Each reuses the existing variant closest in meaning; the
+    // numeric code is shared, the name callers match on stays distinct.
+    pub const BridgeRateLimitExceeded: Self = Self::Overflow;
+    pub const CapacityExceeded: Self = Self::Overflow;
+    pub const CircuitBreakerTripped: Self = Self::ContractPaused;
+    pub const DuplicateOracleAttestation: Self = Self::AlreadyRegistered;
+    pub const EmergencyOverrideDisabled: Self = Self::Unauthorized;
+    pub const EmergencyRevocationAlreadyActive: Self = Self::EmergencyRevocationActive;
+    pub const FeeDistributionMismatch: Self = Self::BundleValidationFailed;
+    pub const FlashLoanArbitrageDetected: Self = Self::SlippageExceeded;
+    pub const InsufficientOracleAttestations: Self = Self::ThresholdNotReached;
+    pub const InvalidAsset: Self = Self::NotInitialized;
+    pub const InvalidBridgeRateLimit: Self = Self::InvalidVarianceConfig;
+    pub const InvalidCircuitBreakerConfig: Self = Self::InvalidVarianceConfig;
+    pub const InvalidDelegate: Self = Self::NotInitialized;
+    pub const InvalidEscrowState: Self = Self::BundleValidationFailed;
+    pub const InvalidFeeSplitConfig: Self = Self::InvalidVarianceConfig;
+    pub const InvalidFlashLoanFeeDiscount: Self = Self::InvalidVarianceConfig;
+    pub const InvalidFlashLoanFeeTier: Self = Self::InvalidVarianceConfig;
+    pub const InvalidInput: Self = Self::AmountTooLow;
+    pub const InvalidMerkleProof: Self = Self::InvalidProof;
+    pub const InvalidOracleDeviationConfig: Self = Self::InvalidVarianceConfig;
+    pub const InvalidProvingKey: Self = Self::NotInitialized;
+    pub const InvalidPublicInputs: Self = Self::NotInitialized;
+    pub const InvalidThreshold: Self = Self::InvalidVarianceConfig;
+    pub const InvalidTickSpacing: Self = Self::InvalidVarianceConfig;
+    pub const InvariantViolation: Self = Self::SlippageExceeded;
+    pub const MerkleTreeFull: Self = Self::Overflow;
+    pub const NoActiveDelegation: Self = Self::NotRegistered;
+    pub const NotEmergencySigner: Self = Self::Unauthorized;
+    pub const NotSecurityCouncil: Self = Self::NotAdmin;
+    pub const NoVotingWeight: Self = Self::AmountTooLow;
+    pub const OracleAttestationConflict: Self = Self::BundleValidationFailed;
+    pub const OracleDeviationTooHigh: Self = Self::SlippageExceeded;
+    pub const OracleInvalidSignature: Self = Self::InvalidSaltSignature;
+    pub const OracleNotAuthorized: Self = Self::Unauthorized;
+    pub const OracleRegistryNotConfigured: Self = Self::NotInitialized;
+    pub const OverrideThresholdNotReached: Self = Self::ThresholdNotReached;
+    pub const PayloadHashMismatch: Self = Self::InvalidSaltSignature;
+    pub const ProposalAlreadyCancelledOrExecuted: Self = Self::NoActiveProposal;
+    pub const ProposalAlreadyVetoed: Self = Self::AlreadyVoted;
+    pub const ProposalNotFound: Self = Self::NotRegistered;
+    pub const ProtectedAssetNotRescueable: Self = Self::Unauthorized;
+    pub const RescueProposalNotFound: Self = Self::NotRegistered;
+    pub const RescueProposalNotPending: Self = Self::NoActiveProposal;
+    pub const RescueTimelockNotExpired: Self = Self::UpgradeTimelockNotSatisfied;
+    /// No concentrated-liquidity position exists for a given receipt id
+    /// (Issue #986).
+    pub const PositionNotFound: Self = Self::NotRegistered;
+    /// A proposed tick-range boundary (e.g. a split's mid tick) does not
+    /// satisfy `tick_lower < tick_mid < tick_upper` (Issue #986).
+    pub const InvalidSplitBoundary: Self = Self::InvalidVarianceConfig;
+    pub const TickIndexAlreadyExists: Self = Self::AlreadyRegistered;
+    pub const TickIndexNotFound: Self = Self::NotRegistered;
+    pub const TickNotAligned: Self = Self::InvalidVarianceConfig;
+    pub const TickOutOfBounds: Self = Self::InvalidVarianceConfig;
+    pub const TimelockNotExpired: Self = Self::UpgradeTimelockNotSatisfied;
+    pub const TooManyTicks: Self = Self::Overflow;
 }
 
 // Contract state keys
@@ -530,20 +623,6 @@ pub struct NodeProfile {
 }
 
 #[contracttype]
-#[derive(Clone)]
-pub struct CorridorFeePool {
-    pub asset: Symbol,
-    pub collected: u64,
-    pub variable_pool: u64,
-}
-
-#[contracttype]
-#[derive(Clone)]
-pub enum CorridorFeeKey {
-    Asset(Symbol),
-}
-
-#[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct FeedStakeRecord {
     pub node: Address,
@@ -642,6 +721,7 @@ pub enum LiquidityPoolFeeKey {
 #[contract]
 pub struct TimeLockedUpgradeContract;
 
+#[contractimpl]
 impl TimeLockedUpgradeContract {
     pub(crate) fn load_data(env: &Env) -> Result<ContractData, crate::ContractError> {
         let _ = ensure_schema_version(env);
@@ -651,10 +731,7 @@ impl TimeLockedUpgradeContract {
     pub(crate) fn _load_data(env: &Env) -> Result<ContractData, crate::ContractError> {
         Self::load_data(env)
     }
-}
 
-#[contractimpl]
-impl TimeLockedUpgradeContract {
     /// Atomically consume a nullifier for a private transfer.
     ///
     /// The persistent key is checked and written in this invocation, so a
@@ -997,7 +1074,7 @@ impl TimeLockedUpgradeContract {
     }
 
     pub fn set_current_wasm(env: Env, admin: Address, wasm_hash: BytesN<32>) -> Result<(), ContractError> {
-        let data = Self::_load_data(&env)?;
+        let data = TimeLockedUpgradeContract::_load_data(&env)?;
         if data.admin != admin { return Err(ContractError::NotAdmin); }
         admin.require_auth();
         env.storage().instance().set(&crate::upgrades::rollback::CURRENT_WASM_KEY, &wasm_hash);
@@ -2840,7 +2917,7 @@ impl TimeLockedUpgradeContract {
         admin: Address,
         default_tier_bps: u32,
     ) -> Result<FeeTierController, ContractError> {
-        let data = Self::_load_data(&env)?;
+        let data = TimeLockedUpgradeContract::_load_data(&env)?;
         if data.admin != admin {
             return Err(ContractError::NotAdmin);
         }
@@ -3131,6 +3208,7 @@ impl TimeLockedUpgradeContract {
 #[cfg(test)]
 mod query_guardrail_tests {
     use super::*;
+    use crate::ContractError;
     use soroban_sdk::{Env, symbol_short};
     use soroban_sdk::testutils::{Address as _, Ledger, LedgerInfo};
 

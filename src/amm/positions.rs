@@ -1,535 +1,564 @@
-//! Concentrated liquidity position ownership + collateral transfer guard.
+//! Concentrated-liquidity position lifecycle (Issue #986): opening ranged
+//! positions atop `amm::ticks`'s tick-indexed liquidity accounting, and
+//! splitting an existing position's range into two sub-ranges without
+//! withdrawing the underlying pool liquidity.
 //!
-//! A concentrated liquidity position is a unit of liquidity deployed over a
-//! discrete tick range `[lower_tick, upper_tick]`. Because the range, not the
-//! account, is what references the pool liquidity, ownership of a position can
-//! move between accounts without touching the underlying tick accounting.
+//! # Position receipts
 //!
-//! # Uncollected fee growth
+//! A position is identified by an incrementing `u64` id — its "receipt
+//! token". [`open_position`] mints a fresh id for the caller; [`split_position`]
+//! burns the original id and mints two new ones for the sub-ranges. This
+//! mirrors the existing LP-share model in `settlement::fees`, which is also a
+//! plain persistent-storage record rather than a separate SEP-41 token
+//! contract.
 //!
-//! A position also carries the accumulators that describe fees it has already
-//! earned but not yet collected: a snapshot of the pool's fee-growth-inside
-//! index plus the two per-token owed balances. These values belong to the
-//! *position*, not to whichever account happens to own it, so an ownership
-//! change must copy them verbatim rather than resetting them.
+//! # Liquidity allocation on split
 //!
-//! # Transfer guard
+//! The original position's liquidity is split between the two sub-ranges in
+//! proportion to each sub-range's tick width:
 //!
-//! [`transfer_position`] rewrites the position record exactly once, so the tick
-//! range moves owner atomically within the Soroban invocation. The transfer is
-//! rejected unless:
-//!   * the caller is the current owner and authorizes the call,
-//!   * the destination differs from the current owner, and
-//!   * the position is not pledged as collateral.
+//! ```text
+//! liquidity_lower = liquidity * (tick_mid - tick_lower) / (tick_upper - tick_lower)
+//! liquidity_upper = liquidity - liquidity_lower
+//! ```
 //!
-//! On success a `PositionTransferred` event carrying the old and new owner
-//! account keys is published in the same invocation.
+//! This conserves total liquidity exactly and is deterministic. It is a
+//! linear approximation, not a sqrt-price-exact capital-conserving split
+//! (which would additionally require tracking each position's underlying
+//! token0/token1 composition — a model this codebase does not have; see
+//! `amm::ticks`'s module docs).
+//!
+//! # Fee growth on split
+//!
+//! Fees earned by the original position since it was opened (or last
+//! touched) are settled against `fee_growth_inside_last` and apportioned to
+//! `tokens_owed` on the two new positions in the same tick-width proportion
+//! as the liquidity split. Each new position's `fee_growth_inside_last` is
+//! then checkpointed to the current fee-growth-inside value for its own
+//! (narrower) range, so future accrual is tracked independently per
+//! sub-range going forward.
 
-use soroban_sdk::{contracttype, Address, Env, Symbol};
+use soroban_sdk::{contracttype, symbol_short, Address, Env, Symbol};
 
-use crate::amm::ticks::{get_tick_index, MAX_TICK_INDEX, MIN_TICK_INDEX};
+use crate::amm::ticks;
 use crate::{AssetId, ContractError};
 
-/// Persistent storage keys for the concentrated liquidity position registry.
+/// Persistent storage key for an individual position record, keyed by its
+/// receipt-token id.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum PositionKey {
-    /// Position record for a pool tick range, keyed by `(asset, lower, upper)`.
-    Position(AssetId, i32, i32),
-    /// Monotonic counter of positions opened for a pool.
-    Count(AssetId),
-}
+pub struct PositionKey(u64);
 
-/// A concentrated liquidity position deployed over `[lower_tick, upper_tick]`.
+/// Instance storage key for the monotonically increasing position-id
+/// counter (shared across all pools — receipt-token ids are globally
+/// unique, matching how an NFT-style id allocator would behave).
+const POSITION_COUNTER_KEY: Symbol = symbol_short!("POSCTR");
+
+/// A concentrated-liquidity range position.
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ConcentratedPosition {
-    /// Account that currently owns the tick range.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Position {
+    /// This position's receipt-token id.
+    pub id: u64,
+    /// The address that owns this position and may split or (in a future
+    /// close/withdraw operation) redeem it.
     pub owner: Address,
-    /// Pool (asset pair) the position belongs to.
+    /// Pool asset identifier.
     pub asset: AssetId,
-    /// Lower bound of the owned tick range (inclusive).
-    pub lower_tick: i32,
-    /// Upper bound of the owned tick range (exclusive).
-    pub upper_tick: i32,
-    /// Liquidity deployed by this position.
+    /// Lower tick boundary (inclusive).
+    pub tick_lower: i32,
+    /// Upper tick boundary (exclusive).
+    pub tick_upper: i32,
+    /// Liquidity committed to this range.
     pub liquidity: u64,
-    /// Snapshot of the pool's fee-growth-inside accumulator at the position's
-    /// last update. Copied unchanged when ownership moves.
-    pub fee_growth_inside_last: i128,
-    /// Uncollected token-A fees owed to the position, in stroops.
-    pub tokens_owed_a: u64,
-    /// Uncollected token-B fees owed to the position, in stroops.
-    pub tokens_owed_b: u64,
-    /// When true the position is pledged as collateral and cannot be
-    /// transferred.
-    pub collateral_locked: bool,
+    /// `fee_growth_inside` (see `ticks::get_fee_growth_inside`) snapshotted
+    /// the last time this position's owed fees were settled.
+    pub fee_growth_inside_last: u128,
+    /// Fees settled and not yet claimed, in the pool's fee unit.
+    pub tokens_owed: u64,
 }
 
-/// Emitted when ownership of a concentrated liquidity position moves from
-/// `old_owner` to `new_owner`.
+/// Result of [`split_position`]: the two new sub-range positions.
 #[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PositionTransferredEvent {
-    pub asset: AssetId,
-    pub lower_tick: i32,
-    pub upper_tick: i32,
-    pub old_owner: Address,
-    pub new_owner: Address,
-    pub liquidity: u64,
-    pub fee_growth_inside_last: i128,
+#[derive(Clone, Debug, PartialEq)]
+pub struct SplitPositionResult {
+    pub lower: Position,
+    pub upper: Position,
 }
 
-fn position_key(asset: AssetId, lower_tick: i32, upper_tick: i32) -> PositionKey {
-    PositionKey::Position(asset, lower_tick, upper_tick)
-}
-
-/// Number of positions opened for a pool so far.
-pub fn position_count(env: &Env, asset: AssetId) -> u32 {
+fn get_position_record(env: &Env, position_id: u64) -> Result<Position, ContractError> {
     env.storage()
         .persistent()
-        .get(&PositionKey::Count(asset))
-        .unwrap_or(0)
+        .get(&PositionKey(position_id))
+        .ok_or(ContractError::PositionNotFound)
 }
 
-/// Look up the position recorded for a pool tick range.
-pub fn get_position(
-    env: &Env,
-    asset: AssetId,
-    lower_tick: i32,
-    upper_tick: i32,
-) -> Option<ConcentratedPosition> {
+fn set_position_record(env: &Env, position: &Position) {
     env.storage()
         .persistent()
-        .get(&position_key(asset, lower_tick, upper_tick))
+        .set(&PositionKey(position.id), position);
 }
 
-fn load_position(
-    env: &Env,
-    asset: AssetId,
-    lower_tick: i32,
-    upper_tick: i32,
-) -> Result<ConcentratedPosition, ContractError> {
-    get_position(env, asset, lower_tick, upper_tick).ok_or(ContractError::PositionNotFound)
+fn remove_position_record(env: &Env, position_id: u64) {
+    env.storage().persistent().remove(&PositionKey(position_id));
 }
 
-fn save_position(env: &Env, position: &ConcentratedPosition) {
-    let key = position_key(position.asset, position.lower_tick, position.upper_tick);
-    env.storage().persistent().set(&key, position);
+fn mint_position_id(env: &Env) -> Result<u64, ContractError> {
+    let next: u64 = env
+        .storage()
+        .instance()
+        .get(&POSITION_COUNTER_KEY)
+        .unwrap_or(0);
+    let id = next.checked_add(1).ok_or(ContractError::Overflow)?;
+    env.storage().instance().set(&POSITION_COUNTER_KEY, &id);
+    Ok(id)
 }
 
-/// Validate that `[lower_tick, upper_tick]` is a well-formed range for the
-/// pool: non-empty, strictly ordered, aligned to the pool's configured tick
-/// spacing, and inside the global price bounds.
-fn validate_tick_range(
-    env: &Env,
-    asset: AssetId,
-    lower_tick: i32,
-    upper_tick: i32,
-) -> Result<(), ContractError> {
-    let meta = get_tick_index(env, asset)?;
-    if lower_tick >= upper_tick {
-        return Err(ContractError::InvalidTickRange);
-    }
-    if lower_tick < MIN_TICK_INDEX || upper_tick > MAX_TICK_INDEX {
-        return Err(ContractError::TickOutOfBounds);
-    }
-    if lower_tick % meta.tick_spacing != 0 || upper_tick % meta.tick_spacing != 0 {
-        return Err(ContractError::TickNotAligned);
-    }
-    Ok(())
+/// Load a position by its receipt-token id.
+pub fn get_position(env: &Env, position_id: u64) -> Result<Position, ContractError> {
+    get_position_record(env, position_id)
 }
 
-/// Open a concentrated liquidity position over `[lower_tick, upper_tick]`.
-///
-/// The position starts with zeroed fee-growth accumulators; fees accrue through
-/// [`accrue_fees`].
+/// Open a new concentrated-liquidity range position, placing `liquidity` at
+/// both boundary ticks of `[tick_lower, tick_upper)` and minting a fresh
+/// position-receipt id to `owner`.
 pub fn open_position(
     env: &Env,
     owner: Address,
     asset: AssetId,
-    lower_tick: i32,
-    upper_tick: i32,
+    tick_lower: i32,
+    tick_upper: i32,
     liquidity: u64,
-) -> Result<ConcentratedPosition, ContractError> {
+) -> Result<Position, ContractError> {
     owner.require_auth();
 
+    if tick_lower >= tick_upper {
+        return Err(ContractError::InvalidSplitBoundary);
+    }
     if liquidity == 0 {
-        return Err(ContractError::InvalidStakeAmount);
-    }
-    validate_tick_range(env, asset, lower_tick, upper_tick)?;
-    if get_position(env, asset, lower_tick, upper_tick).is_some() {
-        return Err(ContractError::PositionAlreadyExists);
+        return Err(ContractError::AmountTooLow);
     }
 
-    let position = ConcentratedPosition {
-        owner: owner.clone(),
+    let liquidity_i64 = i64::try_from(liquidity).map_err(|_| ContractError::Overflow)?;
+
+    ticks::ensure_tick_initialized(env, asset, tick_lower)?;
+    ticks::ensure_tick_initialized(env, asset, tick_upper)?;
+    ticks::place_liquidity(env, asset, tick_lower, liquidity_i64)?;
+    ticks::place_liquidity(env, asset, tick_upper, -liquidity_i64)?;
+
+    let fee_growth_inside_last = ticks::get_fee_growth_inside(env, asset, tick_lower, tick_upper)?;
+
+    let id = mint_position_id(env)?;
+    let position = Position {
+        id,
+        owner,
         asset,
-        lower_tick,
-        upper_tick,
+        tick_lower,
+        tick_upper,
         liquidity,
-        fee_growth_inside_last: 0,
-        tokens_owed_a: 0,
-        tokens_owed_b: 0,
-        collateral_locked: false,
+        fee_growth_inside_last,
+        tokens_owed: 0,
     };
-    save_position(env, &position);
-
-    let counter_key = PositionKey::Count(asset);
-    let count: u32 = env.storage().persistent().get(&counter_key).unwrap_or(0);
-    env.storage().persistent().set(&counter_key, &(count + 1));
-
+    set_position_record(env, &position);
     Ok(position)
 }
 
-/// Accrue uncollected fees onto a position.
+/// Split `position_id`'s range at `tick_mid` into `[tick_lower, tick_mid]`
+/// and `[tick_mid, tick_upper]`, without withdrawing the underlying pool
+/// liquidity. Burns `position_id` and mints two new position-receipt ids.
 ///
-/// `fee_growth_delta` is the amount by which the pool's fee-growth-inside index
-/// advanced since the position's last update; `tokens_a` / `tokens_b` are the
-/// newly earned per-token fees. Only the owner may accrue.
-pub fn accrue_fees(
+/// See the module docs for the liquidity-allocation and fee-growth
+/// recalculation rules.
+pub fn split_position(
     env: &Env,
-    owner: Address,
-    asset: AssetId,
-    lower_tick: i32,
-    upper_tick: i32,
-    fee_growth_delta: i128,
-    tokens_a: u64,
-    tokens_b: u64,
-) -> Result<ConcentratedPosition, ContractError> {
-    owner.require_auth();
+    caller: Address,
+    position_id: u64,
+    tick_mid: i32,
+) -> Result<SplitPositionResult, ContractError> {
+    caller.require_auth();
 
-    let mut position = load_position(env, asset, lower_tick, upper_tick)?;
-    if position.owner != owner {
-        return Err(ContractError::PositionNotOwned);
+    let position = get_position_record(env, position_id)?;
+    if position.owner != caller {
+        return Err(ContractError::Unauthorized);
+    }
+    if tick_mid <= position.tick_lower || tick_mid >= position.tick_upper {
+        return Err(ContractError::InvalidSplitBoundary);
     }
 
-    position.fee_growth_inside_last = position
-        .fee_growth_inside_last
-        .checked_add(fee_growth_delta)
+    let meta = ticks::get_tick_index(env, position.asset)?;
+    if tick_mid % meta.tick_spacing != 0 {
+        return Err(ContractError::TickNotAligned);
+    }
+
+    // ── Settle fees owed on the original range up to now ────────────────
+    let fee_growth_inside_now = ticks::get_fee_growth_inside(
+        env,
+        position.asset,
+        position.tick_lower,
+        position.tick_upper,
+    )?;
+    let fee_growth_delta = fee_growth_inside_now.wrapping_sub(position.fee_growth_inside_last);
+    let accrued = fee_growth_delta
+        .checked_mul(position.liquidity as u128)
+        .ok_or(ContractError::Overflow)?
+        / ticks::FEE_GROWTH_SCALE;
+    let total_owed_u128 = (position.tokens_owed as u128)
+        .checked_add(accrued)
         .ok_or(ContractError::Overflow)?;
-    position.tokens_owed_a = position
-        .tokens_owed_a
-        .checked_add(tokens_a)
+    let total_owed = u64::try_from(total_owed_u128).map_err(|_| ContractError::Overflow)?;
+
+    // ── Proportional liquidity split by tick width ──────────────────────
+    let width_total = (position.tick_upper - position.tick_lower) as u128;
+    let width_lower = (tick_mid - position.tick_lower) as u128;
+
+    let liquidity_lower = ((position.liquidity as u128)
+        .checked_mul(width_lower)
+        .ok_or(ContractError::Overflow)?
+        / width_total) as u64;
+    let liquidity_upper = position
+        .liquidity
+        .checked_sub(liquidity_lower)
         .ok_or(ContractError::Overflow)?;
-    position.tokens_owed_b = position
-        .tokens_owed_b
-        .checked_add(tokens_b)
+
+    if liquidity_lower == 0 || liquidity_upper == 0 {
+        // The range is too narrow (in tick-width terms) for this split to
+        // leave both sub-ranges with non-zero liquidity.
+        return Err(ContractError::AmountTooLow);
+    }
+
+    let owed_lower = ((total_owed as u128)
+        .checked_mul(width_lower)
+        .ok_or(ContractError::Overflow)?
+        / width_total) as u64;
+    let owed_upper = total_owed
+        .checked_sub(owed_lower)
         .ok_or(ContractError::Overflow)?;
-    save_position(env, &position);
 
-    Ok(position)
-}
+    // ── Re-point tick boundaries at the new mid tick ────────────────────
+    //
+    // The original range contributed +L at tick_lower and -L at
+    // tick_upper. After the split: the lower sub-range must contribute
+    // +L_lower at tick_lower and -L_lower at tick_mid; the upper sub-range
+    // must contribute +L_upper at tick_mid and -L_upper at tick_upper.
+    // Deltas below move each tick from its pre-split net contribution to
+    // its post-split one; `insert_tick_sorted`'s MAX_TICKS_PER_POOL check
+    // inside `place_liquidity` guards tick_mid's insertion.
+    let liquidity_lower_i64 = i64::try_from(liquidity_lower).map_err(|_| ContractError::Overflow)?;
+    let liquidity_upper_i64 = i64::try_from(liquidity_upper).map_err(|_| ContractError::Overflow)?;
 
-/// Pledge or release a position as collateral.
-///
-/// While locked the position cannot change owner; only the current owner may
-/// toggle the flag.
-pub fn set_collateral_lock(
-    env: &Env,
-    owner: Address,
-    asset: AssetId,
-    lower_tick: i32,
-    upper_tick: i32,
-    locked: bool,
-) -> Result<ConcentratedPosition, ContractError> {
-    owner.require_auth();
+    ticks::ensure_tick_initialized(env, position.asset, tick_mid)?;
 
-    let mut position = load_position(env, asset, lower_tick, upper_tick)?;
-    if position.owner != owner {
-        return Err(ContractError::PositionNotOwned);
-    }
-    position.collateral_locked = locked;
-    save_position(env, &position);
+    // tick_lower: +L -> +L_lower
+    ticks::place_liquidity(env, position.asset, position.tick_lower, -liquidity_upper_i64)?;
+    // tick_mid: 0 -> +L_upper - L_lower
+    ticks::place_liquidity(
+        env,
+        position.asset,
+        tick_mid,
+        liquidity_upper_i64 - liquidity_lower_i64,
+    )?;
+    // tick_upper: -L -> -L_upper
+    ticks::place_liquidity(env, position.asset, position.tick_upper, liquidity_lower_i64)?;
 
-    Ok(position)
-}
+    // ── Checkpoint fee growth for each new (narrower) sub-range ─────────
+    let fee_growth_inside_lower =
+        ticks::get_fee_growth_inside(env, position.asset, position.tick_lower, tick_mid)?;
+    let fee_growth_inside_upper =
+        ticks::get_fee_growth_inside(env, position.asset, tick_mid, position.tick_upper)?;
 
-/// Transfer ownership of a concentrated liquidity position to `new_owner`.
-///
-/// The tick range ownership moves atomically in a single storage write: only
-/// the `owner` field changes, so the uncollected fee-growth accumulators
-/// (`fee_growth_inside_last`, `tokens_owed_a`, `tokens_owed_b`) follow the
-/// position unchanged. A `PositionTransferred` event with the old and new owner
-/// keys is published in the same invocation.
-pub fn transfer_position(
-    env: &Env,
-    owner: Address,
-    asset: AssetId,
-    lower_tick: i32,
-    upper_tick: i32,
-    new_owner: Address,
-) -> Result<ConcentratedPosition, ContractError> {
-    owner.require_auth();
+    remove_position_record(env, position_id);
 
-    let mut position = load_position(env, asset, lower_tick, upper_tick)?;
-    if position.owner != owner {
-        return Err(ContractError::PositionNotOwned);
-    }
-    if new_owner == owner {
-        return Err(ContractError::PositionTransferToSelf);
-    }
-    if position.collateral_locked {
-        return Err(ContractError::PositionCollateralLocked);
-    }
-
-    let old_owner = position.owner.clone();
-    // Ownership moves; every accrued-fee field is intentionally preserved.
-    position.owner = new_owner.clone();
-    save_position(env, &position);
-
-    let event = PositionTransferredEvent {
-        asset,
-        lower_tick,
-        upper_tick,
-        old_owner,
-        new_owner,
-        liquidity: position.liquidity,
-        fee_growth_inside_last: position.fee_growth_inside_last,
+    let lower_id = mint_position_id(env)?;
+    let lower = Position {
+        id: lower_id,
+        owner: position.owner.clone(),
+        asset: position.asset,
+        tick_lower: position.tick_lower,
+        tick_upper: tick_mid,
+        liquidity: liquidity_lower,
+        fee_growth_inside_last: fee_growth_inside_lower,
+        tokens_owed: owed_lower,
     };
-    env.events().publish(
-        (
-            Symbol::new(env, "PositionTransferred"),
-            asset,
-            lower_tick,
-            upper_tick,
-        ),
-        event,
+    set_position_record(env, &lower);
+
+    let upper_id = mint_position_id(env)?;
+    let upper = Position {
+        id: upper_id,
+        owner: position.owner.clone(),
+        asset: position.asset,
+        tick_lower: tick_mid,
+        tick_upper: position.tick_upper,
+        liquidity: liquidity_upper,
+        fee_growth_inside_last: fee_growth_inside_upper,
+        tokens_owed: owed_upper,
+    };
+    set_position_record(env, &upper);
+
+    crate::events::publish_position_split(
+        env,
+        &position.owner,
+        position.asset,
+        position_id,
+        position.tick_lower,
+        tick_mid,
+        position.tick_upper,
+        lower_id,
+        liquidity_lower,
+        upper_id,
+        liquidity_upper,
     );
 
-    Ok(position)
+    Ok(SplitPositionResult { lower, upper })
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::amm::ticks::initialize_tick_index;
     use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::{IntoVal, TryFromVal, Val};
 
-    fn setup(env: &Env, asset: AssetId) {
+    fn setup_pool(env: &Env, asset: AssetId) {
+        ticks::initialize_tick_index(env, asset, 1).unwrap();
+    }
+
+    #[test]
+    fn open_position_places_liquidity_at_both_boundaries() {
+        let env = Env::default();
         env.mock_all_auths();
-        initialize_tick_index(env, asset, 10).unwrap();
+        let asset: AssetId = 1;
+        setup_pool(&env, asset);
+        let owner = Address::generate(&env);
+
+        let position = open_position(&env, owner.clone(), asset, -10, 10, 1000).unwrap();
+        assert_eq!(position.id, 1);
+        assert_eq!(position.liquidity, 1000);
+        assert_eq!(position.tokens_owed, 0);
+
+        let meta = ticks::get_tick_index(&env, asset).unwrap();
+        assert_eq!(meta.active_liquidity, 1000);
+        assert_eq!(meta.tick_count, 2);
     }
 
     #[test]
-    fn open_position_records_owner_and_range() {
+    fn open_position_rejects_inverted_range() {
         let env = Env::default();
-        setup(&env, 1);
-        let owner = Address::generate(&env);
-
-        let pos = open_position(&env, owner.clone(), 1, -100, 100, 5_000).unwrap();
-
-        assert_eq!(pos.owner, owner);
-        assert_eq!(pos.asset, 1);
-        assert_eq!(pos.lower_tick, -100);
-        assert_eq!(pos.upper_tick, 100);
-        assert_eq!(pos.liquidity, 5_000);
-        assert_eq!(pos.fee_growth_inside_last, 0);
-        assert_eq!(pos.tokens_owed_a, 0);
-        assert_eq!(pos.tokens_owed_b, 0);
-        assert!(!pos.collateral_locked);
-
-        let stored = get_position(&env, 1, -100, 100).unwrap();
-        assert_eq!(stored, pos);
-        assert_eq!(position_count(&env, 1), 1);
-    }
-
-    #[test]
-    fn open_position_rejects_empty_range() {
-        let env = Env::default();
-        setup(&env, 1);
+        env.mock_all_auths();
+        let asset: AssetId = 1;
+        setup_pool(&env, asset);
         let owner = Address::generate(&env);
 
         assert_eq!(
-            open_position(&env, owner.clone(), 1, 100, 100, 1_000),
-            Err(ContractError::InvalidTickRange)
-        );
-        assert_eq!(
-            open_position(&env, owner, 1, 200, 100, 1_000),
-            Err(ContractError::InvalidTickRange)
-        );
-    }
-
-    #[test]
-    fn open_position_rejects_unaligned_ticks() {
-        let env = Env::default();
-        setup(&env, 1);
-        let owner = Address::generate(&env);
-
-        assert_eq!(
-            open_position(&env, owner, 1, -95, 100, 1_000),
-            Err(ContractError::TickNotAligned)
+            open_position(&env, owner, asset, 10, -10, 1000),
+            Err(ContractError::InvalidSplitBoundary)
         );
     }
 
     #[test]
     fn open_position_rejects_zero_liquidity() {
         let env = Env::default();
-        setup(&env, 1);
+        env.mock_all_auths();
+        let asset: AssetId = 1;
+        setup_pool(&env, asset);
         let owner = Address::generate(&env);
 
         assert_eq!(
-            open_position(&env, owner, 1, -100, 100, 0),
-            Err(ContractError::InvalidStakeAmount)
+            open_position(&env, owner, asset, -10, 10, 0),
+            Err(ContractError::AmountTooLow)
         );
     }
 
     #[test]
-    fn open_position_rejects_duplicate_range() {
+    fn split_position_conserves_total_liquidity() {
         let env = Env::default();
-        setup(&env, 1);
+        env.mock_all_auths();
+        let asset: AssetId = 1;
+        setup_pool(&env, asset);
         let owner = Address::generate(&env);
 
-        open_position(&env, owner.clone(), 1, -100, 100, 1_000).unwrap();
-        assert_eq!(
-            open_position(&env, owner, 1, -100, 100, 1_000),
-            Err(ContractError::PositionAlreadyExists)
-        );
+        let position = open_position(&env, owner.clone(), asset, -10, 10, 1000).unwrap();
+        let result = split_position(&env, owner, position.id, 0).unwrap();
+
+        assert_eq!(result.lower.liquidity + result.upper.liquidity, 1000);
+        // Midpoint split of a symmetric [-10, 10] range: equal halves.
+        assert_eq!(result.lower.liquidity, 500);
+        assert_eq!(result.upper.liquidity, 500);
+        assert_eq!(result.lower.tick_lower, -10);
+        assert_eq!(result.lower.tick_upper, 0);
+        assert_eq!(result.upper.tick_lower, 0);
+        assert_eq!(result.upper.tick_upper, 10);
     }
 
     #[test]
-    fn transfer_moves_ownership() {
+    fn split_position_burns_the_original_id() {
         let env = Env::default();
-        setup(&env, 1);
-        let owner = Address::generate(&env);
-        let new_owner = Address::generate(&env);
-
-        open_position(&env, owner.clone(), 1, -100, 100, 5_000).unwrap();
-        let moved = transfer_position(&env, owner.clone(), 1, -100, 100, new_owner.clone()).unwrap();
-
-        assert_eq!(moved.owner, new_owner);
-        let stored = get_position(&env, 1, -100, 100).unwrap();
-        assert_eq!(stored.owner, new_owner);
-        assert_eq!(stored.lower_tick, -100);
-        assert_eq!(stored.upper_tick, 100);
-        assert_eq!(stored.liquidity, 5_000);
-    }
-
-    #[test]
-    fn transfer_preserves_uncollected_fee_growth() {
-        let env = Env::default();
-        setup(&env, 1);
-        let owner = Address::generate(&env);
-        let new_owner = Address::generate(&env);
-
-        open_position(&env, owner.clone(), 1, -100, 100, 5_000).unwrap();
-        let accrued =
-            accrue_fees(&env, owner.clone(), 1, -100, 100, 987_654_321, 42, 7).unwrap();
-        assert_eq!(accrued.fee_growth_inside_last, 987_654_321);
-        assert_eq!(accrued.tokens_owed_a, 42);
-        assert_eq!(accrued.tokens_owed_b, 7);
-
-        let moved = transfer_position(&env, owner, 1, -100, 100, new_owner.clone()).unwrap();
-
-        assert_eq!(moved.owner, new_owner);
-        assert_eq!(moved.fee_growth_inside_last, 987_654_321);
-        assert_eq!(moved.tokens_owed_a, 42);
-        assert_eq!(moved.tokens_owed_b, 7);
-
-        let stored = get_position(&env, 1, -100, 100).unwrap();
-        assert_eq!(stored.fee_growth_inside_last, 987_654_321);
-        assert_eq!(stored.tokens_owed_a, 42);
-        assert_eq!(stored.tokens_owed_b, 7);
-    }
-
-    #[test]
-    fn transfer_requires_current_owner() {
-        let env = Env::default();
-        setup(&env, 1);
-        let owner = Address::generate(&env);
-        let stranger = Address::generate(&env);
-        let new_owner = Address::generate(&env);
-
-        open_position(&env, owner, 1, -100, 100, 5_000).unwrap();
-        assert_eq!(
-            transfer_position(&env, stranger, 1, -100, 100, new_owner),
-            Err(ContractError::PositionNotOwned)
-        );
-    }
-
-    #[test]
-    fn transfer_rejects_self_transfer() {
-        let env = Env::default();
-        setup(&env, 1);
+        env.mock_all_auths();
+        let asset: AssetId = 1;
+        setup_pool(&env, asset);
         let owner = Address::generate(&env);
 
-        open_position(&env, owner.clone(), 1, -100, 100, 5_000).unwrap();
-        assert_eq!(
-            transfer_position(&env, owner.clone(), 1, -100, 100, owner),
-            Err(ContractError::PositionTransferToSelf)
-        );
-    }
-
-    #[test]
-    fn transfer_rejects_unknown_position() {
-        let env = Env::default();
-        setup(&env, 1);
-        let owner = Address::generate(&env);
-        let new_owner = Address::generate(&env);
+        let position = open_position(&env, owner.clone(), asset, -10, 10, 1000).unwrap();
+        split_position(&env, owner, position.id, 0).unwrap();
 
         assert_eq!(
-            transfer_position(&env, owner, 1, -100, 100, new_owner),
+            get_position(&env, position.id),
             Err(ContractError::PositionNotFound)
         );
     }
 
     #[test]
-    fn collateral_locked_position_cannot_transfer() {
+    fn split_position_recalculates_active_liquidity_when_mid_is_above_current_tick() {
         let env = Env::default();
-        setup(&env, 1);
+        env.mock_all_auths();
+        let asset: AssetId = 1;
+        setup_pool(&env, asset);
         let owner = Address::generate(&env);
-        let new_owner = Address::generate(&env);
 
-        open_position(&env, owner.clone(), 1, -100, 100, 5_000).unwrap();
-        set_collateral_lock(&env, owner.clone(), 1, -100, 100, true).unwrap();
+        // current_tick defaults to 0; range [-10, 10] (width 20) straddles it,
+        // so its full liquidity counts as active.
+        let position = open_position(&env, owner.clone(), asset, -10, 10, 1000).unwrap();
+        let meta_before = ticks::get_tick_index(&env, asset).unwrap();
+        assert_eq!(meta_before.active_liquidity, 1000);
 
-        assert_eq!(
-            transfer_position(&env, owner.clone(), 1, -100, 100, new_owner.clone()),
-            Err(ContractError::PositionCollateralLocked)
-        );
+        // Splitting at tick_mid = 5 (itself above current_tick = 0) leaves
+        // only the lower sub-range [-10, 5) straddling the current price;
+        // the upper sub-range [5, 10) is now entirely above it and so no
+        // longer contributes to active liquidity.
+        let result = split_position(&env, owner, position.id, 5).unwrap();
+        assert_eq!(result.lower.liquidity, 750); // width 15/20 of 1000
+        assert_eq!(result.upper.liquidity, 250); // width 5/20 of 1000
 
-        // Releasing the collateral re-enables transfer.
-        set_collateral_lock(&env, owner.clone(), 1, -100, 100, false).unwrap();
-        let moved = transfer_position(&env, owner, 1, -100, 100, new_owner).unwrap();
-        assert!(!moved.collateral_locked);
+        let meta_after = ticks::get_tick_index(&env, asset).unwrap();
+        assert_eq!(meta_after.active_liquidity, 750);
     }
 
     #[test]
-    fn transfer_emits_position_transferred_event() {
+    fn split_position_at_current_tick_moves_all_active_liquidity_to_one_side() {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register_contract(None, crate::TimeLockedUpgradeContract);
-        let asset: AssetId = 7;
+        let asset: AssetId = 1;
+        setup_pool(&env, asset);
         let owner = Address::generate(&env);
-        let new_owner = Address::generate(&env);
 
-        env.as_contract(&contract_id, || {
-            initialize_tick_index(&env, asset, 10).unwrap();
-            open_position(&env, owner.clone(), asset, -100, 100, 5_000).unwrap();
-            accrue_fees(&env, owner.clone(), asset, -100, 100, 5, 10, 20).unwrap();
-            transfer_position(&env, owner.clone(), asset, -100, 100, new_owner.clone()).unwrap();
+        // current_tick defaults to 0; splitting exactly there means neither
+        // new sub-range still straddles the current price in the way the
+        // original range did ([-10, 0) no longer includes 0, since the upper
+        // bound is exclusive), so total active liquidity reflects only the
+        // ticks at or below 0 under the standard net-liquidity convention.
+        let position = open_position(&env, owner.clone(), asset, -10, 10, 1000).unwrap();
+        split_position(&env, owner, position.id, 0).unwrap();
 
-            let topic: Val = Symbol::new(&env, "PositionTransferred").into_val(&env);
-            let mut found = false;
-            for item in env.events().all().iter() {
-                if item.1.contains(topic) {
-                    let ev = PositionTransferredEvent::try_from_val(&env, &item.2).unwrap();
-                    assert_eq!(ev.asset, asset);
-                    assert_eq!(ev.lower_tick, -100);
-                    assert_eq!(ev.upper_tick, 100);
-                    assert_eq!(ev.old_owner, owner);
-                    assert_eq!(ev.new_owner, new_owner);
-                    assert_eq!(ev.liquidity, 5_000);
-                    assert_eq!(ev.fee_growth_inside_last, 5);
-                    found = true;
-                }
-            }
-            assert!(found, "PositionTransferred event not emitted");
-        });
+        let meta_after = ticks::get_tick_index(&env, asset).unwrap();
+        assert_eq!(meta_after.active_liquidity, 500);
+    }
+
+    #[test]
+    fn split_position_rejects_non_owner() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let asset: AssetId = 1;
+        setup_pool(&env, asset);
+        let owner = Address::generate(&env);
+        let intruder = Address::generate(&env);
+
+        let position = open_position(&env, owner, asset, -10, 10, 1000).unwrap();
+        assert_eq!(
+            split_position(&env, intruder, position.id, 0),
+            Err(ContractError::Unauthorized)
+        );
+    }
+
+    #[test]
+    fn split_position_rejects_mid_outside_range() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let asset: AssetId = 1;
+        setup_pool(&env, asset);
+        let owner = Address::generate(&env);
+
+        let position = open_position(&env, owner.clone(), asset, -10, 10, 1000).unwrap();
+        assert_eq!(
+            split_position(&env, owner.clone(), position.id, 10),
+            Err(ContractError::InvalidSplitBoundary)
+        );
+        assert_eq!(
+            split_position(&env, owner.clone(), position.id, -10),
+            Err(ContractError::InvalidSplitBoundary)
+        );
+        assert_eq!(
+            split_position(&env, owner, position.id, 20),
+            Err(ContractError::InvalidSplitBoundary)
+        );
+    }
+
+    #[test]
+    fn split_position_rejects_unaligned_mid() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let asset: AssetId = 1;
+        ticks::initialize_tick_index(&env, asset, 10).unwrap();
+        let owner = Address::generate(&env);
+
+        let position = open_position(&env, owner.clone(), asset, -20, 20, 1000).unwrap();
+        assert_eq!(
+            split_position(&env, owner, position.id, 5),
+            Err(ContractError::TickNotAligned)
+        );
+    }
+
+    #[test]
+    fn split_position_rejects_unknown_id() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let asset: AssetId = 1;
+        setup_pool(&env, asset);
+        let owner = Address::generate(&env);
+
+        assert_eq!(
+            split_position(&env, owner, 999, 0),
+            Err(ContractError::PositionNotFound)
+        );
+    }
+
+    #[test]
+    fn split_position_apportions_accrued_fees_proportionally() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let asset: AssetId = 1;
+        setup_pool(&env, asset);
+        let owner = Address::generate(&env);
+
+        // Symmetric range so the fee split should also be symmetric.
+        let position = open_position(&env, owner.clone(), asset, -10, 10, 1000).unwrap();
+        ticks::accrue_fee_growth(&env, asset, 1000).unwrap();
+
+        let result = split_position(&env, owner, position.id, 0).unwrap();
+        assert_eq!(result.lower.tokens_owed + result.upper.tokens_owed, 1000);
+        assert_eq!(result.lower.tokens_owed, 500);
+        assert_eq!(result.upper.tokens_owed, 500);
+    }
+
+    #[test]
+    fn split_position_asymmetric_width_splits_liquidity_proportionally() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let asset: AssetId = 1;
+        setup_pool(&env, asset);
+        let owner = Address::generate(&env);
+
+        // [-10, 30]: width 40. Splitting at 10 -> widths 20/20 -> even split
+        // despite the asymmetric absolute tick values.
+        let position = open_position(&env, owner.clone(), asset, -10, 30, 1000).unwrap();
+        let result = split_position(&env, owner, position.id, 10).unwrap();
+        assert_eq!(result.lower.liquidity, 500);
+        assert_eq!(result.upper.liquidity, 500);
+
+        // [-10, 30] split at 0 -> widths 10/30 -> 1:3 split.
+        let env2 = Env::default();
+        env2.mock_all_auths();
+        setup_pool(&env2, asset);
+        let owner2 = Address::generate(&env2);
+        let position2 = open_position(&env2, owner2.clone(), asset, -10, 30, 1000).unwrap();
+        let result2 = split_position(&env2, owner2, position2.id, 0).unwrap();
+        assert_eq!(result2.lower.liquidity, 250);
+        assert_eq!(result2.upper.liquidity, 750);
     }
 }

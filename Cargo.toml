@@ -63,6 +63,7 @@ libm = "0.2.16"
 soroban-sdk = { version = "=20.0.0", default-features = false, features = ["testutils"] }
 
 [features]
+default = []
 testutils = ["soroban-sdk/testutils"]
 
 [dev-dependencies]

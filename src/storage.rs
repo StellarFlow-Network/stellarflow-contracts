@@ -24,6 +24,8 @@ pub const RENT_THRESHOLD: u32 = 259_200;
 const RENT_EXTEND_TO: u32 = 518_400;
 const ASET_TTL_THRESHOLD: u32 = 100_000;
 
+pub mod ephemeral;
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {

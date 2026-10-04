@@ -176,6 +176,10 @@ pub fn submit_governance_proposal(
         }
     }
 
+    if crate::veto::is_hash_vetoed(env, &wasm_hash) {
+        return Err(ContractError::ProposalAlreadyVetoed);
+    }
+
     proposer.require_auth();
     let proposal_id = _next_proposal_id(env);
     let proposal = GovernanceProposal {

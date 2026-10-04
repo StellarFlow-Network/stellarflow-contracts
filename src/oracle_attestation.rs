@@ -125,7 +125,7 @@ fn verify_attestation_signature(
     amount: u64,
     signature: &BytesN<64>,
 ) -> Result<(), ContractError> {
-    // Reconstruct the signed payload: Tx_id || Amount (8 bytes LE)
+    // Reconstruct the signed payload: Tx_id || AmountErr (8 bytes LE)
     let mut payload = Bytes::new(env);
     payload.append(&Bytes::from_slice(env, &tx_id.to_array()));
     let amount_bytes = amount.to_le_bytes();
