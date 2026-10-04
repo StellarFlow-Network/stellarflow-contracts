@@ -838,7 +838,7 @@ pub fn purge_closed_orders(env: &Env, order_ids: &Vec<u64>) -> u32 {
             }
         }
 
-        let legacy_key = OrderStorageKey::Order(order_id);
+        let legacy_key = OrderStorageKey::OrderIndex(order_id);
         if let Some(order) = env.storage().persistent().get::<_, LimitOrder>(&legacy_key) {
             if !order.active || order.remaining_amount == 0 {
                 env.storage().persistent().remove(&legacy_key);

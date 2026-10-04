@@ -80,7 +80,7 @@ pub struct SpotPriceTick {
 
 /// Snapshot of the circuit breaker state for an individual pool.
 #[contracttype]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PoolCircuitBreakerState {
     /// Whether pool trading is currently frozen.
     pub is_frozen: bool,
@@ -107,7 +107,7 @@ impl Default for PoolCircuitBreakerState {
             breach_deviation_bps: 0,
             baseline_price: 0,
             breach_price: 0,
-            frozen_by: crate::OptionalAddress(None),
+            frozen_by: crate::OptionalAddress::None,
         }
     }
 }
@@ -329,7 +329,7 @@ pub fn check_and_update_spot_price(
         if cur_ledger >= cooldown_target {
             // Cooldown period elapsed -> Automatic recovery
             state.is_frozen = false;
-            state.frozen_by = crate::OptionalAddress(None);
+            state.frozen_by = crate::OptionalAddress::None;
             save_pool_circuit_breaker_state(env, pool_id, &state);
 
             env.events().publish(
@@ -376,7 +376,7 @@ pub fn check_and_update_spot_price(
             state.breach_deviation_bps = dev_bps;
             state.baseline_price = prev_tick.last_price;
             state.breach_price = current_spot_price;
-            state.frozen_by = crate::OptionalAddress(None);
+            state.frozen_by = crate::OptionalAddress::None;
 
             save_pool_circuit_breaker_state(env, pool_id, &state);
 
@@ -443,7 +443,7 @@ pub fn manual_freeze_pool(
         breach_deviation_bps: 0,
         baseline_price: last_price,
         breach_price: last_price,
-        frozen_by: crate::OptionalAddress(Some(caller.clone())),
+        frozen_by: crate::OptionalAddress::Some(caller.clone()),
     };
 
     save_pool_circuit_breaker_state(env, pool_id, &state);
@@ -478,7 +478,7 @@ pub fn manual_unfreeze_pool(
 
     let mut state = get_pool_circuit_breaker_state(env, pool_id);
     state.is_frozen = false;
-    state.frozen_by = crate::OptionalAddress(None);
+    state.frozen_by = crate::OptionalAddress::None;
 
     save_pool_circuit_breaker_state(env, pool_id, &state);
 
