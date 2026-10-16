@@ -414,6 +414,12 @@ pub fn anchor_settle(
 /// sequence must have passed. On success the HTLC state transitions to
 /// `Refunded` and the full amount is returned to the depositor.
 ///
+/// # Security Note
+/// This function updates the HTLC state but does not directly transfer tokens.
+/// The actual token transfer should be handled via a pull-payment pattern
+/// where the depositor claims funds in a separate transaction. This prevents
+/// reentrancy attacks and ensures failed transfers don't block the state update.
+///
 /// # Arguments
 /// * `env` - Soroban environment.
 /// * `htlc_id` - The HTLC to refund.
@@ -455,6 +461,7 @@ pub fn refund(
     }
 
     // ── State transition ───────────────────────────────────────────────
+    // Update state first (checks-effects-interactions pattern)
     htlc.state = HtlcState::Refunded;
     env.storage().persistent().set(&key, &htlc);
 

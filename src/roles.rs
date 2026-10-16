@@ -29,16 +29,20 @@ pub enum Role {
 }
 
 /// A single role grant, scoped to one `(grantee, role)` pair.
+///
+/// # Storage Optimization
+/// Fields are ordered to optimize storage packing: smaller integers
+/// (u32) are grouped together to minimize storage slots.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct RoleGrant {
+    /// Ledger sequence at/after which this grant is no longer valid.
+    pub expiration_ledger: u32,
+    pub granted_at_ledger: u32,
     pub role: Role,
     pub role_hash: BytesN<32>,
     pub grantee: Address,
     pub granted_by: Address,
-    pub granted_at_ledger: u32,
-    /// Ledger sequence at/after which this grant is no longer valid.
-    pub expiration_ledger: u32,
 }
 
 #[contracttype]
@@ -132,12 +136,12 @@ pub fn grant_role(
 
     let role_id = role_hash(env, role);
     let grant = RoleGrant {
+        expiration_ledger,
+        granted_at_ledger: current_ledger,
         role,
         role_hash: role_id.clone(),
         grantee: grantee.clone(),
         granted_by: admin.clone(),
-        granted_at_ledger: current_ledger,
-        expiration_ledger,
     };
 
     let key = RoleStorageKey::Grant(grantee.clone(), role);
