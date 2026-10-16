@@ -55,27 +55,32 @@ pub struct PositionKey(u64);
 const POSITION_COUNTER_KEY: Symbol = symbol_short!("POSCTR");
 
 /// A concentrated-liquidity range position.
+///
+/// # Storage Optimization
+/// Fields are ordered to optimize storage packing: smaller integers (u32, i32)
+/// are grouped together to minimize storage slots, with the 32-byte Address
+/// placed to align with Soroban's storage layout.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Position {
     /// This position's receipt-token id.
     pub id: u64,
-    /// The address that owns this position and may split or (in a future
-    /// close/withdraw operation) redeem it.
-    pub owner: Address,
     /// Pool asset identifier.
     pub asset: AssetId,
     /// Lower tick boundary (inclusive).
     pub tick_lower: i32,
     /// Upper tick boundary (exclusive).
     pub tick_upper: i32,
+    /// The address that owns this position and may split or (in a future
+    /// close/withdraw operation) redeem it.
+    pub owner: Address,
     /// Liquidity committed to this range.
     pub liquidity: u64,
+    /// Fees settled and not yet claimed, in the pool's fee unit.
+    pub tokens_owed: u64,
     /// `fee_growth_inside` (see `ticks::get_fee_growth_inside`) snapshotted
     /// the last time this position's owed fees were settled.
     pub fee_growth_inside_last: u128,
-    /// Fees settled and not yet claimed, in the pool's fee unit.
-    pub tokens_owed: u64,
 }
 
 /// Result of [`split_position`]: the two new sub-range positions.
@@ -151,13 +156,13 @@ pub fn open_position(
     let id = mint_position_id(env)?;
     let position = Position {
         id,
-        owner,
         asset,
         tick_lower,
         tick_upper,
+        owner,
         liquidity,
-        fee_growth_inside_last,
         tokens_owed: 0,
+        fee_growth_inside_last,
     };
     set_position_record(env, &position);
     Ok(position)
@@ -271,26 +276,26 @@ pub fn split_position(
     let lower_id = mint_position_id(env)?;
     let lower = Position {
         id: lower_id,
-        owner: position.owner.clone(),
         asset: position.asset,
         tick_lower: position.tick_lower,
         tick_upper: tick_mid,
+        owner: position.owner.clone(),
         liquidity: liquidity_lower,
-        fee_growth_inside_last: fee_growth_inside_lower,
         tokens_owed: owed_lower,
+        fee_growth_inside_last: fee_growth_inside_lower,
     };
     set_position_record(env, &lower);
 
     let upper_id = mint_position_id(env)?;
     let upper = Position {
         id: upper_id,
-        owner: position.owner.clone(),
         asset: position.asset,
         tick_lower: tick_mid,
         tick_upper: position.tick_upper,
+        owner: position.owner.clone(),
         liquidity: liquidity_upper,
-        fee_growth_inside_last: fee_growth_inside_upper,
         tokens_owed: owed_upper,
+        fee_growth_inside_last: fee_growth_inside_upper,
     };
     set_position_record(env, &upper);
 

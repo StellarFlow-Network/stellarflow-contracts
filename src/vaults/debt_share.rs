@@ -77,15 +77,36 @@ pub enum DebtShareStorageKey {
 
 // ── Internal arithmetic helpers ──────────────────────────────────────────────
 
-/// Convert an absolute debt `d` into a normalized share: `S = d / Index_debt`.
-fn share_from_debt(d: i128, index: u128) -> Result<u128, ContractError> {
-    if d < 0 {
+/// Safely convert i128 to u128, ensuring the value is non-negative.
+///
+/// This is a safe type conversion wrapper that explicitly checks for
+/// negative values before casting, preventing silent truncation.
+fn i128_to_u128_safe(value: i128) -> Result<u128, ContractError> {
+    if value < 0 {
         return Err(ContractError::VaultInsufficientBalance);
     }
+    Ok(value as u128)
+}
+
+/// Safely convert u128 to i128, ensuring the value fits in i128's range.
+///
+/// This prevents overflow when converting from unsigned to signed integers.
+/// Since i128 max is approximately 1.7e19 and u128 max is 3.4e19, we must
+/// check that the value is within the valid i128 range.
+fn u128_to_i128_safe(value: u128) -> Result<i128, ContractError> {
+    if value > i128::MAX as u128 {
+        return Err(ContractError::MathOverflow);
+    }
+    Ok(value as i128)
+}
+
+/// Convert an absolute debt `d` into a normalized share: `S = d / Index_debt`.
+fn share_from_debt(d: i128, index: u128) -> Result<u128, ContractError> {
     if d == 0 {
         return Ok(0);
     }
-    let scaled = (d as u128)
+    let d_u128 = i128_to_u128_safe(d)?;
+    let scaled = d_u128
         .checked_mul(DEBT_SHARE_SCALE)
         .ok_or(ContractError::MathOverflow)?;
     Ok(scaled / index)
@@ -99,10 +120,13 @@ fn debt_from_share(share: u128, index: u128) -> Result<i128, ContractError> {
     let scaled = share
         .checked_mul(index)
         .ok_or(ContractError::MathOverflow)?;
-    Ok((scaled / DEBT_SHARE_SCALE) as i128)
+    u128_to_i128_safe(scaled / DEBT_SHARE_SCALE)
 }
 
 /// Sum every borrower's reconstructed debt from the share ledger.
+///
+/// Uses safe type conversions to prevent overflow when converting
+/// from unsigned debt reconstruction to signed total.
 fn recompute_total_debt(users: &Map<Address, DebtUserState>, index: u128) -> i128 {
     let mut total: i128 = 0;
     for (_, entry) in users.iter() {
@@ -110,7 +134,9 @@ fn recompute_total_debt(users: &Map<Address, DebtUserState>, index: u128) -> i12
             let d = entry.share
                 .checked_mul(index)
                 .unwrap_or(0) / DEBT_SHARE_SCALE;
-            total = total.saturating_add(d as i128);
+            // Safe conversion from u128 to i128 with saturation
+            let d_i128 = u128_to_i128_safe(d).unwrap_or(i128::MAX);
+            total = total.saturating_add(d_i128);
         }
     }
     total
@@ -414,6 +440,28 @@ mod tests {
         assert_eq!(
             assert_debt_accounting_balances(&env),
             Err(ContractError::VaultDebtImbalance)
+        );
+    }
+
+    #[test]
+    fn safe_i128_to_u128_rejects_negative() {
+        assert_eq!(
+            i128_to_u128_safe(-1),
+            Err(ContractError::VaultInsufficientBalance)
+        );
+        assert_eq!(i128_to_u128_safe(0), Ok(0));
+        assert_eq!(i128_to_u128_safe(100), Ok(100));
+    }
+
+    #[test]
+    fn safe_u128_to_i128_rejects_overflow() {
+        assert_eq!(u128_to_i128_safe(0), Ok(0));
+        assert_eq!(u128_to_i128_safe(100), Ok(100));
+        // Test near the boundary
+        assert_eq!(u128_to_i128_safe(i128::MAX as u128), Ok(i128::MAX));
+        assert_eq!(
+            u128_to_i128_safe(i128::MAX as u128 + 1),
+            Err(ContractError::MathOverflow)
         );
     }
 }
