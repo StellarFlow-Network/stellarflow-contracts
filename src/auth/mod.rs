@@ -3,6 +3,7 @@ use crate::{ContractData, ContractError, DATA_KEY, VALIDATOR_STATE_KEY};
 use crate::storage::SignerKey;
 
 pub mod dispatcher;
+pub mod meta_tx;
 
 const ACTIVE: u32 = 1 << 1;
 
