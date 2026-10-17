@@ -73,7 +73,7 @@ pub const PROPOSAL_EARLY_EXECUTION_TRIGGERED: &str = "ProposalEarlyExecutionTrig
 /// Topic emitted when an affirmative vote is recorded.
 pub const AFFIRMATIVE_VOTE_RECORDED: &str = "AffirmativeVoteRecorded";
 
-/// Errors returned by the early-execution module.
+/// Typed contract errors returned by the early-execution module.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]

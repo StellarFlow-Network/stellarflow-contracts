@@ -385,7 +385,7 @@ mod tests {
         })
         .unwrap();
 
-        let cancelled = env.as_contract(&contract_id, || {
+        env.as_contract(&contract_id, || {
             assert!(cancel_token_rescue(&env, admin.clone(), pid).is_ok());
 
             let proposal = get_rescue_proposal(&env, pid).unwrap();
@@ -395,6 +395,5 @@ mod tests {
         advance_timestamp(&env, RESCUE_TIMELOCK_DELAY + 10);
         let res = env.as_contract(&contract_id, || execute_token_rescue(&env, admin, pid));
         assert_eq!(res, Err(ContractError::RescueProposalNotPending));
-        let _ = cancelled;
     }
 }

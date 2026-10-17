@@ -560,9 +560,8 @@ mod tests {
 
     #[test]
     fn set_performance_fee_rejects_above_cap() {
-        let (env, client, vault_admin, fee_recipient, asset) = setup();
+        let (_env, client, vault_admin, fee_recipient, asset) = setup();
         client.init_vault(&vault_admin, &asset, &fee_recipient);
-        let _ = env;
         let result = client.try_set_vault_performance_fee(&vault_admin, &(MAX_PERFORMANCE_FEE_BPS + 1));
         assert_eq!(result, Err(Ok(ContractError::VaultInvalidPerformanceFee)));
     }

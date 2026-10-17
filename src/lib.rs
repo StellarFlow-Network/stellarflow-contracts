@@ -42,15 +42,23 @@ impl OptionalAddress {
 pub fn symbol_to_asset_id(symbol: &Symbol) -> AssetId {
     // Direct mapping for known currency symbols (deterministic).
     // For unknown symbols, fall back to a hash of the raw SymbolVal.
-    if *symbol == symbol_short!("NGN") { 3897123275 }
-    else if *symbol == symbol_short!("KES") { 2654435761 }
-    else if *symbol == symbol_short!("GHS") { 4026531840 }
-    else if *symbol == symbol_short!("CFA") { 4160749568 }
-    else if *symbol == symbol_short!("ZAR") { 3219226362 }
-    else if *symbol == symbol_short!("UGX") { 2863311530 }
-    else if *symbol == symbol_short!("STAKE") { 0 }
-    else if *symbol == symbol_short!("VALUE") { 1 }
-    else {
+    if *symbol == symbol_short!("NGN") {
+        3897123275
+    } else if *symbol == symbol_short!("KES") {
+        2654435761
+    } else if *symbol == symbol_short!("GHS") {
+        4026531840
+    } else if *symbol == symbol_short!("CFA") {
+        4160749568
+    } else if *symbol == symbol_short!("ZAR") {
+        3219226362
+    } else if *symbol == symbol_short!("UGX") {
+        2863311530
+    } else if *symbol == symbol_short!("STAKE") {
+        0
+    } else if *symbol == symbol_short!("VALUE") {
+        1
+    } else {
         // Fallback: hash the raw bits of the Symbol's underlying Val.
         // Val is #[repr(transparent)] over i64.
         let val = symbol.to_val();
@@ -58,7 +66,9 @@ pub fn symbol_to_asset_id(symbol: &Symbol) -> AssetId {
         let bytes = raw.to_le_bytes();
         let mut hash: u32 = 2166136261u32;
         for &byte in bytes.iter() {
-            if byte == 0 { break; }
+            if byte == 0 {
+                break;
+            }
             hash ^= byte as u32;
             hash = hash.wrapping_mul(16777619);
         }
@@ -68,7 +78,7 @@ pub fn symbol_to_asset_id(symbol: &Symbol) -> AssetId {
 
 /// Convert an AssetId back to a Symbol for backward compatibility.
 /// Note: This is lossy - use pre-defined mappings for production.
-    pub fn asset_id_to_symbol(_env: &Env, id: AssetId) -> Symbol {
+pub fn asset_id_to_symbol(_env: &Env, id: AssetId) -> Symbol {
     // For common currencies, use a mapping table
     match id {
         // Nigerian Naira
