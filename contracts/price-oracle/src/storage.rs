@@ -1,7 +1,7 @@
 //! Proactive rent evaluation module (closes #542).
 //!
-//! Extends the storage lifespan of active tracking slots during query execution,
-//! passing associated maintenance charges to the calling context.
+/// Extends the storage lifespan of active tracking slots during query execution,
+/// passing associated maintenance charges to the calling context.
 
 use soroban_sdk::{Env, Symbol};
 
@@ -48,6 +48,16 @@ pub fn extend_instance_ttl(env: &Env) {
         .extend_ttl(PERSISTENT_THRESHOLD, PERSISTENT_BUMP_AMOUNT);
 }
 
+/// Extend TTLs for all storage slots touched by a pricing query.
+///
+/// Called at the entry of the pricing path so that read-only queries pay their
+/// own rent and do not leave active tracking slots to expire.
+pub fn extend_pricing_slots(env: &Env, asset: &Symbol) {
+    extend_instance_ttl(env);
+    extend_price_ttl(env, asset);
+    extend_asset_info_ttl(env, asset);
+    extend_twap_ttl(env, asset);
+}
 
 #[cfg(test)]
 mod storage_tests {
@@ -60,7 +70,7 @@ mod storage_tests {
     #[contractimpl]
     impl TestContract {}
 
-    #[test]
+    #test]
     fn test_extend_instance_ttl_does_not_panic() {
         let env = Env::default();
         let cid = env.register(TestContract, ());
@@ -69,7 +79,7 @@ mod storage_tests {
         });
     }
 
-    #[test]
+    #test]
     fn test_extend_price_ttl_missing_key_does_not_panic() {
         let env = Env::default();
         let cid = env.register(TestContract, ());
@@ -77,6 +87,16 @@ mod storage_tests {
             let asset = Symbol::new(&env, "XLM");
             // Key doesn't exist yet — extend_ttl on missing persistent key is a no-op in the test env.
             extend_price_ttl(&env, &asset);
+        });
+    }
+
+    #test]
+    fn test_extend_pricing_slots_does_not_panic() {
+        let env = Env::default();
+        let cid = env.register(TestContract, ());
+        env.as_contract(&cid, || {
+            let asset = Symbol::new(&env, "XLM");
+            extend_pricing_slots(&env, &asset);
         });
     }
 }

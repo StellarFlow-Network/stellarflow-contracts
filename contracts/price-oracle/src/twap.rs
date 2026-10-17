@@ -1,3 +1,4 @@
+//! Read-only reentrancy guard: pool-lock validation + TWAP price-impact checks.
 //! Single-ledger price-impact (TWAP) guard — closes #970.
 //!
 //! The oracle already rejects a *single* price submission that moves more than
@@ -37,6 +38,38 @@ pub const PRICE_WINDOW_LEDGERS: u32 = 5;
 
 /// Maximum allowed `|P_inst - P_ma| / P_ma`, in basis points (5% = 500 bps).
 pub const PRICE_IMPACT_THRESHOLD_BPS: i128 = 500;
+
+/// Pool-level anti-reentrancy: reject price export while the target liquidity
+/// pool reports itself as mid-swap (locked). This closes the read-only
+/// reentrancy vector where a flash-loan manipulator queries pool balances
+/// during a swap to observe a temporary imbalance.
+///
+/// The check is a plain read of the pool's lock flag; it never mutates pool
+/// state, so it is safe to call from view/borrow paths.
+pub fn ensure_pool_unlocked(env: &Env, pool: &Symbol) -> Result<(), ContractError> {
+    let locked: bool = env
+        .storage()
+        .persistent()
+        .get(&DataKey::PoolLock(pool.clone()))
+        .unwrap_or(false);
+    if locked {
+        return Err(ContractError::PoolLocked);
+    }
+    Ok(())
+}
+
+/// Read-only reentrancy guard: verify the pool is not mid-swap before
+/// exporting an asset price. Combines the pool-lock check with the existing
+/// single-ledger price-impact flag so a caller cannot read a manipulated
+/// price while the pool is executing.
+pub fn enforce_readonly_reentrancy_guard(
+    env: &Env,
+    asset: &Symbol,
+    pool: &Symbol,
+) -> Result<(), ContractError> {
+    ensure_pool_unlocked(env, pool)?;
+    enforce_price_impact_guard(env, asset)
+}
 
 /// Read the rolling price window for `asset`.
 ///
@@ -227,6 +260,10 @@ pub fn record_and_evaluate(env: &Env, asset: &Symbol, price: i128) -> i128 {
 /// host call discards its events — the transition events are published from
 /// [`record_and_evaluate`] when the flag actually flips.
 pub fn enforce_price_impact_guard(env: &Env, asset: &Symbol) -> Result<(), ContractError> {
+    // Read-only reentrancy: never export a price while the pool is mid-swap.
+    // The pool lock is checked by callers via `enforce_readonly_reentrancy_guard`;
+    // here we only enforce the price-impact flag so the two concerns stay
+    // composable.
     if is_tripped(env, asset) {
         return Err(ContractError::PriceImpactGuardTriggered);
     }
