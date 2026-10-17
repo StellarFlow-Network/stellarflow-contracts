@@ -524,6 +524,8 @@ impl ContractError {
     pub const TickOutOfBounds: Self = Self::InvalidVarianceConfig;
     pub const TimelockNotExpired: Self = Self::UpgradeTimelockNotSatisfied;
     pub const TooManyTicks: Self = Self::Overflow;
+    /// Reward payout transfer failed in reward pool (Issue #1234).
+    pub const RewardTransferFailed: Self = Self::InsufficientReserveBalance;
 }
 
 // Contract state keys
