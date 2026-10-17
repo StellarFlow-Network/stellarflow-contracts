@@ -93,6 +93,26 @@ fn load_virtual_reserves(env: &Env) -> (i128, i128) {
     (virtual_a, virtual_b)
 }
 
+/// Read the pair's pending uncollected protocol fees `(fee_a, fee_b)`.
+///
+/// These balances are physically held by the pool but are not owned by LPs.
+/// Withdrawal accounting must deduct them from the real reserves before
+/// computing pro-rata payouts, otherwise the last LP out would be paid against
+/// assets that belong to the protocol (issue: incomplete liquidity removal).
+fn load_pending_protocol_fees(env: &Env) -> (i128, i128) {
+    let fee_a: i128 = env
+        .storage()
+        .instance()
+        .get(&symbol_short!("pfee_a"))
+        .unwrap_or(0);
+    let fee_b: i128 = env
+        .storage()
+        .instance()
+        .get(&symbol_short!("pfee_b"))
+        .unwrap_or(0);
+    (fee_a, fee_b)
+}
+
 #[contractimpl]
 impl AmmContract {
     /// Initialise a pair with the protocol default virtual reserve core.
@@ -160,6 +180,12 @@ impl AmmContract {
         env.storage()
             .instance()
             .set(&symbol_short!("vres_b"), &virtual_b);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("pfee_a"), &0i128);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("pfee_b"), &0i128);
         Ok(())
     }
 
@@ -542,6 +568,7 @@ impl AmmContract {
             .instance()
             .get(&symbol_short!("tot_sh"))
             .unwrap_or(0);
+        let (pending_fee_a, pending_fee_b) = load_pending_protocol_fees(&env);
 
         if total_shares <= 0 || shares > total_shares {
             return Err(AmmError::InvalidDepositRatio);
@@ -551,9 +578,19 @@ impl AmmContract {
         let reserves =
             EffectiveReserves::new(reserve_a, reserve_b, virtual_a, virtual_b).map_err(map_virtual)?;
 
-        // Pro-rata on the real reserves; the core is not part of any claim.
-        let amount_a = (shares * reserve_a) / total_shares;
-        let amount_b = (shares * reserve_b) / total_shares;
+        // Deduct pending uncollected protocol fees before evaluating the user's
+        // withdrawal outputs: those assets are held by the pool but are not
+        // LP-owned, so they must not inflate the pro-rata claim.
+        let withdrawable_a = reserve_a - pending_fee_a;
+        let withdrawable_b = reserve_b - pending_fee_b;
+        if withdrawable_a < 0 || withdrawable_b < 0 {
+            return Err(AmmError::ArithmeticOverflow);
+        }
+
+        // Pro-rata on the real, fee-adjusted reserves; the core is not part of
+        // any claim.
+        let amount_a = (shares * withdrawable_a) / total_shares;
+        let amount_b = (shares * withdrawable_b) / total_shares;
         if amount_a <= 0 || amount_b <= 0 {
             return Err(AmmError::NonPositiveAmount);
         }
@@ -584,6 +621,12 @@ impl AmmContract {
             .set(&symbol_short!("tot_sh"), &(total_shares - shares));
 
         Ok((amount_a, amount_b))
+    }
+
+    /// The pending uncollected protocol fees `(fee_a, fee_b)` currently held by
+    /// the pool. These are excluded from LP withdrawal accounting.
+    pub fn get_pending_protocol_fees(env: Env) -> (i128, i128) {
+        load_pending_protocol_fees(&env)
     }
 
     /// `(reserve_a + v_a, reserve_b + v_b)`, the balances the pool actually
@@ -919,6 +962,99 @@ mod test {
         let (amount_a, amount_b) = client.remove_liquidity(&provider, &1000, &0, &0);
         assert_eq!((amount_a, amount_b), (1000, 1000));
         assert_eq!(client.get_reserves(), (1000, 1000));
+    }
+
+    /// Pending uncollected protocol fees must be deducted from the real
+    /// reserves before computing a withdrawal, so LPs cannot drain assets that
+    /// belong to the protocol.
+    #[test]
+    fn test_remove_liquidity_deducts_pending_protocol_fees() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let token_a = env.register_stellar_asset_contract(Address::generate(&env));
+        let token_b = env.register_stellar_asset_contract(Address::generate(&env));
+        let lp_token = env.register_stellar_asset_contract(Address::generate(&env));
+
+        let contract_id = env.register_contract(None, AmmContract);
+        let client = AmmContractClient::new(&env, &contract_id);
+        client.initialize(&token_a, &token_b, &lp_token);
+
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .instance()
+                .set(&symbol_short!("res_a"), &2000i128);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("res_b"), &2000i128);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("tot_sh"), &2000i128);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("pfee_a"), &400i128);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("pfee_b"), &400i128);
+        });
+
+        assert_eq!(client.get_pending_protocol_fees(), (400, 400));
+
+        let provider = Address::generate(&env);
+        soroban_sdk::token::StellarAssetClient::new(&env, &lp_token).mint(&provider, &2000);
+        soroban_sdk::token::StellarAssetClient::new(&env, &token_a).mint(&contract_id, &2000);
+        soroban_sdk::token::StellarAssetClient::new(&env, &token_b).mint(&contract_id, &2000);
+
+        // Withdrawable = 2000 - 400 = 1600 per leg. Burning 100 of 2000 shares
+        // pays 100 * 1600 / 2000 = 80 per leg, not 100.
+        let (amount_a, amount_b) = client.remove_liquidity(&provider, &100, &0, &0);
+        assert_eq!((amount_a, amount_b), (80, 80));
+        assert_eq!(client.get_reserves(), (1920, 1920));
+        // Protocol fees remain untouched.
+        assert_eq!(client.get_pending_protocol_fees(), (400, 400));
+    }
+
+    /// A complete pool drain must be rejected even when pending protocol fees
+    /// are present: the fee-adjusted withdrawable balance still has to clear
+    /// the virtual core on both legs.
+    #[test]
+    fn test_remove_liquidity_full_drain_with_pending_fees_reverts() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let token_a = env.register_stellar_asset_contract(Address::generate(&env));
+        let token_b = env.register_stellar_asset_contract(Address::generate(&env));
+        let lp_token = env.register_stellar_asset_contract(Address::generate(&env));
+
+        let contract_id = env.register_contract(None, AmmContract);
+        let client = AmmContractClient::new(&env, &contract_id);
+        client.initialize(&token_a, &token_b, &lp_token);
+
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .instance()
+                .set(&symbol_short!("res_a"), &2000i128);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("res_b"), &2000i128);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("tot_sh"), &2000i128);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("pfee_a"), &400i128);
+            env.storage()
+                .instance()
+                .set(&symbol_short!("pfee_b"), &400i128);
+        });
+
+        let provider = Address::generate(&env);
+        soroban_sdk::token::StellarAssetClient::new(&env, &lp_token).mint(&provider, &2000);
+
+        // Burning all shares would withdraw 1600 per leg, leaving 400 real
+        // reserves — below the 1,000-unit core.
+        let res = client.try_remove_liquidity(&provider, &2000, &0, &0);
+        assert_eq!(res, Err(Ok(AmmError::VirtualFloorBreached)));
     }
 
     #[test]
