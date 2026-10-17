@@ -1,3 +1,4 @@
+pub mod fund_router;
 pub mod dynamic;
 pub mod multihop;
 

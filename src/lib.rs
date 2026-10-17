@@ -488,6 +488,10 @@ impl ContractError {
     pub const InvalidPublicInputs: Self = Self::NotInitialized;
     pub const InvalidThreshold: Self = Self::InvalidVarianceConfig;
     pub const InvalidTickSpacing: Self = Self::InvalidVarianceConfig;
+        /// Low-level ETH or native transfer failed in fund router (Issue #1125).
+    pub const ETHTransferFailed: Self = Self::InsufficientReserveBalance;
+    /// Signature has an s-value above half curve order indicating malleability (Issue #1226).
+    pub const MalleableSignature: Self = Self::InvalidSaltSignature;
     pub const InvariantViolation: Self = Self::SlippageExceeded;
     pub const MerkleTreeFull: Self = Self::Overflow;
     pub const NoActiveDelegation: Self = Self::NotRegistered;
