@@ -21,6 +21,13 @@ const MAX_CLEAR_ASSETS: u32 = 20;
 /// when many providers submit prices simultaneously.
 const MAX_MEDIAN_ENTRIES: u32 = 11;
 
+/// Maximum number of assets (or index-price components) accepted in a single
+/// batch read entrypoint (`get_prices`, `get_prices_with_status`,
+/// `get_index_price`).  Callers who supply a longer `Vec` will receive
+/// `ContractError::OutOfBounds` immediately, before any iteration or storage
+/// access, preventing CPU-budget exhaustion via oversized caller inputs.
+const MAX_PATH_HOPS: u32 = 5;
+
 /// A clean, gas-optimized interface for other Soroban contracts to fetch prices from StellarFlow.
 ///
 /// The generated client from this trait is the intended cross-contract entrypoint for downstream
@@ -893,6 +900,9 @@ pub enum ContractError {
     /// Instant price deviated from the 5-ledger moving average by more than the
     /// single-ledger price-impact guard threshold (5%).
     PriceImpactGuardTriggered = 65,
+    /// Input collection length exceeds the maximum allowed cap.
+    /// Recovery steps: Reduce the number of assets or components in the request to at most MAX_PATH_HOPS (5).
+    OutOfBounds = 66,
 }
 
 pub type Error = ContractError;
@@ -1484,6 +1494,9 @@ impl PriceOracle {
     ) -> Result<i128, ContractError> {
         if crate::auth::_is_halted(&env) {
             return Err(ContractError::EmergencyHalted);
+        }
+        if components.len() > MAX_PATH_HOPS {
+            return Err(ContractError::OutOfBounds);
         }
         validation::calculate_index_price(&env, &components)
     }
@@ -2148,6 +2161,9 @@ impl PriceOracle {
         if crate::auth::_is_halted(&env) {
             return Err(ContractError::EmergencyHalted);
         }
+        if assets.len() > MAX_PATH_HOPS {
+            return Err(ContractError::OutOfBounds);
+        }
         let now = env.ledger().timestamp();
         let mut result = soroban_sdk::Vec::new(&env);
 
@@ -2184,6 +2200,9 @@ impl PriceOracle {
     ) -> Result<soroban_sdk::Vec<Option<PriceEntryWithStatus>>, ContractError> {
         if crate::auth::_is_halted(&env) {
             return Err(ContractError::EmergencyHalted);
+        }
+        if assets.len() > MAX_PATH_HOPS {
+            return Err(ContractError::OutOfBounds);
         }
         let now = env.ledger().timestamp();
         let mut result = soroban_sdk::Vec::new(&env);

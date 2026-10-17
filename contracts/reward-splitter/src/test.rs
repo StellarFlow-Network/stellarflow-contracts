@@ -552,3 +552,78 @@ fn test_configure_cooldown_stage_invalid() {
 
     client.configure_cooldown_stage(&admin, &5, &7200, &symbol_short!("INVALID"));
 }
+
+// ============================================================================
+// Unbounded-Collection-Caps: OutOfBounds guard tests (issue fix)
+// ============================================================================
+
+// --- add_recipient: bug-condition — 51st recipient rejected ---
+
+#[test]
+#[should_panic(expected = "ContractError(OutOfBounds)")]
+fn test_add_recipient_rejects_at_cap() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, RewardSplitter);
+    let client = RewardSplitterClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+    client.initialize(&admin, &token);
+
+    // Add exactly 50 recipients each with 1 bp share (total = 50 bp, well
+    // below the 10_000 bp share cap so TotalSharesExceeded never fires).
+    for _ in 0..50 {
+        let r = Address::generate(&env);
+        client.add_recipient(&admin, &r, &1);
+    }
+
+    // The 51st call must panic with OutOfBounds.
+    let extra = Address::generate(&env);
+    client.add_recipient(&admin, &extra, &1);
+}
+
+// --- add_recipient: boundary — exactly 49 existing → 50th succeeds ---
+
+#[test]
+fn test_add_recipient_exactly_49_existing_succeeds() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, RewardSplitter);
+    let client = RewardSplitterClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+    client.initialize(&admin, &token);
+
+    for _ in 0..49 {
+        let r = Address::generate(&env);
+        client.add_recipient(&admin, &r, &1);
+    }
+
+    // The 50th addition must succeed — recipient count is now at the cap.
+    let fiftieth = Address::generate(&env);
+    client.add_recipient(&admin, &fiftieth, &1);
+
+    assert_eq!(client.get_recipients().len(), 50);
+    assert_eq!(client.get_total_shares(), 50);
+}
+
+// --- add_recipient: below cap preserved — small list still works ---
+
+#[test]
+fn test_add_recipient_under_cap_preserved() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, RewardSplitter);
+    let client = RewardSplitterClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+    client.initialize(&admin, &token);
+
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+    client.add_recipient(&admin, &r1, &3000);
+    client.add_recipient(&admin, &r2, &3000);
+
+    assert_eq!(client.get_recipients().len(), 2);
+    assert_eq!(client.get_total_shares(), 6000);
+}

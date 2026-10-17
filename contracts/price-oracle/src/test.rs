@@ -3957,3 +3957,194 @@ fn test_graceful_recovery_clears_metrics() {
     assert_eq!(client.get_missed_blocks(&provider), 0);
     assert_eq!(client.get_provider_last_seen_ledger(&provider), 500);
 }
+
+// ============================================================================
+// Unbounded-Collection-Caps: OutOfBounds guard tests (issue fix)
+// ============================================================================
+
+/// Helper: build a Vec of `n` distinct asset symbols (s0..sN).
+/// Uses short numeric suffix so every symbol stays within the 8-char limit.
+fn make_symbols(env: &Env, n: u32) -> soroban_sdk::Vec<Symbol> {
+    let names = [
+        "A", "B", "C", "D", "E", "F", "G", "H", "I", "J",
+        "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T",
+    ];
+    let mut v = soroban_sdk::Vec::new(env);
+    for i in 0..n as usize {
+        v.push_back(Symbol::new(env, names[i % names.len()]));
+    }
+    v
+}
+
+// --- get_prices: bug-condition (> MAX_PATH_HOPS) ---
+
+#[test]
+fn test_get_prices_rejects_oversized_input() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, PriceOracle);
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let six_symbols = make_symbols(&env, 6);
+    match client.try_get_prices(&six_symbols) {
+        Err(Ok(err)) => assert_eq!(err, ContractError::OutOfBounds),
+        other => panic!("expected OutOfBounds, got {:?}", other),
+    }
+}
+
+// --- get_prices: boundary at exactly 5 (must pass) ---
+
+#[test]
+fn test_get_prices_exactly_five_symbols_accepted() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, PriceOracle);
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    env.ledger().with_mut(|li| li.timestamp = 1_000_000);
+    env.ledger().with_mut(|li| li.sequence_number = 1);
+
+    let symbols = make_symbols(&env, 5);
+    // Prices not set, so all entries will be None — but no OutOfBounds error.
+    let result = client.get_prices(&symbols);
+    assert_eq!(result.len(), 5);
+}
+
+// --- get_prices: empty input still works ---
+
+#[test]
+fn test_get_prices_empty_vec_still_passes_with_guard() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, PriceOracle);
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let empty: soroban_sdk::Vec<Symbol> = soroban_sdk::vec![&env];
+    let result = client.get_prices(&empty);
+    assert_eq!(result.len(), 0);
+}
+
+// --- get_prices_with_status: bug-condition ---
+
+#[test]
+fn test_get_prices_with_status_rejects_oversized_input() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, PriceOracle);
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let six_symbols = make_symbols(&env, 6);
+    match client.try_get_prices_with_status(&six_symbols) {
+        Err(Ok(err)) => assert_eq!(err, ContractError::OutOfBounds),
+        other => panic!("expected OutOfBounds, got {:?}", other),
+    }
+}
+
+// --- get_prices_with_status: boundary at exactly 5 ---
+
+#[test]
+fn test_get_prices_with_status_exactly_five_symbols_accepted() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, PriceOracle);
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    env.ledger().with_mut(|li| li.timestamp = 1_000_000);
+    env.ledger().with_mut(|li| li.sequence_number = 1);
+
+    let symbols = make_symbols(&env, 5);
+    let result = client.get_prices_with_status(&symbols);
+    assert_eq!(result.len(), 5);
+}
+
+// --- get_index_price: bug-condition ---
+
+#[test]
+fn test_get_index_price_rejects_oversized_components() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, PriceOracle);
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    let names = ["A", "B", "C", "D", "E", "F"];
+    let mut components = soroban_sdk::Vec::new(&env);
+    for name in &names {
+        components.push_back(AssetWeight {
+            asset: Symbol::new(&env, name),
+            weight: 1000,
+        });
+    }
+
+    match client.try_get_index_price(&components) {
+        Err(Ok(err)) => assert_eq!(err, ContractError::OutOfBounds),
+        other => panic!("expected OutOfBounds, got {:?}", other),
+    }
+}
+
+// --- get_index_price: boundary at exactly 5 accepted ---
+// (Note: prices are not set so calculate_index_price may return an error for
+//  a different reason, but the guard must not trigger for len == 5.)
+
+#[test]
+fn test_get_index_price_five_components_not_rejected_by_guard() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, PriceOracle);
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    env.ledger().with_mut(|li| li.timestamp = 1_000_000);
+    env.ledger().with_mut(|li| li.sequence_number = 1);
+
+    // Set up prices for the 5 components so the calculation can succeed.
+    let names = ["P", "Q", "R", "S", "T"];
+    for name in &names {
+        client.set_price(&Symbol::new(&env, name), &1_000_i128, &2u32, &3_600u64);
+    }
+
+    let mut components = soroban_sdk::Vec::new(&env);
+    for name in &names {
+        components.push_back(AssetWeight {
+            asset: Symbol::new(&env, name),
+            weight: 2000, // 5 × 2000 = 10_000 basis points
+        });
+    }
+
+    // Should not return OutOfBounds — any other outcome (Ok or a different
+    // error from the calculation) is acceptable.
+    match client.try_get_index_price(&components) {
+        Err(Ok(ContractError::OutOfBounds)) => {
+            panic!("guard must NOT fire for 5 components")
+        }
+        _ => {} // Ok or any other error is fine
+    }
+}
+
+// --- Integration: halt takes priority over OutOfBounds in get_prices ---
+
+#[test]
+fn test_integration_halt_fires_before_length_check_in_get_prices() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, PriceOracle);
+    let client = PriceOracleClient::new(&env, &contract_id);
+
+    // Need two distinct admins to call set_emergency_halt.
+    let admin1 = Address::generate(&env);
+    let admin2 = Address::generate(&env);
+    set_admin(&env, &contract_id, &admin1);
+    add_provider(&env, &contract_id, &admin1);
+    // Register admin2 as well so the multisig check passes.
+    env.as_contract(&contract_id, || {
+        let mut admins: soroban_sdk::Vec<Address> =
+            env.storage().instance().get(&DataKey::Admins).unwrap();
+        admins.push_back(admin2.clone());
+        env.storage().instance().set(&DataKey::Admins, &admins);
+    });
+
+    client.set_emergency_halt(&admin1, &admin2, &true);
+    assert!(client.is_halted());
+
+    // 6 symbols would normally trigger OutOfBounds, but halt fires first.
+    let six_symbols = make_symbols(&env, 6);
+    match client.try_get_prices(&six_symbols) {
+        Err(Ok(err)) => assert_eq!(
+            err,
+            ContractError::EmergencyHalted,
+            "halt must take priority over OutOfBounds"
+        ),
+        other => panic!("expected EmergencyHalted, got {:?}", other),
+    }
+}

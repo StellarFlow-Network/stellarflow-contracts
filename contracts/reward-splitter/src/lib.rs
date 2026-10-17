@@ -87,6 +87,9 @@ pub enum ContractError {
     InvalidStage = 13,
     /// Recovery steps: Inspect the state for InvalidActionType and retry with valid inputs or proper conditions.
     InvalidActionType = 14,
+    /// Recipient list has reached the maximum allowed cap.
+    /// Recovery steps: Remove an existing recipient before adding a new one, or reduce the total number of recipients to below MAX_RECIPIENTS (50).
+    OutOfBounds = 15,
 }
 
 #[contract]
@@ -96,6 +99,12 @@ pub struct RewardSplitter;
 const STAGE_1_COOLDOWN: u64 = 3_600; // 1 hour
 const STAGE_2_COOLDOWN: u64 = 28_800; // 8 hours
 const STAGE_3_COOLDOWN: u64 = 86_400; // 24 hours
+
+/// Maximum number of recipients allowed in the stored list.
+/// Prevents `distribute` from exceeding the Soroban CPU budget by iterating
+/// an unbounded collection.  `add_recipient` returns `ContractError::OutOfBounds`
+/// immediately when the cap is already reached.
+const MAX_RECIPIENTS: u32 = 50;
 
 #[contractimpl]
 impl RewardSplitter {
@@ -163,6 +172,13 @@ impl RewardSplitter {
             .instance()
             .get(&DataKey::Recipients)
             .unwrap_or_else(|| Vec::new(&env));
+
+        // Enforce the recipient count cap before any storage modification.
+        // Prevents distribute() from iterating an unbounded list and exhausting
+        // the Soroban CPU budget.
+        if recipients.len() >= MAX_RECIPIENTS {
+            panic_with_error!(&env, ContractError::OutOfBounds);
+        }
 
         let mut total_shares: u32 = env
             .storage()
