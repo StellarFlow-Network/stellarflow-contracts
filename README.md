@@ -37,6 +37,7 @@ stellarflow-contracts/
 * **Smart Contract Engine:** Soroban / Rust WebAssembly (`wasm32-unknown-unknown`)
 * **Blockchain:** Stellar Network (Testnet / Mainnet)
 * **SDK / Framework:** `soroban-sdk`
+* **Governance:** Rust/Soroban contracts
 * **Testing & Fuzzing:** Cargo Test Framework + Property-based testing
 * **Deployment & Automation:** `gh` CLI, Python (`post_issues.py`), Soroban CLI
 

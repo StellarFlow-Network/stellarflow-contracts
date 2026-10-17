@@ -221,6 +221,8 @@ impl GovernanceExecuterContract {
         results
     }
 }
+
+/// Typed contract errors returned by the governance executer contract.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(u32)]

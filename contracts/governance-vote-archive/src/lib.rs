@@ -74,7 +74,7 @@ use soroban_sdk::{contract, contracterror, contractimpl, Address, BytesN, Env, V
 
 use register::{ArchiveRecord, ProposalState};
 
-/// Errors returned by the governance vote archive contract.
+/// Typed contract errors returned by the governance vote archive contract.
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
