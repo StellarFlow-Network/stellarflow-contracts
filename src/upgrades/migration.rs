@@ -4,6 +4,7 @@ use crate::storage::{HeartbeatKey, NodeProfileKey, SignerKey, StakeKey};
 use crate::staking_tiers::AssetFeedMetrics;
 use crate::{ContractError, NodeProfile};
 
+/// Increment when changing persisted contracttype schemas; older WASM then fails closed.
 pub const SCHEMA_VERSION: u32 = 2;
 
 #[contracttype]
@@ -16,7 +17,10 @@ pub fn ensure_schema_version(env: &Env) -> Result<u32, ContractError> {
     let version: Option<u32> = env.storage().instance().get(&MigrationDataKey::SchemaVersion);
 
     match version {
-        Some(current) if current >= SCHEMA_VERSION => Ok(current),
+        Some(current) if current == SCHEMA_VERSION => Ok(current),
+        Some(current) if current > SCHEMA_VERSION => {
+            Err(ContractError::IncompatibleSchemaVersion)
+        }
         Some(current) => {
             migrate_from_version(env, current)?;
             env.storage().instance().set(&MigrationDataKey::SchemaVersion, &SCHEMA_VERSION);

@@ -371,6 +371,8 @@ pub enum ContractError {
     InvalidProvingKey = 160,
     /// ZK public inputs are missing, malformed, or out of range.
     InvalidZKPublicInputs = 161,
+    /// Stored contract state was written by a newer schema than this WASM supports.
+    IncompatibleSchemaVersion = 162,
 }
 
 impl ContractError {
@@ -728,7 +730,7 @@ pub struct TimeLockedUpgradeContract;
 #[contractimpl]
 impl TimeLockedUpgradeContract {
     pub(crate) fn load_data(env: &Env) -> Result<ContractData, crate::ContractError> {
-        let _ = ensure_schema_version(env);
+        ensure_schema_version(env)?;
         env.storage().instance().get(&DATA_KEY).ok_or(crate::ContractError::NotInitialized)
     }
 
@@ -932,7 +934,7 @@ impl TimeLockedUpgradeContract {
     // --- Core Logic ---
 
     pub fn get_data(env: Env) -> Result<ContractData, ContractError> {
-        env.storage().instance().get(&DATA_KEY).ok_or(ContractError::NotInitialized)
+        Self::load_data(&env)
     }
 
     pub fn verify_storage_ttl(env: Env) -> Result<(), ContractError> {

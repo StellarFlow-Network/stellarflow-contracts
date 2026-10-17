@@ -7,7 +7,7 @@
 
 use soroban_sdk::{contracttype, symbol_short, Address, Bytes, BytesN, Env, Map, Symbol, Vec};
 
-use crate::{ContractData, ContractError, DATA_KEY, SIGNERS_KEY};
+use crate::{ContractData, ContractError, SIGNERS_KEY};
 
 pub(crate) const BALLOT_TTL_LEDGERS: u32 = 17_280;
 pub(crate) const BALLOT_TTL_THRESHOLD: u32 = 5_000;
@@ -102,11 +102,7 @@ pub fn set_governance_config(env: &Env, config: &GovernanceConfig) {
 }
 
 pub fn verify_upgrade_quorum(env: &Env, signers: &Vec<Address>) -> Result<(), ContractError> {
-    let data: ContractData = env
-        .storage()
-        .instance()
-        .get(&DATA_KEY)
-        .ok_or(ContractError::NotInitialized)?;
+    let data = crate::TimeLockedUpgradeContract::load_data(env)?;
 
     let authorized_signers: Map<Address, ()> = env
         .storage()

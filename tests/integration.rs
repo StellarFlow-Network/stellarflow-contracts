@@ -265,3 +265,23 @@ fn test_oracle_failure_matrix_allows_fresh_data_without_pause() {
         assert!(!client.is_paused());
     }
 }
+
+#[test]
+fn test_newer_schema_version_blocks_data_loading() {
+    use stellarflow_contracts::upgrades::migration::{
+        ensure_schema_version, MigrationDataKey, SCHEMA_VERSION,
+    };
+    use stellarflow_contracts::{ContractError, TimeLockedUpgradeContract};
+
+    let env = Env::default();
+    let contract_id = env.register_contract(None, TimeLockedUpgradeContract);
+
+    let result = env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&MigrationDataKey::SchemaVersion, &(SCHEMA_VERSION + 1));
+        TimeLockedUpgradeContract::get_data(env.clone())
+    });
+
+    assert_eq!(result, Err(ContractError::IncompatibleSchemaVersion));
+}
