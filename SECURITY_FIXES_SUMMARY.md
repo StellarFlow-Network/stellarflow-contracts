@@ -91,9 +91,38 @@ When a verification routine uses raw `ecrecover` without restricting `s` to the 
 
 ---
 
-## 3. Cross-Platform Architectural Summary
+## 3. Issue #1191: Gas Optimization — Direct `msg.sender` Usage in Token Bridge
 
-| Issue | Vulnerability | Remediation in Solidity | Soroban / Rust Counterpart |
+### 3.1 Optimization Overview
+Functions in `src/TokenBridge.sol` previously declared intermediate stack variables (e.g., `address sender = msg.sender;`) when the caller address was only referenced a single time.
+
+### 3.2 Impact & Opcode Analysis
+- **Unnecessary Stack Allocation:** Declaring an intermediate local variable consumes an extra stack slot, triggering redundant `DUP` / `SWAP` and stack cleanup opcodes (`POP`).
+- **Gas Overhead:** In EVM, `msg.sender` compiles directly to the low-cost `CALLER` opcode (2 gas). Caching it in a local variable that is only used once introduces net gas overhead and increases contract bytecode size.
+
+### 3.3 Remediation
+1. **Eliminate Redundant Local Variable Allocation:** Remove `address sender = msg.sender;` across contract functions.
+2. **Direct `msg.sender` Resolution:** Directly invoke `msg.sender` at each invocation site:
+   - In `bridgeTokens(...)`: passed directly to `transferFrom(msg.sender, address(this), amount)` and emitted in `TokensLocked`.
+   - In `claimRefund(...)`: verified and transferred directly to `msg.sender`.
+   - In `onlyOwner` & `onlyRelayer` modifiers: evaluated directly against authorization state.
+
+### 3.4 Implemented Files & Tests
+- **Solidity Contract:** [`src/TokenBridge.sol`](src/TokenBridge.sol)
+- **Solidity Test Suite:** [`test/TokenBridge.t.sol`](test/TokenBridge.t.sol)
+  - `test_BridgeTokensSuccessDirectMsgSender`: Validates token bridging with direct `msg.sender` usage.
+  - `test_ReleaseTokensSuccess`: Confirms authorized relayer release.
+  - `test_ReleaseTokensRevertsIfAlreadyProcessed`: CEI re-entry and replay guard verification.
+  - `test_ClaimRefundDirectMsgSender`: Asserts refund mechanism directs assets to `msg.sender`.
+  - `test_AdminFunctionsAccessControl`: Verifies direct authorization checks on administrative setters.
+
+---
+
+## 4. Cross-Platform Architectural Summary
+
+| Issue | Vulnerability / Optimization | Remediation in Solidity | Soroban / Rust Counterpart |
 | :--- | :--- | :--- | :--- |
 | **#1125** | Unchecked low-level `.call()` return value | `(bool success, ) = recipient.call{value: amount}(""); if (!success) revert ETHTransferFailed();` | Explicit balance checks & non-silent error returns in `src/router/fund_router.rs` (`ETHTransferFailed`) |
 | **#1226** | Signature malleability via unrestricted `s` | `if (uint256(s) > uint256(SECP256K1_N_DIV_2)) revert InvalidSignatureS();` | Big-endian curve order bounds check in `src/security/signature_checker.rs` (`MalleableSignature`) |
+| **#1191** | Redundant local caching of `msg.sender` | Remove `address sender = msg.sender;` and use `msg.sender` directly | Lean stack variable usage in `src/bridge/` |
+
