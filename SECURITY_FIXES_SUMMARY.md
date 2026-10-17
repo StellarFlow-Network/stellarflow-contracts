@@ -91,9 +91,54 @@ When a verification routine uses raw `ecrecover` without restricting `s` to the 
 
 ---
 
-## 3. Cross-Platform Architectural Summary
+## 3. Issue #1154: Non-Standard ERC-20 Calls in Token Transfer
+
+### 3.1 Vulnerability Overview
+ERC-20 declares that `transfer` and `transferFrom` return a boolean, but widely
+used tokens do not follow that convention. USDT, for example, returns no data at
+all, while some other tokens return `false` instead of reverting. Calling the raw
+`IERC20` methods therefore either reverts while decoding a missing return value
+or silently ignores a `false` result.
+
+### 3.2 Impact
+- **Interoperability failure:** transfers of non-standard tokens (e.g. USDT) revert.
+- **Silent failures:** a `false` return is ignored, so accounting advances while no tokens move.
+
+### 3.3 Remediation
+1. **Safe wrappers:** every token movement goes through `SafeERC20.safeTransfer`
+   and `SafeERC20.safeTransferFrom`; no raw `IERC20.transfer`/`transferFrom` call
+   remains.
+2. **Optional return value:** empty return data is accepted, so USDT-style
+   tokens succeed.
+3. **False / malformed results:** a `false` return (or data that is not a
+   32-byte boolean) reverts with `SafeERC20FailedOperation(token)`.
+4. **Revert bubbling:** the token's own revert reason is propagated unchanged.
+5. **Input validation:** zero token/recipient/sender addresses and zero amounts
+   are rejected before any external call.
+
+### 3.4 Implemented Files & Tests
+- **Safe wrapper library:** [`src/utils/SafeERC20.sol`](src/utils/SafeERC20.sol)
+  (self-contained, OpenZeppelin-compatible; the repository has no Solidity
+  dependency manager).
+- **Transfer abstraction:** [`src/TokenTransfer.sol`](src/TokenTransfer.sol)
+- **Solidity Test Suite:** [`test/TokenTransfer.t.sol`](test/TokenTransfer.t.sol)
+  - `test_TransferStandardToken` / `test_TransferFromStandardTokenSucceeds`:
+    normal boolean-returning tokens still work.
+  - `test_TransferNonStandardTokenSucceeds` /
+    `test_TransferFromNonStandardTokenSucceeds`: USDT-style empty return data succeeds.
+  - `test_TransferReturningFalseReverts` /
+    `test_TransferFromReturningFalseReverts`: `false` returns revert explicitly.
+  - `test_TransferBubblesTokenRevertReason` /
+    `test_TransferFromBubblesTokenRevertReason`: token revert reasons are preserved.
+  - `test_ZeroTokenAddressReverts`, `test_ZeroRecipientReverts`,
+    `test_ZeroAmountReverts`, `test_TransferFromZeroSenderReverts`: input validation.
+
+---
+
+## 4. Cross-Platform Architectural Summary
 
 | Issue | Vulnerability | Remediation in Solidity | Soroban / Rust Counterpart |
 | :--- | :--- | :--- | :--- |
 | **#1125** | Unchecked low-level `.call()` return value | `(bool success, ) = recipient.call{value: amount}(""); if (!success) revert ETHTransferFailed();` | Explicit balance checks & non-silent error returns in `src/router/fund_router.rs` (`ETHTransferFailed`) |
 | **#1226** | Signature malleability via unrestricted `s` | `if (uint256(s) > uint256(SECP256K1_N_DIV_2)) revert InvalidSignatureS();` | Big-endian curve order bounds check in `src/security/signature_checker.rs` (`MalleableSignature`) |
+| **#1154** | Non-standard ERC-20 return values | `SafeERC20.safeTransfer/safeTransferFrom` accept empty data and revert on `false` or malformed data (`SafeERC20FailedOperation`) | N/A — `soroban_sdk::token::Client` traps on failure and has no boolean return value |
